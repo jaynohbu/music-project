@@ -28,19 +28,24 @@ export function checkLyrics(value, duration) {
 
 export function checkHarmony(value, duration) {
   const parts = value?.stems && Object.values(value.stems);
-  if (!parts?.length || !parts.every(part => Array.isArray(part.chords) && Array.isArray(part.notes) &&
+  const beats = value?.beats;
+  if (!Array.isArray(beats) || beats.length < 2 || !beats.every((beat, index) => Number.isFinite(beat) && (!index || beat > beats[index - 1])) ||
+      ![0, 1, 2, 3].includes(value.firstBar) ||
+      !parts?.length || !parts.every(part => Array.isArray(part.chords) && Array.isArray(part.notes) &&
       part.chords.every(chord => typeof chord.name === 'string' && chord.name && validTime(chord.start, duration)) &&
       part.notes.every(note => Number.isInteger(note.pitch) && note.pitch >= 0 && note.pitch <= 127 &&
-        validTime(note.start, duration) && validTime(note.end, duration) && note.end >= note.start))) {
+        validTime(note.start, duration) && validTime(note.end, duration) && note.end >= note.start &&
+        Number.isInteger(note.unit) && note.unit >= 0 && Number.isInteger(note.length) && note.length >= 1))) {
     throw new Error('Invalid harmony.');
   }
   return value;
 }
 
-export const HARMONY_STEMS = ['guitar', 'piano', 'other', 'bass'];
+// Drums only supply the beat.
+export const HARMONY_STEMS = ['guitar', 'piano', 'other', 'bass', 'drums'];
 
 const LYRICS = {
-  type: 'lyrics', code: 'LYRICS', stems: ['vocals'], check: checkLyrics,
+  type: 'lyrics', code: 'LYRICS', stems: () => ['vocals'], check: checkLyrics,
   command: (files, output) => ['transcribe_vocals.py', files.vocals, output],
   messages: {
     download: 'Unable to read the vocal stem. Please try again.',
@@ -51,10 +56,15 @@ const LYRICS = {
   },
 };
 
+// One part keeps the song's grid, so no drums; other parts stay for chord context, and bass only for itself.
+const harmonyStems = child => !child.stem ? HARMONY_STEMS
+  : HARMONY_STEMS.filter(name => name !== 'drums' && (name !== 'bass' || child.stem === 'bass'));
+
 const HARMONY = {
-  type: 'harmony', code: 'HARMONY', stems: HARMONY_STEMS, check: checkHarmony,
-  command: (files, output) => ['analyze_harmony.py', output,
-    ...HARMONY_STEMS.flatMap(name => ['--stem', `${name}=${files[name]}`])],
+  type: 'harmony', code: 'HARMONY', stems: harmonyStems, check: checkHarmony,
+  command: (files, output, child) => ['analyze_harmony.py', output,
+    ...harmonyStems(child).flatMap(name => ['--stem', `${name}=${files[name]}`]),
+    ...(child.stem ? ['--only', child.stem, '--grid', files.base] : [])],
   messages: {
     download: 'Unable to read the stems. Please try again.',
     analyze: 'Chord analysis failed. Please try again.',
@@ -105,16 +115,18 @@ function createAnalysisWorker(analysis, {
       if (!parent || parent.type !== 'stems') throw new Error('Parent job not found.');
       directory = await realpath(await mkdtemp(path.join(tmpdir(), 'analysis-')));
       const files = {};
-      for (const name of analysis.stems) {
-        const object = await storage.send(new GetObjectCommand({
-          Bucket: process.env.BUCKET_NAME, Key: parent.stems[name].key,
-        }));
-        files[name] = path.join(directory, `${name}.wav`);
+      const download = async (name, key, extension) => {
+        const object = await storage.send(new GetObjectCommand({ Bucket: process.env.BUCKET_NAME, Key: key }));
+        files[name] = path.join(directory, `${name}.${extension}`);
         await pipeline(object.Body, createWriteStream(files[name]));
+      };
+      for (const name of analysis.stems(child)) {
+        await download(name, name === child.stem && child.sourceKey ? child.sourceKey : parent.stems[name].key, 'wav');
       }
+      if (child.baseKey) await download('base', child.baseKey, 'json');
       stage = 'analyze';
       const output = path.join(directory, 'result.json');
-      const [script, ...args] = analysis.command(files, output);
+      const [script, ...args] = analysis.command(files, output, child);
       await run(pythonPath, [fileURLToPath(new URL(`./${script}`, import.meta.url)), ...args],
         { timeout: Math.max(1000, stemDeadline(child) - Date.now() - 60000), maxBuffer: 16 * 1024 * 1024 });
       stage = 'validate';

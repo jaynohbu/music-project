@@ -79,13 +79,24 @@ TunesBasis API and frontend are unchanged. As requested, this app creates its
   discards singing. Recognized words can be wrong or missing, and there is no editing.
 - Chords & melody: guitar, piano, other and bass share one button that analyzes them together
   with `backend/analyze_harmony.py` on the same Fargate task. Chords come from chroma matched
-  to major and minor triads, favoring the song's estimated key, and show on all but bass.
-  Melody comes from Basic Pitch through `backend/note_lines.py`, on guitar, piano and bass only:
-  strummed passages stay blank, only clear notes are kept, and same-pitch notes with nothing
-  between them connect. Sound well below the loudest of guitar, piano and other counts as bleed.
-  Above each stem, chord names flow over a staff, with note length drawn to scale in time
-  rather than as note values. Guitar sounds an octave below the staff, as usual; bass too, on
-  a bass clef. Other notes outside the staff's range fold by octaves. Results are approximate.
+  to major and minor triads, favoring the song's estimated key. Bass chords combine the bass
+  with the other stems, since a bass alone rarely shows major or minor. Melody comes from Basic
+  Pitch through `backend/note_lines.py`, on guitar and piano only: it keeps clear notes in one
+  voice and connects same-pitch notes with nothing between them. Bass instead writes one note per
+  pluck, repeats included: Basic Pitch's onset signal gives the time and the lowest strong pitch
+  just after gives the note, and plucks sharing a sixteenth move to the next free one.
+  Beats come from the drums, or from all stems if the drums barely play, and parts before the
+  drums enter continue the nearest tempo. Notes snap to sixteenths on those beats and are written
+  as note values with stems, flags, dots, ties, rests and bar lines. Bars assume four beats and
+  start where bass notes most often begin. Other has chords only. Guitar and bass are written an
+  octave above their sound, as usual; notes outside a staff's range fold by octaves. Sound well
+  below the loudest of guitar, piano and other counts as bleed. Results are approximate.
+- Mixer focus: stems list vocals, guitar, bass, piano, drums, other. Scrolling opens the mixer
+  of the stem at the middle of the screen and closes the rest; Show/Hide controls still work.
+- Regenerate: once a song has chords, each of those stems has a button that redoes only that
+  stem, keeping the song's beats and bars and the other stems' results, from the Original or
+  Cleaned version being heard. Unchanged audio and analysis code give the same result. A failed
+  run keeps the previous result on screen.
 - Logout: global Cognito sign-out and removal of the local session.
 
 ## Architecture

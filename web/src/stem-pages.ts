@@ -1,8 +1,8 @@
-import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
+import { Component, ElementRef, Injector, OnDestroy, OnInit, afterNextRender, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
-import { HARMONY_STEMS, HarmonyPart, Job, LyricLine, STEM_NAMES, StemName, StemsService, errorMessage } from './services';
+import { HARMONY_STEMS, HarmonyGrid, HarmonyPart, Job, LyricLine, STEM_NAMES, StemName, StemsService, errorMessage } from './services';
 import { HarmonyStrip } from './harmony-strip';
 import { LyricsStrip } from './lyrics-strip';
 import {
@@ -327,7 +327,7 @@ function newTrack(name: string): StemTrack {
           Transport, Loop and Master in any mixer control all stems together.</p>
         <div class="stem-tracks">
           @for (track of tracks(); track track.name) {
-            <article class="stem-track">
+            <article class="stem-track" [attr.data-stem]="track.name">
               <section class="mixing-console" [attr.aria-label]="track.label + ' mixer'">
               <div class="console-stem-view">
               <div class="stem-heading">
@@ -347,6 +347,14 @@ function newTrack(name: string): StemTrack {
                     } @else {
                       <button type="button" class="secondary" (click)="findChords()" [disabled]="!canPlay()"
                         aria-label="Find chords and melody for guitar, piano, other and bass">Chords &amp; melody</button>
+                    }
+                  }
+                  @if (isHarmonic(track.name) && harmonyParts()) {
+                    @if (regenerating(track.name)) {
+                      <button type="button" class="secondary" disabled>Regenerating...</button>
+                    } @else {
+                      <button type="button" class="secondary" (click)="regenerate(track)" [disabled]="!canPlay()"
+                        [attr.aria-label]="regenerateLabel(track.name) + ' for ' + track.label + ' only'">{{ regenerateLabel(track.name) }}</button>
                     }
                   }
                   @if (track.hasCleaned) {
@@ -373,16 +381,17 @@ function newTrack(name: string): StemTrack {
                 @if (cleanFailure(track)) { <span class="error">{{ cleanFailure(track) }}</span> }
                 @if (track.name === 'vocals' && lyricsFailure()) { <span class="error">{{ lyricsFailure() }}</span> }
                 @if (isHarmonic(track.name) && chordsFailure()) { <span class="error">{{ chordsFailure() }}</span> }
+                @if (isHarmonic(track.name) && partFailure(track.name)) { <span class="error">{{ partFailure(track.name) }}</span> }
               </div>
               @if (track.name === 'vocals' && !lyricLines() && findingLyrics()) {
                 <div class="task-note" role="status"><span>{{ lyricsNote }}</span></div>
               }
-              @if (isHarmonic(track.name) && !harmonyParts() && findingChords()) {
+              @if (isHarmonic(track.name) && (harmonyParts() ? regenerating(track.name) : findingChords())) {
                 <div class="task-note" role="status"><span>{{ chordsNote }}</span></div>
               }
               @if (isHarmonic(track.name) && harmonyParts(); as parts) {
                 @if (hasMusic(parts[track.name])) {
-                  <app-harmony-strip [part]="parts[track.name]" [stem]="track.name" [time]="position()"></app-harmony-strip>
+                  <app-harmony-strip [part]="parts[track.name]" [stem]="track.name" [grid]="harmonyGrid()!" [time]="position()"></app-harmony-strip>
                 } @else {
                   <p class="hint">No clear chords or notes were found in this stem.</p>
                 }
@@ -588,6 +597,17 @@ function newTrack(name: string): StemTrack {
 export class MixerPage implements OnInit, OnDestroy {
   private readonly route = inject(ActivatedRoute);
   private readonly stems = inject(StemsService);
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+  private readonly injector = inject(Injector);
+  private centered: string | null = null;
+  private scrollFrame = 0;
+  private readonly followScroll = () => {
+    if (this.scrollFrame) return;
+    this.scrollFrame = requestAnimationFrame(() => {
+      this.scrollFrame = 0;
+      this.openCentered();
+    });
+  };
   private jobId = '';
   private generation = 0;
   private routeSubscription?: Subscription;
@@ -618,11 +638,15 @@ export class MixerPage implements OnInit, OnDestroy {
   private readonly startingChords = signal(false);
   private readonly chordsLoadError = signal('');
   private chordsLoading = false;
+  private readonly startingParts = signal<string[]>([]);
+  private readonly partLoadErrors = signal<Record<string, string>>({});
+  private readonly loadedParts = new Map<string, string>();
 
   readonly lyricsNote = 'Converting voice to text takes time. The timing may not match well at first but improves when reloaded. You can edit the text later.';
   readonly chordsNote = 'Converting to chords and melody takes time, and the result is not the same as the original. You can edit the chords and melody later.';
   readonly lyricLines = signal<LyricLine[] | null>(null);
   readonly harmonyParts = signal<Record<string, HarmonyPart> | null>(null);
+  readonly harmonyGrid = signal<HarmonyGrid | null>(null);
   readonly Math = Math;
   readonly controls = FADER_CONTROLS;
   readonly scaleFractions = [1, 0.75, 0.5, 0.25, 0];
@@ -640,7 +664,48 @@ export class MixerPage implements OnInit, OnDestroy {
   readonly expandedStem = signal<string | null>(STEM_NAMES[0]);
 
   toggleMixer(name: string): void {
-    this.expandedStem.update(current => current === name ? null : name);
+    this.showMixer(this.expandedStem() === name ? null : name, name);
+  }
+
+  // Changes which mixer is open, keeping the anchor stem in place on screen while the others resize.
+  private showMixer(name: string | null, anchorName: string): void {
+    const top = () => this.host.nativeElement.querySelector(`[data-stem="${anchorName}"]`)?.getBoundingClientRect().top ?? 0;
+    const before = top();
+    this.expandedStem.set(name);
+    afterNextRender(() => {
+      const moved = top() - before;
+      if (Math.abs(moved) > 0.5) window.scrollBy(0, moved);
+      // A mixer closed by hand stays closed only while it is the one in the middle.
+      this.centered = name === null ? anchorName : this.centeredStem();
+    }, { injector: this.injector });
+  }
+
+  private centeredStem(): string | null {
+    const tracks = Array.from(this.host.nativeElement.querySelectorAll<HTMLElement>('[data-stem]'));
+    // On a tall screen the first stem cannot reach the middle.
+    if (window.scrollY <= 0) return tracks[0]?.dataset['stem'] ?? null;
+    const middle = window.innerHeight / 2;
+    let nearest: string | null = null, shortest = Infinity;
+    for (const track of tracks) {
+      const { top, bottom } = track.getBoundingClientRect();
+      const distance = Math.max(top - middle, middle - bottom, 0);
+      if (distance < shortest) {
+        shortest = distance;
+        nearest = track.dataset['stem'] ?? null;
+      }
+    }
+    return nearest;
+  }
+
+  // Acts only when the middle reaches another stem, so a mixer closed by hand stays closed until then.
+  private openCentered(): void {
+    const focused = document.activeElement;
+    // Closing the panel holding keyboard focus would lose the user's place.
+    if (focused?.closest('.console-panel') && focused.matches(':focus-visible')) return;
+    const name = this.centeredStem();
+    if (!name || name === this.centered) return;
+    this.centered = name;
+    if (name !== this.expandedStem()) this.showMixer(name, name);
   }
 
   cleaning(name: string): boolean {
@@ -761,8 +826,12 @@ export class MixerPage implements OnInit, OnDestroy {
     try {
       const response = await fetch(url);
       if (!response.ok) throw new Error(`Chords request failed (HTTP ${response.status}).`);
-      const { stems } = await response.json() as { stems: Record<string, HarmonyPart> };
-      if (!this.destroyed && generation === this.generation) this.harmonyParts.set(stems);
+      const { stems, ...grid } = await response.json() as HarmonyGrid & { stems: Record<string, HarmonyPart> };
+      if (!this.destroyed && generation === this.generation) {
+        this.harmonyGrid.set(grid);
+        this.harmonyParts.set(stems);
+        void this.loadParts(generation);
+      }
     } catch (error) {
       if (!this.destroyed && generation === this.generation) {
         this.chordsLoadError.set(`Could not load the chords: ${errorMessage(error)}`);
@@ -772,10 +841,68 @@ export class MixerPage implements OnInit, OnDestroy {
     }
   }
 
+  regenerateLabel(name: string): string { return name === 'other' ? 'Regenerate chords' : 'Regenerate chords & melody'; }
+
+  regenerating(name: string): boolean {
+    const status = this.job()?.harmony?.stems?.[name]?.status;
+    return this.startingParts().includes(name) || status === 'queued' || status === 'processing';
+  }
+
+  partFailure(name: string): string | undefined {
+    if (this.regenerating(name)) return undefined;
+    const part = this.job()?.harmony?.stems?.[name];
+    return this.partLoadErrors()[name] || (part?.status === 'failed' ? part.error : undefined);
+  }
+
+  // Uses the version being heard, since the same audio would give the same notes.
+  async regenerate(track: StemTrack): Promise<void> {
+    const name = track.name;
+    if (this.regenerating(name)) return;
+    const generation = this.generation;
+    this.startingParts.update(names => [...names, name]);
+    this.partLoadErrors.update(({ [name]: _, ...others }) => others);
+    this.error.set('');
+    try {
+      await this.stems.createHarmony(this.jobId, { stem: name, cleaned: track.useCleaned });
+      if (this.destroyed || generation !== this.generation) return;
+      await this.refreshJob(generation);
+      this.watchRestorations(generation);
+    } catch (error) {
+      if (!this.destroyed && generation === this.generation) {
+        this.error.set(`Could not start regenerating ${name}: ${errorMessage(error)}`);
+      }
+    } finally {
+      this.startingParts.update(names => names.filter(item => item !== name));
+    }
+  }
+
+  private async loadParts(generation: number): Promise<void> {
+    const parts = this.job()?.harmony?.stems ?? {};
+    if (!this.harmonyParts()) return;
+    await Promise.all(Object.entries(parts).map(async ([name, part]) => {
+      if (!part?.url || !part.resultId || this.loadedParts.get(name) === part.resultId || this.partLoadErrors()[name]) return;
+      this.loadedParts.set(name, part.resultId);
+      try {
+        const response = await fetch(part.url);
+        if (!response.ok) throw new Error(`Chords request failed (HTTP ${response.status}).`);
+        const { stems } = await response.json() as { stems: Record<string, HarmonyPart> };
+        if (!this.destroyed && generation === this.generation) {
+          this.harmonyParts.update(current => current && { ...current, [name]: stems[name] });
+        }
+      } catch (error) {
+        this.loadedParts.delete(name);
+        if (!this.destroyed && generation === this.generation) {
+          this.partLoadErrors.update(errors => ({ ...errors, [name]: `Could not load the regenerated notes: ${errorMessage(error)}` }));
+        }
+      }
+    }));
+  }
+
   private restoring(job: Job | null): boolean {
     const running = (status?: string) => status === 'queued' || status === 'processing';
     return !!job?.restorations?.some(item => running(item.status)) ||
-      running(job?.lyrics?.status) || running(job?.harmony?.status);
+      running(job?.lyrics?.status) || running(job?.harmony?.status) ||
+      Object.values(job?.harmony?.stems ?? {}).some(part => running(part?.status));
   }
 
   private watchRestorations(generation: number): void {
@@ -961,6 +1088,7 @@ export class MixerPage implements OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
+    window.addEventListener('scroll', this.followScroll, { passive: true });
     this.routeSubscription = this.route.paramMap.subscribe(params => {
       const jobId = params.get('jobId');
       if (!jobId) {
@@ -989,12 +1117,15 @@ export class MixerPage implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.destroyed = true;
+    window.removeEventListener('scroll', this.followScroll);
+    cancelAnimationFrame(this.scrollFrame);
     this.routeSubscription?.unsubscribe();
     this.resetMixer();
   }
 
   private resetMixer(): void {
     this.expandedStem.set(STEM_NAMES[0]);
+    this.centered = null;
     this.stopScrub();
     ++this.playbackToken;
     this.starting = false;
@@ -1016,7 +1147,11 @@ export class MixerPage implements OnInit, OnDestroy {
     this.startingChords.set(false);
     this.chordsLoadError.set('');
     this.harmonyParts.set(null);
+    this.harmonyGrid.set(null);
     this.chordsLoading = false;
+    this.startingParts.set([]);
+    this.partLoadErrors.set({});
+    this.loadedParts.clear();
     this.polling = false;
   }
 
@@ -1071,6 +1206,7 @@ export class MixerPage implements OnInit, OnDestroy {
       this.error.set('');
       this.lyricsLoadError.set('');
       this.chordsLoadError.set('');
+      this.partLoadErrors.set({});
       this.scheduleLinkRenewal(generation);
       await this.loadStems(response.job, generation);
     } catch (error) {
@@ -1088,6 +1224,7 @@ export class MixerPage implements OnInit, OnDestroy {
   private async loadStems(job: Job, generation: number): Promise<void> {
     void this.loadLyrics(job, generation);
     void this.loadChords(job, generation);
+    void this.loadParts(generation);
     if (this.loadingStems) return;
     this.loadingStems = true;
     const controller = new AbortController();

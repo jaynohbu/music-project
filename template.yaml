@@ -362,6 +362,8 @@ Resources:
                 Resource:
                   - !Sub '${AudioBucket.Arn}/stem-inputs/*'
                   - !Sub '${AudioBucket.Arn}/users/*/stems/*'
+                  - !Sub '${AudioBucket.Arn}/users/*/restored/*'
+                  - !Sub '${AudioBucket.Arn}/users/*/harmony/*'
               - Effect: Allow
                 Action: [s3:PutObject, s3:DeleteObject]
                 Resource:

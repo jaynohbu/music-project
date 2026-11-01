@@ -60,7 +60,7 @@ export function createStemHandler({
       const analyzing = /^\/api\/stems\/jobs\/([0-9a-f-]{36})\/(lyrics|harmony)$/.exec(route ?? '');
       if (analyzing) {
         if (method !== 'POST') return reply(404, { message: 'Endpoint not found.' });
-        return await analyses.create({ type: analyzing[2], userId, parentJobId: analyzing[1], reply });
+        return await analyses.create({ type: analyzing[2], userId, parentJobId: analyzing[1], reply, body });
       }
       if (route === '/api/stems/uploads' && method === 'POST') {
         let input;

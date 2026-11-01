@@ -1,42 +1,18 @@
-"""Turns raw note events into one clear melody line. Events are (start, end, pitch, strength)."""
+"""Turns raw note events into one clear melody line, then into note values on a beat grid.
 
-STRUM_SPREAD = 0.09  # A strummed or struck chord starts within this many seconds.
-STRUM_PITCHES = 3
-STRUM_HITS = 3  # This many chord hits inside STRUM_WINDOW seconds means strumming, not one stray chord.
-STRUM_WINDOW = 4.0
-STRUM_LINK = 2.5  # Strummed hits this close belong to one blank passage.
+Events are (start, end, pitch, strength). Positions are in sixteenth notes from the first beat.
+"""
+import bisect
+import cmath
+import math
+
 CLEAR_STRENGTH = 0.5
-CLEAR_BASS_STRENGTH = 0.35  # Basic Pitch rates low notes weaker; 0.5 missed most of a known bass line.
 SHORTEST_EVENT = 0.12
 SHORTEST_NOTE = 0.15
 CONNECT_GAP = 1.0  # Same-pitch notes closer than this, with nothing between, become one.
-HIGHEST_BASS = 67
-
-
-def strum_regions(events):
-    """Where several pitches keep starting together, so there is no single melody to write."""
-    ordered = sorted(events)
-    hits = []
-    index = 0
-    while index < len(ordered):
-        group = [ordered[index]]
-        while index + len(group) < len(ordered) and ordered[index + len(group)][0] - group[0][0] <= STRUM_SPREAD:
-            group.append(ordered[index + len(group)])
-        if len({event[2] for event in group}) >= STRUM_PITCHES:
-            hits.append((group[0][0], max(event[1] for event in group)))
-        index += len(group)
-    strummed = set()
-    for first in range(len(hits)):
-        last = first + STRUM_HITS - 1
-        if last < len(hits) and hits[last][0] - hits[first][0] <= STRUM_WINDOW:
-            strummed.update(range(first, last + 1))
-    regions = []
-    for start, end in (hits[index] for index in sorted(strummed)):
-        if regions and start - regions[-1][1] <= STRUM_LINK:
-            regions[-1][1] = max(regions[-1][1], end)
-        else:
-            regions.append([start, end])
-    return regions
+STROKE_REPEAT = 0.11  # The same pitch attacked again sooner than this is one pluck flickering.
+LEGATO_UNITS = 2  # A silence up to an eighth before the next note is playing style, not a written rest.
+BEATS_PER_BAR = 4
 
 
 def connected(line):
@@ -49,32 +25,80 @@ def connected(line):
     return joined
 
 
-def clear_line(events, bass=False):
-    """One voice of clear notes: the highest sounding, or the lowest for bass."""
-    regions = [] if bass else strum_regions(events)
-    strength = CLEAR_BASS_STRENGTH if bass else CLEAR_STRENGTH
+def clear_line(events):
+    """One voice of clear notes: the highest sounding."""
     clear = sorted(event for event in events
-                   if event[3] >= strength and event[1] - event[0] >= SHORTEST_EVENT
-                   and not any(start <= event[0] <= end for start, end in regions)
-                   and (not bass or event[2] <= HIGHEST_BASS))
+                   if event[3] >= CLEAR_STRENGTH and event[1] - event[0] >= SHORTEST_EVENT)
     line = []
     for start, end, pitch, _ in clear:
         if line and start < line[-1][1]:
             if pitch == line[-1][2]:
                 line[-1][1] = max(line[-1][1], end)
                 continue
-            if not (pitch < line[-1][2] if bass else pitch > line[-1][2]):
+            if pitch < line[-1][2]:
                 continue
             line[-1][1] = start
         line.append([start, end, pitch])
-    if bass:
-        # A short note an octave from its neighbor is an overtone of that neighbor.
-        for index, note in enumerate(line):
-            for other in line[max(0, index - 1):index] + line[index + 1:index + 2]:
-                if abs(note[2] - other[2]) == 12 and note[1] - note[0] < other[1] - other[0] and \
-                        max(note[0], other[0]) - min(note[1], other[1]) <= CONNECT_GAP:
-                    note[2] = other[2]
-                    break
     # Connect before dropping blips, so short repeats survive; again after, across removed blips.
     kept = [note for note in connected(line) if note[1] - note[0] >= SHORTEST_NOTE]
     return [{'start': round(start, 2), 'end': round(end, 2), 'pitch': pitch} for start, end, pitch in connected(kept)]
+
+
+def struck_line(strokes):
+    """One note per pluck of (start, end, pitch). Repeats stay apart, and each pluck ends the one before."""
+    line = []
+    for start, end, pitch in sorted(strokes):
+        if line and pitch == line[-1][2] and start - line[-1][0] < STROKE_REPEAT:
+            line[-1][1] = max(line[-1][1], end)
+            continue
+        if line:
+            line[-1][1] = min(line[-1][1], start)
+        line.append([start, end, pitch])
+    return [{'start': round(start, 2), 'end': round(end, 2), 'pitch': pitch} for start, end, pitch in line]
+
+
+def grid_position(time, beats):
+    """Position in sixteenths, following the tempo between beats."""
+    index = min(max(bisect.bisect_right(beats, time) - 1, 0), len(beats) - 2)
+    return (index + (time - beats[index]) / (beats[index + 1] - beats[index])) * 4
+
+
+def grid_shift(notes, beats):
+    """How far detected notes sit from the grid, in sixteenths; note detection runs slightly early."""
+    if not notes:
+        return 0.0
+    total = sum(cmath.exp(2j * math.pi * grid_position(note['start'], beats)) for note in notes)
+    return cmath.phase(total) / (2 * math.pi)
+
+
+def note_values(line, beats, every=False):
+    """Snaps a line to sixteenths, giving each note a written position and length.
+
+    A sixteenth holds one note: a later one is dropped, or with every moves to the next free sixteenth.
+    """
+    shift = grid_shift(line, beats)
+    placed = []
+    for note in line:
+        unit = max(0, round(grid_position(note['start'], beats) - shift))
+        end = round(grid_position(note['end'], beats) - shift)
+        if placed and placed[-1][0] >= unit:
+            if not every:
+                continue
+            unit = placed[-1][0] + 1
+        placed.append((unit, end, note))
+    written = []
+    for index, (unit, end, note) in enumerate(placed):
+        following = placed[index + 1][0] if index + 1 < len(placed) else None
+        if following is not None and (end > following or following - end <= LEGATO_UNITS):
+            end = following
+        written.append({**note, 'unit': unit, 'length': max(1, end - unit)})
+    return written
+
+
+def first_bar(notes):
+    """Which beat bars start on, from where low notes most often begin. Assumes four beats to a bar."""
+    weights = [0] * BEATS_PER_BAR
+    for note in notes:
+        if note['unit'] % 4 == 0:
+            weights[note['unit'] // 4 % BEATS_PER_BAR] += note['length']
+    return weights.index(max(weights))

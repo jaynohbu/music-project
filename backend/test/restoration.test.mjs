@@ -392,7 +392,7 @@ const writesLyrics = content => async (_python, args) => {
   return { stdout: '' };
 };
 
-const goodHarmony = { stems: { guitar: { chords: [{ start: 0, name: 'Am' }], notes: [{ start: 0.5, end: 1, pitch: 69 }] }, piano: { chords: [], notes: [] }, other: { chords: [], notes: [] }, bass: { chords: [], notes: [] } } };
+const goodHarmony = { beats: [0, 0.5, 1, 1.5], firstBar: 0, stems: { guitar: { chords: [{ start: 0, name: 'Am' }], notes: [{ start: 0.5, end: 1, pitch: 69, unit: 4, length: 4 }] }, piano: { chords: [], notes: [] }, other: { chords: [], notes: [] }, bass: { chords: [], notes: [] } } };
 
 function harmonyCase(run) {
   const context = setup();
@@ -424,7 +424,7 @@ test('harmony is one record per song, separate from lyrics, and leaves originals
   assert.equal(started.length, 2);
 });
 
-test('harmony worker reads its four stems, passes them by name, and writes only its key', async () => {
+test('harmony worker reads its stems, passes them by name, and writes only its key', async () => {
   let args;
   const { worker, input, database, storage, child } = harmonyCase(async (_python, given) => {
     args = given;
@@ -436,9 +436,9 @@ test('harmony worker reads its four stems, passes them by name, and writes only 
   const saved = database.get('owner', lyricsId);
   assert.equal(saved.status, 'completed', saved.error);
   assert.ok(args[0].endsWith('analyze_harmony.py'));
-  assert.deepEqual(args.slice(2).filter(item => item !== '--stem').map(item => item.split('=')[0]), ['guitar', 'piano', 'other', 'bass']);
+  assert.deepEqual(args.slice(2).filter(item => item !== '--stem').map(item => item.split('=')[0]), ['guitar', 'piano', 'other', 'bass', 'drums']);
   assert.deepEqual(storage.calls.map(call => [call.kind, call.key]), [
-    ...['guitar', 'piano', 'other', 'bass'].map(name => ['GetObjectCommand', stemKey(name)]), ['PutObjectCommand', child.key],
+    ...['guitar', 'piano', 'other', 'bass', 'drums'].map(name => ['GetObjectCommand', stemKey(name)]), ['PutObjectCommand', child.key],
   ]);
 });
 
@@ -468,65 +468,186 @@ test('harmony results from the old format are ignored, so they get redone', asyn
   });
   assert.equal((await call(parentId, undefined, 'GET')).body.job.harmony, undefined);
   assert.equal((await call(`${parentId}/harmony`, {})).status, 202);
-  assert.equal(database.get('owner', (await call(parentId, undefined, 'GET')).body.job.harmony.id).version, 2);
+  assert.equal(database.get('owner', (await call(parentId, undefined, 'GET')).body.job.harmony.id).version, 3);
   assert.equal(started.length, 1);
 });
 
-const noteLines = (events, bass = false) => {
-  const script = `import json, sys; sys.path.insert(0, ${JSON.stringify(fileURLToPath(new URL('..', import.meta.url)))})
-from note_lines import clear_line, strum_regions
-events = [tuple(e) for e in json.loads(sys.argv[1])]
-print(json.dumps({'line': clear_line(events, bass=${bass ? 'True' : 'False'}), 'regions': strum_regions(events)}))`;
-  return JSON.parse(execFileSync('python3', ['-c', script, JSON.stringify(events)], { encoding: 'utf8' }));
-};
-const strum = at => [[at, at + 0.4, 52, 0.9], [at + 0.03, at + 0.4, 59, 0.9], [at + 0.06, at + 0.4, 64, 0.9]];
-const pitches = result => result.line.map(note => note.pitch);
+function regeneration() {
+  const context = setup();
+  const finished = (id, fields) => context.database.put({
+    userId: 'owner', jobId: id, type: 'harmony', version: 3, parentJobId: parentId, status: 'completed', title: 'Chords',
+    key: `users/owner/harmony/${parentId}/${id}.json`, generatedAt: new Date(Date.now() - 60000).toISOString(), ...fields,
+  });
+  finished(lyricsId);
+  return { ...context, finished };
+}
+const otherId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
-test('strummed passages stay blank, but one stray chord does not blank a melody', () => {
-  const strummed = noteLines([...strum(0), ...strum(1), ...strum(2), [1.5, 2, 76, 0.9], [8, 8.5, 72, 0.9]]);
-  assert.deepEqual(strummed.regions, [[0, 2.4]]);
-  assert.deepEqual(pitches(strummed), [72], 'only the note after the strumming is written');
-  assert.deepEqual(noteLines([...strum(0), [5, 5.5, 72, 0.9]]).regions, []);
+test('regenerating one stem needs a finished song result and a harmonic stem', async () => {
+  const { call, started } = setup();
+  assert.equal((await call(`${parentId}/harmony`, { stem: 'bass' })).status, 409);
+  const { call: callDone } = regeneration();
+  for (const stem of ['drums', 'vocals', 'kazoo', 1]) assert.equal((await callDone(`${parentId}/harmony`, { stem })).status, 400, String(stem));
+  assert.equal(started.length, 0);
 });
 
-test('picked notes one at a time are not mistaken for strumming', () => {
-  const picked = [0, 1, 2, 3, 4, 5].map(step => [step * 0.25, step * 0.25 + 0.5, 60 + step, 0.9]);
-  assert.deepEqual(noteLines(picked).regions, []);
-  assert.deepEqual(pitches(noteLines(picked)), [60, 61, 62, 63, 64, 65]);
+test('regenerating starts only that stem, keeps the song result, and repeats safely while running', async () => {
+  const { call, database, started } = regeneration();
+  const made = await call(`${parentId}/harmony`, { stem: 'bass', cleaned: false });
+  assert.equal(made.status, 202);
+  const child = database.get('owner', made.body.harmony.id);
+  assert.equal(child.stem, 'bass');
+  assert.equal(child.baseKey, `users/owner/harmony/${parentId}/${lyricsId}.json`);
+  assert.equal(child.sourceKey, undefined);
+  assert.equal((await call(`${parentId}/harmony`, { stem: 'bass' })).status, 200);
+  assert.equal(started.length, 1);
+  assert.equal((await call(`${parentId}/harmony`, { stem: 'guitar' })).status, 202, 'other stems run at the same time');
+  assert.equal(started.length, 2);
+  assert.equal((await call(`${parentId}/harmony`, {})).status, 200, 'the whole song is not redone');
+  assert.equal(started.length, 2);
+  const job = (await call(parentId, undefined, 'GET')).body.job;
+  assert.equal(job.harmony.id, lyricsId);
+  assert.equal(job.harmony.status, 'completed');
+  assert.equal(job.harmony.stems.bass.status, 'queued');
+  assert.equal(job.harmony.stems.guitar.status, 'queued');
+  assert.equal(job.harmony.stems.piano, undefined);
+});
+
+test('a failed regeneration reports its error and keeps the last good result of that stem', async () => {
+  const { call, finished } = regeneration();
+  finished(otherId, { stem: 'bass' });
+  const failedId = '55555555-5555-4555-8555-555555555555';
+  finished(failedId, { stem: 'bass', status: 'failed', error: 'Chord analysis failed. Please try again.', generatedAt: new Date().toISOString(), failedAt: new Date().toISOString() });
+  const part = (await call(parentId, undefined, 'GET')).body.job.harmony.stems.bass;
+  assert.equal(part.status, 'failed');
+  assert.equal(part.error, 'Chord analysis failed. Please try again.');
+  assert.equal(part.resultId, otherId);
+  assert.ok(part.url.endsWith(`${otherId}.json`));
+  assert.equal((await call(`${parentId}/harmony`, { stem: 'bass' })).status, 202, 'can be tried again');
+});
+
+test('regenerating from the cleaned version uses the newest finished cleanup of that stem', async () => {
+  const { call, database } = regeneration();
+  assert.equal((await call(`${parentId}/harmony`, { stem: 'guitar', cleaned: true })).status, 409);
+  const cleanup = (jobId, stem, generatedAt, status = 'completed') => database.put({
+    userId: 'owner', jobId, type: 'restoration', parentJobId: parentId, stem, status, generatedAt, key: `users/owner/restored/${jobId}.wav`,
+  });
+  cleanup('66666666-6666-4666-8666-666666666666', 'guitar', '2026-01-01T00:00:00.000Z');
+  cleanup('77777777-7777-4777-8777-777777777777', 'guitar', '2026-02-01T00:00:00.000Z');
+  cleanup('88888888-8888-4888-8888-888888888888', 'guitar', '2026-03-01T00:00:00.000Z', 'failed');
+  cleanup('99999999-9999-4999-8999-999999999999', 'piano', '2026-04-01T00:00:00.000Z');
+  const made = await call(`${parentId}/harmony`, { stem: 'guitar', cleaned: true });
+  assert.equal(made.status, 202);
+  assert.equal(database.get('owner', made.body.harmony.id).sourceKey, 'users/owner/restored/77777777-7777-4777-8777-777777777777.wav');
+});
+
+test('the worker for one stem reads its source and the song grid, and skips what it does not need', async () => {
+  for (const [stem, stemsRead] of [['guitar', ['guitar', 'piano', 'other']], ['bass', ['guitar', 'piano', 'other', 'bass']]]) {
+    let args;
+    const { worker, input, database, storage, child } = harmonyCase(async (_python, given) => {
+      args = given;
+      const { writeFile, readFile } = await import('node:fs/promises');
+      assert.equal(await readFile(given[given.indexOf('--grid') + 1], 'utf8'), '{"grid":true}');
+      await writeFile(given[1], JSON.stringify(goodHarmony));
+      return { stdout: '' };
+    });
+    const sourceKey = 'users/owner/restored/x.wav', baseKey = `users/owner/harmony/${parentId}/base.json`;
+    storage.objects.set(sourceKey, wavFile());
+    storage.objects.set(baseKey, Buffer.from('{"grid":true}'));
+    database.put({ ...child, stem, sourceKey, baseKey });
+    await worker(input);
+    const saved = database.get('owner', lyricsId);
+    assert.equal(saved.status, 'completed', saved.error);
+    assert.equal(args[args.indexOf('--only') + 1], stem);
+    assert.deepEqual(args.filter((_, index) => args[index - 1] === '--stem').map(item => item.split('=')[0]), stemsRead);
+    assert.deepEqual(storage.calls.filter(call => call.kind === 'GetObjectCommand').map(call => call.key),
+      [...stemsRead.map(name => name === stem ? sourceKey : stemKey(name)), baseKey]);
+    assert.deepEqual(storage.calls.filter(call => call.kind === 'PutObjectCommand').map(call => call.key), [child.key]);
+  }
+});
+
+const python3 = (body, ...args) => JSON.parse(execFileSync('python3', ['-c',
+  `import json, sys; sys.path.insert(0, ${JSON.stringify(fileURLToPath(new URL('..', import.meta.url)))})
+from note_lines import clear_line, first_bar, note_values, struck_line
+${body}`, ...args.map(value => JSON.stringify(value))], { encoding: 'utf8' }));
+const noteLines = events => ({ line: python3('print(json.dumps(clear_line([tuple(e) for e in json.loads(sys.argv[1])])))', events) });
+const pitches = result => result.line.map(note => note.pitch);
+const written = (line, beats) => python3('print(json.dumps(note_values(json.loads(sys.argv[1]), json.loads(sys.argv[2]))))', line, beats)
+  .map(note => [note.unit, note.length, note.pitch]);
+const everyHalfSecond = Array.from({ length: 40 }, (_, index) => index * 0.5);
+const note = (start, end, pitch = 60) => ({ start, end, pitch });
+
+test('strummed chords no longer blank anything: the top note is written', () => {
+  const strum = at => [[at, at + 0.4, 52, 0.9], [at + 0.03, at + 0.4, 59, 0.9], [at + 0.06, at + 0.4, 64, 0.9]];
+  assert.ok(pitches(noteLines([...strum(0), ...strum(1), ...strum(2)])).includes(64));
 });
 
 test('same-level notes with nothing between connect, keeping length', () => {
   const { line } = noteLines([[1, 1.5, 69, 0.9], [1.7, 2.2, 69, 0.9], [2.4, 3, 69, 0.9], [5, 5.5, 69, 0.9]]);
   assert.deepEqual(line, [{ start: 1, end: 3, pitch: 69 }, { start: 5, end: 5.5, pitch: 69 }], 'a long silence stays a gap');
-  const split = noteLines([[1, 1.5, 69, 0.9], [1.6, 2, 71, 0.9], [2.1, 2.5, 69, 0.9]]);
-  assert.deepEqual(pitches(split), [69, 71, 69], 'a note between keeps them apart');
+  assert.deepEqual(pitches(noteLines([[1, 1.5, 69, 0.9], [1.6, 2, 71, 0.9], [2.1, 2.5, 69, 0.9]])), [69, 71, 69], 'a note between keeps them apart');
 });
 
 test('only clear notes are written, and a removed blip does not split a note', () => {
   assert.deepEqual(pitches(noteLines([[1, 1.5, 69, 0.3], [2, 2.05, 70, 0.9], [3, 3.5, 71, 0.9]])), [71]);
-  const { line } = noteLines([[1, 1.5, 69, 0.9], [1.5, 1.63, 74, 0.9], [1.63, 2, 69, 0.9]]);
-  assert.deepEqual(line, [{ start: 1, end: 2, pitch: 69 }]);
+  assert.deepEqual(noteLines([[1, 1.5, 69, 0.9], [1.5, 1.63, 74, 0.9], [1.63, 2, 69, 0.9]]).line, [{ start: 1, end: 2, pitch: 69 }]);
 });
 
-test('guitar takes the highest sounding note, bass the lowest, without overtones', () => {
-  const both = [[1, 2, 45, 0.9], [1.2, 1.8, 57, 0.9]];
-  assert.deepEqual(pitches(noteLines(both)), [45, 57]);
-  assert.deepEqual(noteLines(both, true).line, [{ start: 1, end: 2, pitch: 45 }]);
-  assert.deepEqual(pitches(noteLines([[1, 2, 33, 0.9], [2.1, 2.3, 45, 0.9], [2.4, 3, 31, 0.9]], true)), [33, 31], 'octave blip joins its neighbor');
-  assert.deepEqual(pitches(noteLines([[1, 2, 33, 0.4]], true)), [33], 'weaker low notes still count on bass');
+test('guitar takes the highest sounding note', () => {
+  assert.deepEqual(pitches(noteLines([[1, 2, 45, 0.9], [1.2, 1.8, 57, 0.9]])), [45, 57]);
   assert.deepEqual(pitches(noteLines([[1, 2, 33, 0.4]])), []);
-  assert.deepEqual(noteLines([...strum(0), ...strum(1), ...strum(2)], true).line.length > 0, true, 'bass is never blanked');
+});
+
+test('every bass pluck is its own note, even on the same pitch', () => {
+  const struck = strokes => python3('print(json.dumps(struck_line(json.loads(sys.argv[1]))))', strokes);
+  assert.deepEqual(struck([[1, 2, 33], [1.5, 2, 33], [2, 2.2, 31]]),
+    [{ start: 1, end: 1.5, pitch: 33 }, { start: 1.5, end: 2, pitch: 33 }, { start: 2, end: 2.2, pitch: 31 }], 'a new pluck ends the last');
+  assert.deepEqual(struck([[1, 1.3, 33], [1.05, 1.4, 33]]), [{ start: 1, end: 1.4, pitch: 33 }], 'flicker is one pluck');
+  assert.deepEqual(struck([[1, 1.3, 33], [1.05, 1.4, 31]]).map(item => item.pitch), [33, 31], 'a fast change of pitch is two');
+});
+
+test('plucks sharing a sixteenth are all written', () => {
+  const all = (line, beats) => python3('print(json.dumps(note_values(json.loads(sys.argv[1]), json.loads(sys.argv[2]), every=True)))', line, beats)
+    .map(item => [item.unit, item.pitch]);
+  assert.deepEqual(all([note(1, 1.2), note(1.01, 1.3, 62), note(1.02, 1.4, 64), note(1.5, 2, 65)], everyHalfSecond),
+    [[8, 60], [9, 62], [10, 64], [12, 65]]);
+});
+
+test('notes snap to values on the beat grid, despite a constant early lean', () => {
+  const lean = 0.03;
+  assert.deepEqual(written([note(1 - lean, 1.45 - lean), note(2 - lean, 2.2 - lean, 62), note(2.25 - lean, 2.45 - lean, 64), note(4 - lean, 5 - lean, 65)], everyHalfSecond),
+    [[8, 4, 60], [16, 2, 62], [18, 2, 64], [32, 8, 65]], 'quarter, two eighths, half; the gap before the half stays a rest');
+});
+
+test('short silences before the next note are legato, longer ones are rests, and overlaps are cut', () => {
+  assert.deepEqual(written([note(0, 0.8), note(1, 2, 62)], everyHalfSecond), [[0, 8, 60], [8, 8, 62]], 'held to the next note');
+  assert.deepEqual(written([note(0, 0.5), note(2, 3, 62)], everyHalfSecond), [[0, 4, 60], [16, 8, 62]], 'a real rest remains');
+  assert.deepEqual(written([note(0, 1.5), note(1, 2, 62)], everyHalfSecond), [[0, 8, 60], [8, 8, 62]], 'written notes never overlap');
+});
+
+test('positions follow tempo changes, and a sixteenth holds only one note', () => {
+  const speeding = [0, 1, 2, 2.5, 3, 3.5, 4, 4.5];
+  assert.deepEqual(written([note(1, 2), note(2.5, 3, 62)], speeding).map(item => item.slice(0, 2)), [[4, 4], [12, 4]]);
+  assert.equal(written([note(1, 1.2), note(1.01, 1.3, 62)], everyHalfSecond).length, 1);
+});
+
+test('bars start on the beat where the low notes most often begin', () => {
+  const firstBar = notes => python3('print(first_bar(json.loads(sys.argv[1])))', notes);
+  assert.equal(firstBar([{ unit: 12, length: 8 }, { unit: 28, length: 8 }, { unit: 16, length: 2 }]), 3);
+  assert.equal(firstBar([]), 0);
 });
 
 test('harmony values must be real notes inside the song', () => {
   assert.equal(checkHarmony(goodHarmony, 2), goodHarmony);
-  for (const bad of [null, {}, { stems: {} }, { stems: { guitar: {} } },
-    { stems: { guitar: { chords: [{ start: 99, name: 'C' }], notes: [] } } },
-    { stems: { guitar: { chords: [{ start: 0, name: '' }], notes: [] } } },
-    { stems: { guitar: { chords: [], notes: [{ start: 0, end: 1, pitch: 200 }] } } },
-    { stems: { guitar: { chords: [], notes: [{ start: 0, end: 1, pitch: 60.5 }] } } },
-    { stems: { guitar: { chords: [], notes: [{ start: 0, pitch: 60 }] } } },
-    { stems: { guitar: { chords: [], notes: [{ start: 1, end: 0.5, pitch: 60 }] } } }]) {
+  const withGuitar = part => ({ beats: [0, 1], firstBar: 0, stems: { guitar: { chords: [], notes: [], ...part } } });
+  const good = { start: 0, end: 1, pitch: 60, unit: 0, length: 4 };
+  assert.ok(checkHarmony(withGuitar({ notes: [good] }), 2));
+  for (const bad of [null, {}, { stems: {} }, { beats: [0, 1], firstBar: 0, stems: { guitar: {} } },
+    { ...withGuitar({}), beats: [1, 0] }, { ...withGuitar({}), beats: [1] }, { ...withGuitar({}), beats: undefined }, { ...withGuitar({}), firstBar: 4 },
+    withGuitar({ chords: [{ start: 99, name: 'C' }] }), withGuitar({ chords: [{ start: 0, name: '' }] }),
+    withGuitar({ notes: [{ ...good, pitch: 200 }] }), withGuitar({ notes: [{ ...good, pitch: 60.5 }] }),
+    withGuitar({ notes: [{ ...good, end: undefined }] }), withGuitar({ notes: [{ ...good, start: 1, end: 0.5 }] }),
+    withGuitar({ notes: [{ ...good, unit: 1.5 }] }), withGuitar({ notes: [{ ...good, length: 0 }] })]) {
     assert.throws(() => checkHarmony(bad, 2), undefined, JSON.stringify(bad));
   }
 });
@@ -652,6 +773,7 @@ test('the template lets the task write lyrics and routes them', () => {
   const taskPolicy = template.slice(template.indexOf('StemTaskRole:'), template.indexOf('StemTask:\n'));
   assert.ok(taskPolicy.includes('users/*/lyrics/*'));
   assert.ok(taskPolicy.includes('users/*/harmony/*'));
+  assert.match(taskPolicy, /Action: s3:GetObject[\s\S]*?users\/\*\/restored\/\*[\s\S]*?users\/\*\/harmony\/\*[\s\S]*?Action: \[s3:PutObject/, 'can read cleaned stems and saved results');
   assert.ok(template.includes('/api/stems/jobs/{jobId}/lyrics'));
   assert.ok(template.includes('/api/stems/jobs/{jobId}/harmony'));
   const docker = readFileSync(new URL('../Dockerfile.stems', import.meta.url), 'utf8');

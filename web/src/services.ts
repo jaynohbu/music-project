@@ -185,7 +185,7 @@ export interface Job {
   stems?: Partial<Record<StemName, StemFile>>;
   restorations?: Restoration[];
   lyrics?: Lyrics;
-  harmony?: Lyrics;
+  harmony?: Harmony;
   error?: string;
   errorCode?: string;
   failureStage?: string;
@@ -193,7 +193,7 @@ export interface Job {
   downloadUrl?: string;
 }
 
-export const STEM_NAMES = ['drums', 'bass', 'vocals', 'guitar', 'piano', 'other'] as const;
+export const STEM_NAMES = ['vocals', 'guitar', 'bass', 'piano', 'drums', 'other'] as const;
 export type StemName = typeof STEM_NAMES[number];
 export interface StemFile { playUrl: string; downloadUrl: string }
 export interface Restoration extends Partial<StemFile> {
@@ -212,9 +212,13 @@ export interface Lyrics {
   url?: string;
   error?: string;
 }
+export interface RegeneratedPart extends Lyrics { resultId?: string }
+export interface Harmony extends Lyrics { stems?: Record<string, RegeneratedPart | undefined> }
 export interface LyricWord { start: number; end: number; text: string }
 export interface LyricLine { start: number; end: number; words: LyricWord[] }
-export interface HarmonyPart { chords: { start: number; name: string }[]; notes: { start: number; end: number; pitch: number }[] }
+export interface HarmonyPart { chords: { start: number; name: string }[]; notes: HarmonyNote[] }
+export interface HarmonyNote { start: number; end: number; pitch: number; unit: number; length: number }
+export interface HarmonyGrid { beats: number[]; firstBar: number }
 export const HARMONY_STEMS: readonly string[] = ['guitar', 'piano', 'other', 'bass'];
 export interface StemUploadRequest {
   job: Job;
@@ -286,11 +290,12 @@ export class StemsService {
     ));
   }
 
-  async createHarmony(jobId: string): Promise<{ harmony: Lyrics }> {
+  // With a part, redoes only that stem, from its cleaned version if asked.
+  async createHarmony(jobId: string, part?: { stem: string; cleaned: boolean }): Promise<{ harmony: Lyrics }> {
     const token = await this.auth.token();
     return firstValueFrom(this.http.post<{ harmony: Lyrics }>(
       `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/harmony`,
-      {},
+      part ?? {},
       { headers: { Authorization: `Bearer ${token}` } },
     ));
   }

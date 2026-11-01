@@ -41,6 +41,7 @@ a { color: #3459c9; }
 .transport-buttons .console-switch { padding: 3px; font-size: .59rem; }
 .seek-row { display: grid; grid-template-columns: 42px minmax(0, 1fr) 42px; gap: 12px; align-items: center; margin-top: 12px; font-variant-numeric: tabular-nums; }
 .seek-row input { padding: 0; margin: 0; accent-color: #3459c9; }
+.stem-tracks { padding-bottom: 50vh; } /* Lets the last stem reach the middle of the screen, which opens its mixer. */
 .stem-track { padding: 10px 0; }
 .console-stem-view { padding: 14px 18px 0; }
 .stem-heading { display: flex; justify-content: space-between; align-items: center; gap: 14px; }
@@ -118,11 +119,15 @@ progress { width: 100%; height: 12px; accent-color: #3459c9; }
 .harmony-flow { position: absolute; left: -44px; top: 0; overflow: visible; transition: transform 40ms linear; will-change: transform; }
 .score-chord { fill: #42536b; font-size: 14px; font-weight: 700; }
 .score-chord.active { fill: #3459c9; font-size: 16px; }
-.score-note rect, .score-note text { fill: #42536b; }
+.score-bar { stroke: #8a99ad; stroke-width: 1; }
+.score-rest rect, .score-rest circle { fill: #4c5c72; }
+.score-rest path { fill: none; stroke: #4c5c72; stroke-width: 1.7; }
+.score-note { color: #2c3a4e; }
+.score-note.active { color: #3459c9; }
+.score-note ellipse, .score-note circle, .score-note text { fill: currentColor; }
+.score-note ellipse.hollow { fill: none; stroke: currentColor; stroke-width: 1.5; }
 .score-note text { font-size: 13px; }
-.score-note line { stroke: #42536b; stroke-width: 1; }
-.score-note.active rect, .score-note.active text { fill: #3459c9; }
-.score-note.active line { stroke: #3459c9; }
+.score-note line, .score-note path { fill: none; stroke: currentColor; stroke-width: 1.2; }
 .staff-clef { position: absolute; left: 6px; color: #42536b; font-size: 44px; line-height: 52px; pointer-events: none; }
 .staff-clef.treble { top: 46px; }
 .staff-clef.bass { top: 40px; font-size: 34px; }
