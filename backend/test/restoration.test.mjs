@@ -9,6 +9,7 @@ import { createStemHandler } from '../stem-api.mjs';
 import { createHandler } from '../api.mjs';
 import { createLocalServer } from '../local-server.mjs';
 import { createRestoreWorker, runStemTask, wavFormat } from '../stem-restore.mjs';
+import { checkHarmony, checkLyrics, createHarmonyWorker, createLyricsWorker } from '../stem-analysis.mjs';
 import { finalize } from '../stem-worker.mjs';
 import { STEM_NAMES } from '../stem-shared.mjs';
 import { restorationInput } from '../restoration-api.mjs';
@@ -236,9 +237,11 @@ test('cleaned stems are not library jobs', async () => {
 });
 
 test('the task runs the worker that matches the job kind', async () => {
-  const run = runStemTask({ separate: async () => 'separate', restore: async () => 'restore' });
+  const run = runStemTask({ separate: async () => 'separate', restore: async () => 'restore', recognize: async () => 'recognize', harmonize: async () => 'harmonize' });
   assert.equal(await run({ jobId: 'a' }), 'separate');
   assert.equal(await run({ jobId: 'a', kind: 'restoration' }), 'restore');
+  assert.equal(await run({ jobId: 'a', kind: 'lyrics' }), 'recognize');
+  assert.equal(await run({ jobId: 'a', kind: 'harmony' }), 'harmonize');
 });
 
 function workerCase(run) {
@@ -364,6 +367,236 @@ test('local server routes cleanup with verified identity', async t => {
   assert.equal((await fetch(base, { method: 'DELETE', headers })).status, 405);
   assert.equal((await fetch(`${base}/${parentId}`, { method: 'DELETE', headers })).status, 202);
   assert.equal((await fetch(`${base}/${parentId}`, { method: 'POST', headers })).status, 405);
+});
+
+const lyricsRoute = `${parentId}/lyrics`;
+const lyricsId = '44444444-4444-4444-8444-444444444444';
+const goodLyrics = { language: 'en', lines: [{ start: 0.5, end: 1, words: [{ start: 0.5, end: 1, text: 'Hello' }] }] };
+
+function lyricsCase(run) {
+  const context = setup();
+  context.storage.objects.set(stemKey('vocals'), wavFile());
+  const child = {
+    userId: 'owner', jobId: lyricsId, type: 'lyrics', parentJobId: parentId, status: 'queued', title: 'Lyrics',
+    key: `users/owner/lyrics/${parentId}/${lyricsId}.json`,
+    generatedAt: new Date().toISOString(), startedAt: new Date().toISOString(), expiresAt: 9999999999,
+  };
+  context.database.put(child);
+  const worker = createLyricsWorker({ database: context.database, storage: context.storage, run });
+  return { ...context, child, worker, input: { userId: 'owner', jobId: lyricsId, kind: 'lyrics' } };
+}
+
+const writesLyrics = content => async (_python, args) => {
+  const { writeFile } = await import('node:fs/promises');
+  await writeFile(args[2], content);
+  return { stdout: '' };
+};
+
+const goodHarmony = { stems: { guitar: { chords: [{ start: 0, name: 'Am' }], notes: [{ start: 0.5, pitch: 69 }] }, piano: { chords: [], notes: [] }, other: { chords: [], notes: [] } } };
+
+function harmonyCase(run) {
+  const context = setup();
+  for (const name of STEM_NAMES) context.storage.objects.set(stemKey(name), wavFile());
+  const child = {
+    userId: 'owner', jobId: lyricsId, type: 'harmony', parentJobId: parentId, status: 'queued', title: 'Chords',
+    key: `users/owner/harmony/${parentId}/${lyricsId}.json`,
+    generatedAt: new Date().toISOString(), startedAt: new Date().toISOString(), expiresAt: 9999999999,
+  };
+  context.database.put(child);
+  const worker = createHarmonyWorker({ database: context.database, storage: context.storage, run });
+  return { ...context, child, worker, input: { userId: 'owner', jobId: lyricsId, kind: 'harmony' } };
+}
+
+test('harmony is one record per song, separate from lyrics, and leaves originals alone', async () => {
+  const { call, database, started } = setup();
+  const made = await call(`${parentId}/harmony`, {});
+  assert.equal(made.status, 202);
+  const id = made.body.harmony.id;
+  assert.equal(database.get('owner', id).key, `users/owner/harmony/${parentId}/${id}.json`);
+  assert.equal('createdAt' in database.get('owner', id), false);
+  assert.deepEqual(JSON.parse(started[0].input), { userId: 'owner', jobId: id, kind: 'harmony' });
+  assert.equal((await call(`${parentId}/harmony`, {})).status, 200);
+  assert.equal(started.length, 1);
+  const job = (await call(parentId, undefined, 'GET')).body.job;
+  assert.equal(job.harmony.status, 'queued');
+  assert.equal(job.lyrics, undefined);
+  assert.equal((await call(`${parentId}/lyrics`, {})).status, 202, 'lyrics still start on their own');
+  assert.equal(started.length, 2);
+});
+
+test('harmony worker reads the three harmonic stems, passes them by name, and writes only its key', async () => {
+  let args;
+  const { worker, input, database, storage, child } = harmonyCase(async (_python, given) => {
+    args = given;
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(given[1], JSON.stringify(goodHarmony));
+    return { stdout: '' };
+  });
+  await worker(input);
+  const saved = database.get('owner', lyricsId);
+  assert.equal(saved.status, 'completed', saved.error);
+  assert.ok(args[0].endsWith('analyze_harmony.py'));
+  assert.deepEqual(args.slice(2).filter(item => item !== '--stem').map(item => item.split('=')[0]), ['guitar', 'piano', 'other']);
+  assert.deepEqual(storage.calls.map(call => [call.kind, call.key]), [
+    ...['guitar', 'piano', 'other'].map(name => ['GetObjectCommand', stemKey(name)]), ['PutObjectCommand', child.key],
+  ]);
+});
+
+test('harmony worker records safe failures and saves nothing', async () => {
+  for (const [run, stage] of [
+    [async () => { throw new Error('secret path /tmp/x'); }, 'analyze'],
+    [async (_python, given) => {
+      const { writeFile } = await import('node:fs/promises');
+      await writeFile(given[1], '{"stems":{}}');
+      return { stdout: '' };
+    }, 'validate'],
+  ]) {
+    const { worker, input, database, storage, child } = harmonyCase(run);
+    await worker(input);
+    const saved = database.get('owner', lyricsId);
+    assert.equal(saved.failureStage, stage);
+    assert.equal(saved.error.includes('secret'), false);
+    assert.equal(storage.objects.has(child.key), false);
+  }
+});
+
+test('harmony values must be real notes inside the song', () => {
+  assert.equal(checkHarmony(goodHarmony, 2), goodHarmony);
+  for (const bad of [null, {}, { stems: {} }, { stems: { guitar: {} } },
+    { stems: { guitar: { chords: [{ start: 99, name: 'C' }], notes: [] } } },
+    { stems: { guitar: { chords: [{ start: 0, name: '' }], notes: [] } } },
+    { stems: { guitar: { chords: [], notes: [{ start: 0, pitch: 200 }] } } },
+    { stems: { guitar: { chords: [], notes: [{ start: 0, pitch: 60.5 }] } } }]) {
+    assert.throws(() => checkHarmony(bad, 2), undefined, JSON.stringify(bad));
+  }
+});
+
+test('lyrics are one record per song, start with their kind, and stay out of the library', async () => {
+  const { call, database, started } = setup();
+  const made = await call(lyricsRoute, {});
+  assert.equal(made.status, 202);
+  const id = made.body.lyrics.id;
+  const child = database.get('owner', id);
+  assert.equal(child.type, 'lyrics');
+  assert.equal(child.key, `users/owner/lyrics/${parentId}/${id}.json`);
+  assert.equal('createdAt' in child, false);
+  assert.deepEqual(JSON.parse(started[0].input), { userId: 'owner', jobId: id, kind: 'lyrics' });
+  const again = await call(lyricsRoute, {});
+  assert.equal(again.status, 200);
+  assert.equal(again.body.lyrics.id, id);
+  assert.equal(started.length, 1);
+  assert.equal((await call(lyricsRoute, {}, 'POST', 'intruder')).status, 404);
+  assert.equal((await call(lyricsRoute, undefined, 'GET')).status, 404);
+  database.put({ ...child, status: 'completed' });
+  const job = (await call(parentId, undefined, 'GET')).body.job;
+  assert.deepEqual(job.lyrics, { id, status: 'completed', url: `https://signed/${child.key}` });
+  assert.deepEqual(job.restorations, []);
+});
+
+test('lyrics wait for the stems, and a failure can be retried', async () => {
+  const context = setup();
+  context.database.put(parent({ status: 'processing', stems: undefined }));
+  assert.equal((await context.call(lyricsRoute, {})).status, 409);
+  context.database.put(parent());
+  context.orchestrator.fail = true;
+  assert.equal((await context.call(lyricsRoute, {})).status, 503);
+  assert.equal((await context.call(parentId, undefined, 'GET')).body.job.lyrics.status, 'failed');
+  context.orchestrator.fail = false;
+  assert.equal((await context.call(lyricsRoute, {})).status, 202);
+  assert.equal((await context.call(parentId, undefined, 'GET')).body.job.lyrics.status, 'queued');
+});
+
+test('a stuck lyrics record shows as failed after the deadline', async () => {
+  const { call, database } = setup();
+  const id = (await call(lyricsRoute, {})).body.lyrics.id;
+  database.put({ ...database.get('owner', id), status: 'processing', startedAt: new Date(Date.now() - 2 * 60 * 60 * 1000 - 60000).toISOString() });
+  const { lyrics } = (await call(parentId, undefined, 'GET')).body.job;
+  assert.equal(lyrics.status, 'failed');
+  assert.match(lyrics.error, /Lyrics recognition expired/);
+});
+
+test('lyrics worker reads only the vocal stem and writes only the lyrics key', async () => {
+  const { worker, input, database, storage, child } = lyricsCase(writesLyrics(JSON.stringify(goodLyrics)));
+  await worker(input);
+  const saved = database.get('owner', lyricsId);
+  assert.equal(saved.status, 'completed', saved.error);
+  assert.equal('expiresAt' in saved, false);
+  assert.deepEqual(JSON.parse(storage.objects.get(child.key)), goodLyrics);
+  assert.deepEqual(storage.calls.map(call => [call.kind, call.key]), [
+    ['GetObjectCommand', stemKey('vocals')], ['PutObjectCommand', child.key],
+  ]);
+});
+
+test('a song with no vocals still completes, with no lines', async () => {
+  const { worker, input, database, storage, child } = lyricsCase(writesLyrics('{"language":null,"lines":[]}'));
+  await worker(input);
+  assert.equal(database.get('owner', lyricsId).status, 'completed');
+  assert.deepEqual(JSON.parse(storage.objects.get(child.key)).lines, []);
+});
+
+test('lyrics worker records safe failures and saves nothing', async () => {
+  const bad = { lines: [{ words: [{ start: 99, end: 100, text: 'late' }] }] };
+  for (const [run, stage] of [
+    [async () => { throw new Error('secret path /tmp/x'); }, 'analyze'],
+    [writesLyrics('not json'), 'validate'],
+    [writesLyrics(JSON.stringify(bad)), 'validate'],
+  ]) {
+    const { worker, input, database, storage, child } = lyricsCase(run);
+    await worker(input);
+    const saved = database.get('owner', lyricsId);
+    assert.equal(saved.status, 'failed');
+    assert.equal(saved.failureStage, stage);
+    assert.equal(saved.error.includes('secret'), false);
+    assert.equal(storage.objects.has(child.key), false);
+  }
+});
+
+test('lyrics worker ignores running records and other record types', async () => {
+  let ran = 0;
+  const { worker, input, database, child } = lyricsCase(async () => { ran++; return { stdout: '' }; });
+  database.put({ ...child, status: 'processing' });
+  await worker(input);
+  assert.equal(ran, 0);
+  database.put({ ...child, type: 'restoration' });
+  await assert.rejects(worker(input));
+});
+
+test('lyrics times must fall inside the song', () => {
+  assert.equal(checkLyrics(goodLyrics, 2), goodLyrics);
+  for (const bad of [null, {}, { lines: [{}] }, { lines: [{ words: [] }] },
+    { lines: [{ words: [{ start: 1, end: 0.5, text: 'x' }] }] },
+    { lines: [{ words: [{ start: 0, end: 1, text: '' }] }] },
+    { lines: [{ words: [{ start: -1, end: 1, text: 'x' }] }] }]) {
+    assert.throws(() => checkLyrics(bad, 2), undefined, JSON.stringify(bad));
+  }
+});
+
+test('local server routes lyrics with verified identity', async t => {
+  let seen;
+  const server = createLocalServer({
+    verify: async () => ({ sub: 'real-owner' }),
+    stems: async e => { seen = e; return { statusCode: 202, headers: {}, body: '{}' }; },
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const base = `http://127.0.0.1:${server.address().port}/api/stems/jobs/${parentId}/lyrics`;
+  const headers = { Authorization: 'Bearer token' };
+  assert.equal((await fetch(base, { method: 'POST', body: '{}' })).status, 401);
+  assert.equal((await fetch(base, { method: 'POST', headers, body: '{}' })).status, 202);
+  assert.equal(seen.requestContext.authorizer.jwt.claims.sub, 'real-owner');
+  assert.equal((await fetch(base, { headers })).status, 405);
+});
+
+test('the template lets the task write lyrics and routes them', () => {
+  const template = readFileSync(new URL('../../template.yaml', import.meta.url), 'utf8');
+  const taskPolicy = template.slice(template.indexOf('StemTaskRole:'), template.indexOf('StemTask:\n'));
+  assert.ok(taskPolicy.includes('users/*/lyrics/*'));
+  assert.ok(taskPolicy.includes('users/*/harmony/*'));
+  assert.ok(template.includes('/api/stems/jobs/{jobId}/lyrics'));
+  assert.ok(template.includes('/api/stems/jobs/{jobId}/harmony'));
+  const docker = readFileSync(new URL('../Dockerfile.stems', import.meta.url), 'utf8');
+  assert.ok(docker.includes('transcribe_vocals.py'));
+  assert.ok(docker.includes('analyze_harmony.py'));
 });
 
 test('the template keeps delete permission away from original stems', () => {

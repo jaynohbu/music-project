@@ -56,8 +56,8 @@ export async function wavFormat(file) {
   }
 }
 
-export const runStemTask = ({ separate, restore }) => job =>
-  job.kind === 'restoration' ? restore(job) : separate(job);
+export const runStemTask = ({ separate, restore, recognize, harmonize }) => job =>
+  ({ restoration: restore, lyrics: recognize, harmony: harmonize }[job.kind] ?? separate)(job);
 
 export function createRestoreWorker({
   database = db, storage = s3, run = execute,

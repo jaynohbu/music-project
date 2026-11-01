@@ -20,7 +20,7 @@ export function restorationInput(value) {
   return { stem, references: STEM_NAMES.filter(name => references.includes(name)), strength };
 }
 
-export async function listRestorations(parent, { database, signer, storage }) {
+export async function childRecords(parent, type, database) {
   const items = [];
   let start;
   do {
@@ -29,11 +29,16 @@ export async function listRestorations(parent, { database, signer, storage }) {
       KeyConditionExpression: 'userId = :userId',
       FilterExpression: 'parentJobId = :parent AND #type = :type',
       ExpressionAttributeNames: { '#type': 'type' },
-      ExpressionAttributeValues: { ':userId': parent.userId, ':parent': parent.jobId, ':type': 'restoration' },
+      ExpressionAttributeValues: { ':userId': parent.userId, ':parent': parent.jobId, ':type': type },
     }));
     items.push(...(page.Items ?? []));
     start = page.LastEvaluatedKey;
   } while (start);
+  return items;
+}
+
+export async function listRestorations(parent, { database, signer, storage }) {
+  const items = await childRecords(parent, 'restoration', database);
   const now = Date.now();
   const visible = items.map(item => visibleJob(item, now)).filter(item => !failedHistoryExpired(item, now));
   visible.sort((a, b) => a.generatedAt.localeCompare(b.generatedAt) || a.jobId.localeCompare(b.jobId));

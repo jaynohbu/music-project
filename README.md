@@ -56,7 +56,9 @@ TunesBasis API and frontend are unchanged. As requested, this app creates its
   Play/Pause/Stop controls operate on that interval; Loop repeats it with native
   Web Audio buffer looping. Stop returns to the start arrow. Markers also support
   arrow keys (Shift for larger steps), Home and End. Selections are local to
-  the open mixer, not saved to the job.
+  the open mixer, not saved to the job. Reset, beside the start time, returns the interval
+  to the whole song without stopping playback or changing Loop. All Mute, beside Mute,
+  turns every stem's Mute on, or all off if they are all on.
 - Clean: each stem has a Clean button. `backend/restore_stem.py` runs on the same on-demand
   Fargate task as separation, always comparing against the other five stems at a fixed
   strength, and turns the stem down where its own spectrum looks like noise and where
@@ -68,6 +70,17 @@ TunesBasis API and frontend are unchanged. As requested, this app creates its
   without restarting playback, because both versions play in sync. Original stems are
   never changed. Loading a cleaned stem adds another full WAV download on each visit.
   The UI has no delete button; `DELETE /api/stems/jobs/{id}/restorations/{id}` remains.
+- Lyrics: the vocal stem has a Lyrics button. `backend/transcribe_vocals.py` runs faster-whisper
+  (`large-v3`, `int8`) on the same Fargate task and saves timed words under
+  `users/<id>/lyrics/`. Words then flow past a strip above the vocal waveform, following
+  playback and scrubbing. Regions come from the stem's loudness because Silero VAD
+  discards singing. Recognized words can be wrong or missing, and there is no editing.
+- Chords: guitar, piano and other have a Chords button that analyzes all three at once with
+  `backend/analyze_harmony.py` on the same Fargate task. Chords come from chroma matched to
+  major and minor triads, favoring the song's estimated key; notes come from Basic Pitch,
+  keeping the highest sounding one. Sound well below the loudest of these stems counts as
+  bleed and is ignored. Above each stem, chord names flow over a treble staff of noteheads
+  without durations, folded by octaves onto the staff. Results are approximate.
 - Logout: global Cognito sign-out and removal of the local session.
 
 ## Architecture

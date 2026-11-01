@@ -7,11 +7,15 @@ RUN python3 -m venv /opt/stems \
     && /opt/stems/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/stems/bin/pip install --no-cache-dir torch==2.2.2+cpu torchaudio==2.2.2+cpu \
        --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple \
-    && /opt/stems/bin/pip install --no-cache-dir -r stem-requirements.txt
+    && /opt/stems/bin/pip install --no-cache-dir -r stem-requirements.txt \
+    && /opt/stems/bin/pip install --no-cache-dir --no-deps basic-pitch==0.4.0
+# --no-deps: basic-pitch would add TensorFlow, but it runs on the ONNX Runtime already installed.
 ENV STEM_PYTHON_PATH=/opt/stems/bin/python
 ENV STEM_DEVICE=cpu
 RUN /opt/stems/bin/python -c "from demucs.pretrained import get_model; get_model('htdemucs_6s')"
+RUN HF_HUB_DISABLE_XET=1 /opt/stems/bin/python -c "from faster_whisper.utils import download_model; download_model('large-v3')"
+ENV HF_HUB_OFFLINE=1
 COPY package*.json ./
 RUN npm ci --omit=dev
-COPY stem-*.mjs shared.mjs separate.py restore_stem.py ./
+COPY stem-*.mjs shared.mjs separate.py restore_stem.py transcribe_vocals.py analyze_harmony.py ./
 CMD ["node", "stem-task.mjs"]

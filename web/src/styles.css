@@ -105,6 +105,27 @@ input.console-fader:disabled { opacity: .45; cursor: not-allowed; }
 progress { width: 100%; height: 12px; accent-color: #3459c9; }
 .stem-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-left: auto; }
 .stem-actions button { margin: 0; padding: 6px 12px; font-size: .75rem; }
+.lyrics-strip { overflow: hidden; margin-top: 10px; padding: 6px 0; border-radius: 6px; background: #f1f4f9; -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent); mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent); }
+.lyrics-flow { position: relative; display: inline-flex; white-space: nowrap; transition: transform 40ms linear; will-change: transform; }
+.lyrics-line { display: inline-flex; gap: 7px; margin-right: 34px; }
+.lyrics-word { color: #697b92; font-size: 1rem; line-height: 1.5; }
+.lyrics-word.active { color: #3459c9; font-weight: 700; }
+.harmony-strip { position: relative; height: 92px; margin-top: 10px; border-radius: 6px; background: #f1f4f9; overflow: hidden; }
+.staff-lines { position: absolute; inset: 0; width: 100%; height: 100%; }
+.staff-lines line { stroke: #8a99ad; stroke-width: 1; }
+.harmony-window { position: absolute; inset: 0 0 0 44px; overflow: hidden; -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); }
+.harmony-flow { position: absolute; left: -44px; top: 0; overflow: visible; transition: transform 40ms linear; will-change: transform; }
+.score-chord { fill: #42536b; font-size: 14px; font-weight: 700; }
+.score-chord.active { fill: #3459c9; font-size: 16px; }
+.score-note ellipse, .score-note text { fill: #42536b; }
+.score-note text { font-size: 13px; }
+.score-note line { stroke: #42536b; stroke-width: 1; }
+.score-note.active ellipse, .score-note.active text { fill: #3459c9; }
+.score-note.active line { stroke: #3459c9; }
+.staff-clef { position: absolute; left: 6px; top: 22px; color: #42536b; font-size: 44px; line-height: 52px; pointer-events: none; }
+.staff-now { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: #3459c9; opacity: .45; pointer-events: none; }
+.section-start { display: inline-flex; align-items: center; gap: 8px; }
+.section-start button { margin: 0; padding: 2px 8px; font-size: .7rem; }
 .version-switch { display: inline-flex; border: 1px solid #697b92; border-radius: 6px; overflow: hidden; }
 .version-switch button { border-radius: 0; background: transparent; color: #42536b; }
 .version-switch button.active { background: #3459c9; color: white; }

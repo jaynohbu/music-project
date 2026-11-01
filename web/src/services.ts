@@ -184,6 +184,8 @@ export interface Job {
   duration?: number;
   stems?: Partial<Record<StemName, StemFile>>;
   restorations?: Restoration[];
+  lyrics?: Lyrics;
+  harmony?: Lyrics;
   error?: string;
   errorCode?: string;
   failureStage?: string;
@@ -204,6 +206,16 @@ export interface Restoration extends Partial<StemFile> {
   error?: string;
   createdAt: string;
 }
+export interface Lyrics {
+  id: string;
+  status: 'queued' | 'processing' | 'completed' | 'failed';
+  url?: string;
+  error?: string;
+}
+export interface LyricWord { start: number; end: number; text: string }
+export interface LyricLine { start: number; end: number; words: LyricWord[] }
+export interface HarmonyPart { chords: { start: number; name: string }[]; notes: { start: number; pitch: number }[] }
+export const HARMONY_STEMS: readonly string[] = ['guitar', 'piano', 'other'];
 export interface StemUploadRequest {
   job: Job;
   upload: { url: string; fields: Record<string, string> };
@@ -270,6 +282,24 @@ export class StemsService {
     return firstValueFrom(this.http.post<{ restoration: Restoration }>(
       `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/restorations`,
       { stem, references: STEM_NAMES.filter(name => name !== stem) },
+      { headers: { Authorization: `Bearer ${token}` } },
+    ));
+  }
+
+  async createHarmony(jobId: string): Promise<{ harmony: Lyrics }> {
+    const token = await this.auth.token();
+    return firstValueFrom(this.http.post<{ harmony: Lyrics }>(
+      `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/harmony`,
+      {},
+      { headers: { Authorization: `Bearer ${token}` } },
+    ));
+  }
+
+  async createLyrics(jobId: string): Promise<{ lyrics: Lyrics }> {
+    const token = await this.auth.token();
+    return firstValueFrom(this.http.post<{ lyrics: Lyrics }>(
+      `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/lyrics`,
+      {},
       { headers: { Authorization: `Bearer ${token}` } },
     ));
   }

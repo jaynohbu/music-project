@@ -2,7 +2,9 @@ import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
-import { Job, STEM_NAMES, StemName, StemsService, errorMessage } from './services';
+import { HARMONY_STEMS, HarmonyPart, Job, LyricLine, STEM_NAMES, StemName, StemsService, errorMessage } from './services';
+import { HarmonyStrip } from './harmony-strip';
+import { LyricsStrip } from './lyrics-strip';
 import {
   EffectControl, EffectSettings, FaderControl, FADER_CONTROLS,
   StemEffects, applyStemEffects, createStemEffects, defaultEffects,
@@ -296,7 +298,7 @@ function newTrack(name: string): StemTrack {
 
 @Component({
   standalone: true,
-  imports: [RouterLink, FormsModule],
+  imports: [RouterLink, FormsModule, LyricsStrip, HarmonyStrip],
   template: `
     <section class="card">
       <div class="section-heading">
@@ -332,6 +334,21 @@ function newTrack(name: string): StemTrack {
                 <h2>{{ track.label }}</h2>
                 @if (track.status === 'loading') { <span class="hint">Loading audio...</span> }
                 <div class="stem-actions">
+                  @if (track.name === 'vocals' && !lyricLines()) {
+                    @if (findingLyrics()) {
+                      <button type="button" class="secondary" disabled>Finding lyrics...</button>
+                    } @else {
+                      <button type="button" class="secondary" (click)="findLyrics()" [disabled]="!canPlay()">Lyrics</button>
+                    }
+                  }
+                  @if (isHarmonic(track.name) && !harmonyParts()) {
+                    @if (findingChords()) {
+                      <button type="button" class="secondary" disabled>Finding chords...</button>
+                    } @else {
+                      <button type="button" class="secondary" (click)="findChords()" [disabled]="!canPlay()"
+                        [attr.aria-label]="'Find chords and notes for guitar, piano and other'">Chords</button>
+                    }
+                  }
                   @if (track.hasCleaned) {
                     <div class="version-switch" role="group" [attr.aria-label]="track.label + ' version'">
                       <button type="button" [class.active]="!track.useCleaned" [attr.aria-pressed]="!track.useCleaned"
@@ -354,7 +371,23 @@ function newTrack(name: string): StemTrack {
                 </div>
                 @if (track.status === 'error') { <span class="error">{{ track.error }}</span> }
                 @if (cleanFailure(track)) { <span class="error">{{ cleanFailure(track) }}</span> }
+                @if (track.name === 'vocals' && lyricsFailure()) { <span class="error">{{ lyricsFailure() }}</span> }
+                @if (isHarmonic(track.name) && chordsFailure()) { <span class="error">{{ chordsFailure() }}</span> }
               </div>
+              @if (isHarmonic(track.name) && harmonyParts(); as parts) {
+                @if (hasMusic(parts[track.name])) {
+                  <app-harmony-strip [part]="parts[track.name]" [time]="position()"></app-harmony-strip>
+                } @else {
+                  <p class="hint">No chords or notes were found in this stem.</p>
+                }
+              }
+              @if (track.name === 'vocals' && lyricLines(); as lines) {
+                @if (lines.length) {
+                  <app-lyrics-strip [lines]="lines" [time]="position()"></app-lyrics-strip>
+                } @else {
+                  <p class="hint">No lyrics were found in this stem.</p>
+                }
+              }
               <div class="waveform-editor">
                 <div class="marker-rail">
                   <button type="button" role="slider" class="boundary-arrow start-arrow"
@@ -413,7 +446,11 @@ function newTrack(name: string): StemTrack {
                 </button>
               </div>
               <div class="waveform-times">
-                <span>Start {{ sectionStart().toFixed(2) }}s</span>
+                <span class="section-start">
+                  <button type="button" class="secondary" (click)="resetSection()" [disabled]="!sectionChanged()"
+                    [attr.aria-label]="track.label + ' reset loop interval to the whole song'">Reset</button>
+                  Start {{ sectionStart().toFixed(2) }}s
+                </span>
                 <span>Playing {{ position().toFixed(2) }}s</span>
                 <span>End {{ sectionEndTime().toFixed(2) }}s</span>
               </div>
@@ -433,6 +470,11 @@ function newTrack(name: string): StemTrack {
                     [attr.aria-label]="track.label + ' mute'" [attr.aria-pressed]="track.muted"
                     (click)="toggleMute(track.name)" [disabled]="track.status !== 'ready'">
                     <span class="switch-lamp"></span><span>MUTE</span>
+                  </button>
+                  <button type="button" class="console-switch" [class.lit]="allMuted()"
+                    aria-label="Mute all stems" [attr.aria-pressed]="allMuted()"
+                    (click)="toggleMuteAll()" [disabled]="!canPlay()">
+                    <span class="switch-lamp"></span><span>ALL MUTE</span>
                   </button>
                   <button type="button" class="console-switch" [class.lit]="track.solo"
                     [attr.aria-label]="track.label + ' solo'" [attr.aria-pressed]="track.solo"
@@ -562,7 +604,15 @@ export class MixerPage implements OnInit, OnDestroy {
   private scrubReady = false;
   private lastScrubAt = -Infinity;
   private readonly startingClean = signal<string[]>([]);
+  private readonly startingLyrics = signal(false);
+  private readonly lyricsLoadError = signal('');
+  private lyricsLoading = false;
+  private readonly startingChords = signal(false);
+  private readonly chordsLoadError = signal('');
+  private chordsLoading = false;
 
+  readonly lyricLines = signal<LyricLine[] | null>(null);
+  readonly harmonyParts = signal<Record<string, HarmonyPart> | null>(null);
   readonly Math = Math;
   readonly controls = FADER_CONTROLS;
   readonly scaleFractions = [1, 0.75, 0.5, 0.25, 0];
@@ -612,8 +662,110 @@ export class MixerPage implements OnInit, OnDestroy {
     }
   }
 
+  findingLyrics(): boolean {
+    const lyrics = this.job()?.lyrics;
+    return this.startingLyrics() || (!!lyrics && lyrics.status !== 'failed' && !this.lyricsLoadError());
+  }
+
+  lyricsFailure(): string | undefined {
+    if (this.findingLyrics() || this.lyricLines()) return undefined;
+    return this.lyricsLoadError() || this.job()?.lyrics?.error;
+  }
+
+  async findLyrics(): Promise<void> {
+    if (this.findingLyrics()) return;
+    const generation = this.generation;
+    this.startingLyrics.set(true);
+    this.lyricsLoadError.set('');
+    this.error.set('');
+    try {
+      await this.stems.createLyrics(this.jobId);
+      if (this.destroyed || generation !== this.generation) return;
+      await this.refreshJob(generation);
+      this.watchRestorations(generation);
+    } catch (error) {
+      if (!this.destroyed && generation === this.generation) {
+        this.error.set(`Could not start finding lyrics: ${errorMessage(error)}`);
+      }
+    } finally {
+      this.startingLyrics.set(false);
+    }
+  }
+
+  private async loadLyrics(job: Job, generation: number): Promise<void> {
+    const url = job.lyrics?.url;
+    if (!url || this.lyricLines() || this.lyricsLoading || this.lyricsLoadError()) return;
+    this.lyricsLoading = true;
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Lyrics request failed (HTTP ${response.status}).`);
+      const { lines } = await response.json() as { lines: LyricLine[] };
+      if (!this.destroyed && generation === this.generation) this.lyricLines.set(lines);
+    } catch (error) {
+      if (!this.destroyed && generation === this.generation) {
+        this.lyricsLoadError.set(`Could not load the lyrics: ${errorMessage(error)}`);
+      }
+    } finally {
+      this.lyricsLoading = false;
+    }
+  }
+
+  isHarmonic(name: string): boolean { return HARMONY_STEMS.includes(name); }
+
+  hasMusic(part?: HarmonyPart): boolean { return !!part && (part.chords.length > 0 || part.notes.length > 0); }
+
+  findingChords(): boolean {
+    const harmony = this.job()?.harmony;
+    return this.startingChords() || (!!harmony && harmony.status !== 'failed' && !this.chordsLoadError());
+  }
+
+  chordsFailure(): string | undefined {
+    if (this.findingChords() || this.harmonyParts()) return undefined;
+    return this.chordsLoadError() || this.job()?.harmony?.error;
+  }
+
+  async findChords(): Promise<void> {
+    if (this.findingChords()) return;
+    const generation = this.generation;
+    this.startingChords.set(true);
+    this.chordsLoadError.set('');
+    this.error.set('');
+    try {
+      await this.stems.createHarmony(this.jobId);
+      if (this.destroyed || generation !== this.generation) return;
+      await this.refreshJob(generation);
+      this.watchRestorations(generation);
+    } catch (error) {
+      if (!this.destroyed && generation === this.generation) {
+        this.error.set(`Could not start finding chords: ${errorMessage(error)}`);
+      }
+    } finally {
+      this.startingChords.set(false);
+    }
+  }
+
+  private async loadChords(job: Job, generation: number): Promise<void> {
+    const url = job.harmony?.url;
+    if (!url || this.harmonyParts() || this.chordsLoading || this.chordsLoadError()) return;
+    this.chordsLoading = true;
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Chords request failed (HTTP ${response.status}).`);
+      const { stems } = await response.json() as { stems: Record<string, HarmonyPart> };
+      if (!this.destroyed && generation === this.generation) this.harmonyParts.set(stems);
+    } catch (error) {
+      if (!this.destroyed && generation === this.generation) {
+        this.chordsLoadError.set(`Could not load the chords: ${errorMessage(error)}`);
+      }
+    } finally {
+      this.chordsLoading = false;
+    }
+  }
+
   private restoring(job: Job | null): boolean {
-    return !!job?.restorations?.some(item => item.status === 'queued' || item.status === 'processing');
+    const running = (status?: string) => status === 'queued' || status === 'processing';
+    return !!job?.restorations?.some(item => running(item.status)) ||
+      running(job?.lyrics?.status) || running(job?.harmony?.status);
   }
 
   private watchRestorations(generation: number): void {
@@ -641,6 +793,20 @@ export class MixerPage implements OnInit, OnDestroy {
 
   private playbackBounds(): { start: number; end: number } {
     return { start: this.sectionStart(), end: this.sectionEndTime() };
+  }
+
+  sectionChanged(): boolean {
+    return this.sectionStart() > 0 || this.sectionEndTime() < this.duration();
+  }
+
+  resetSection(): void {
+    if (!this.sectionChanged()) return;
+    const resume = this.playing();
+    this.pause();
+    this.sectionStart.set(0);
+    this.sectionEnd.set(null);
+    if (resume) void this.play();
+    else this.position.set(0);
   }
 
   toggleLoop(): void {
@@ -833,6 +999,14 @@ export class MixerPage implements OnInit, OnDestroy {
     this.master = undefined;
     this.runtimes.clear();
     this.startingClean.set([]);
+    this.startingLyrics.set(false);
+    this.lyricsLoadError.set('');
+    this.lyricLines.set(null);
+    this.lyricsLoading = false;
+    this.startingChords.set(false);
+    this.chordsLoadError.set('');
+    this.harmonyParts.set(null);
+    this.chordsLoading = false;
     this.polling = false;
   }
 
@@ -885,6 +1059,8 @@ export class MixerPage implements OnInit, OnDestroy {
       }
       this.job.set(response.job);
       this.error.set('');
+      this.lyricsLoadError.set('');
+      this.chordsLoadError.set('');
       this.scheduleLinkRenewal(generation);
       await this.loadStems(response.job, generation);
     } catch (error) {
@@ -900,6 +1076,8 @@ export class MixerPage implements OnInit, OnDestroy {
   }
 
   private async loadStems(job: Job, generation: number): Promise<void> {
+    void this.loadLyrics(job, generation);
+    void this.loadChords(job, generation);
     if (this.loadingStems) return;
     this.loadingStems = true;
     const controller = new AbortController();
@@ -1066,6 +1244,15 @@ export class MixerPage implements OnInit, OnDestroy {
 
   suppressedBySolo(track: StemTrack): boolean {
     return !track.solo && this.tracks().some(item => item.solo);
+  }
+
+  allMuted(): boolean { return this.tracks().every(track => track.muted); }
+
+  toggleMuteAll(): void {
+    if (!this.canPlay()) return;
+    const muted = !this.allMuted();
+    this.tracks.update(tracks => tracks.map(track => ({ ...track, muted })));
+    this.updateMixGains();
   }
 
   toggleSolo(name: string): void {

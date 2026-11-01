@@ -12,6 +12,7 @@ import { createAccountHandler } from './accounts.mjs';
 import { createStemHandler } from './stem-api.mjs';
 import { createStemWorker } from './stem-worker.mjs';
 import { createRestoreWorker, runStemTask } from './stem-restore.mjs';
+import { createHarmonyWorker, createLyricsWorker } from './stem-analysis.mjs';
 
 const execute = promisify(execFile);
 
@@ -51,12 +52,13 @@ export function createLocalServer({ api, accounts, stems, verify }) {
       const isJobs = url.pathname === '/api/jobs';
       const isRestorations = /^\/api\/stems\/jobs\/[0-9a-f-]{36}\/restorations$/.test(url.pathname);
       const isRestoration = /^\/api\/stems\/jobs\/[0-9a-f-]{36}\/restorations\/[0-9a-f-]{36}$/.test(url.pathname);
-      const isStems = url.pathname === '/api/stems/uploads' || isRestorations || isRestoration ||
+      const isAnalysis = /^\/api\/stems\/jobs\/[0-9a-f-]{36}\/(lyrics|harmony)$/.test(url.pathname);
+      const isStems = url.pathname === '/api/stems/uploads' || isRestorations || isRestoration || isAnalysis ||
         /^\/api\/stems\/jobs\/[0-9a-f-]{36}(\/complete)?$/.test(url.pathname);
       if (!isAccount && !isJobs && !isStems) { reply(404, 'Endpoint not found.'); return; }
       if ((isAccount && request.method !== 'POST') ||
           (isRestoration ? request.method !== 'DELETE'
-            : isRestorations ? request.method !== 'POST'
+            : isRestorations || isAnalysis ? request.method !== 'POST'
               : (isJobs || isStems) && !['GET', 'POST'].includes(request.method))) {
         reply(405, 'Method not allowed.');
         return;
@@ -138,6 +140,8 @@ async function main() {
   const stemQueue = localQueue(runStemTask({
     separate: createStemWorker({ pythonPath: stemPython, ffmpegPath }),
     restore: createRestoreWorker({ pythonPath: stemPython }),
+    recognize: createLyricsWorker({ pythonPath: stemPython }),
+    harmonize: createHarmonyWorker({ pythonPath: stemPython }),
   }), 1);
   const acceptedStemJobs = new Set();
   const stemOrchestrator = {

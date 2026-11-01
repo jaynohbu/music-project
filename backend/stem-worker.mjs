@@ -155,9 +155,11 @@ export async function finalize(event) {
       ExpressionAttributeNames: { '#status': 'status', '#error': 'error' },
       ExpressionAttributeValues: {
         ':queued': 'queued', ':processing': 'processing', ':failed': 'failed',
-        ':error': result.Item.type === 'restoration'
-          ? 'Stem cleanup stopped before completion. Please try again.'
-          : 'The separation task stopped before completion. Please try again.',
+        ':error': {
+          restoration: 'Stem cleanup stopped before completion. Please try again.',
+          lyrics: 'Lyrics recognition stopped before completion. Please try again.',
+          harmony: 'Chord analysis stopped before completion. Please try again.',
+        }[result.Item.type] ?? 'The separation task stopped before completion. Please try again.',
         ':at': retention.failedAt, ':expiry': retention.expiresAt,
         ':code': 'STEM_TASK_STOPPED', ':stage': 'worker',
       },

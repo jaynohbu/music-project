@@ -7,6 +7,7 @@ import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { visibleJob } from './shared.mjs';
 import { createRestorationRoutes, listRestorations } from './restoration-api.mjs';
+import { ANALYSES, createAnalysisRoutes, currentAnalysis } from './analysis-api.mjs';
 import { STEM_NAMES, stemInput, UPLOAD_WINDOW_MS, STEM_WINDOW_MS } from './stem-shared.mjs';
 
 const db = DynamoDBDocumentClient.from(new DynamoDBClient({}));
@@ -36,6 +37,7 @@ export function createStemHandler({
   uploadSigner = createPresignedPost, signer = getSignedUrl,
 } = {}) {
   const restorations = createRestorationRoutes({ database, storage, orchestrator, signer });
+  const analyses = createAnalysisRoutes({ database, storage, orchestrator, signer });
   return async event => {
     const reply = (statusCode, body) => ({
       statusCode, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
@@ -54,6 +56,11 @@ export function createStemHandler({
         if (id && method === 'DELETE') return await restorations.remove({ userId, parentJobId, id, reply });
         if (!id && method === 'POST') return await restorations.create({ userId, parentJobId, body, reply });
         return reply(404, { message: 'Endpoint not found.' });
+      }
+      const analyzing = /^\/api\/stems\/jobs\/([0-9a-f-]{36})\/(lyrics|harmony)$/.exec(route ?? '');
+      if (analyzing) {
+        if (method !== 'POST') return reply(404, { message: 'Endpoint not found.' });
+        return await analyses.create({ type: analyzing[2], userId, parentJobId: analyzing[1], reply });
       }
       if (route === '/api/stems/uploads' && method === 'POST') {
         let input;
@@ -90,8 +97,12 @@ export function createStemHandler({
       if (!job || job.type !== 'stems') return reply(404, { message: 'Separation job not found.' });
       if (!match[2]) {
         const signed = await signedStemJob(job, signer, storage);
-        return reply(200, { job: signed.status === 'completed'
-          ? { ...signed, restorations: await listRestorations(job, { database, signer, storage }) } : signed });
+        return reply(200, { job: signed.status === 'completed' ? {
+          ...signed,
+          restorations: await listRestorations(job, { database, signer, storage }),
+          ...Object.fromEntries(await Promise.all(Object.keys(ANALYSES).map(async type =>
+            [type, await currentAnalysis(type, job, { database, signer, storage })]))),
+        } : signed });
       }
       if (visibleJob(job).status === 'failed') return reply(409, { message: 'This job expired or failed. Upload again.' });
       if (job.status === 'completed' || job.status === 'processing') return reply(200, { job });

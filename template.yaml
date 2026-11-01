@@ -266,6 +266,18 @@ Resources:
             ApiId: !Ref HttpApi
             Path: /api/stems/jobs/{jobId}/restorations/{restorationId}
             Method: DELETE
+        CreateLyrics:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/stems/jobs/{jobId}/lyrics
+            Method: POST
+        CreateHarmony:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/stems/jobs/{jobId}/harmony
+            Method: POST
   StemVpc:
     Type: AWS::EC2::VPC
     Properties:
@@ -352,7 +364,10 @@ Resources:
                   - !Sub '${AudioBucket.Arn}/users/*/stems/*'
               - Effect: Allow
                 Action: [s3:PutObject, s3:DeleteObject]
-                Resource: !Sub '${AudioBucket.Arn}/users/*/restored/*'
+                Resource:
+                  - !Sub '${AudioBucket.Arn}/users/*/restored/*'
+                  - !Sub '${AudioBucket.Arn}/users/*/lyrics/*'
+                  - !Sub '${AudioBucket.Arn}/users/*/harmony/*'
               - Effect: Allow
                 Action: [s3:PutObject, s3:DeleteObject]
                 Resource: !Sub '${AudioBucket.Arn}/users/*/stems/*'

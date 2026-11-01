@@ -57,12 +57,17 @@ export function youtubeUrl(input) {
 }
 
 export function visibleJob(job, now = Date.now()) {
-  const stemJob = job.type === 'stems' || job.type === 'restoration';
+  const stemJob = ['stems', 'restoration', 'lyrics', 'harmony'].includes(job.type);
   if (stemJob && ['uploading', 'queued', 'processing'].includes(job.status) &&
       now >= stemDeadline(job)) {
     return {
       ...job, status: 'failed',
-      error: job.type === 'stems' ? 'Upload or separation expired. Please upload again.' : 'Stem cleanup expired. Please try again.',
+      error: {
+        stems: 'Upload or separation expired. Please upload again.',
+        restoration: 'Stem cleanup expired. Please try again.',
+        lyrics: 'Lyrics recognition expired. Please try again.',
+        harmony: 'Chord analysis expired. Please try again.',
+      }[job.type],
       ...failureRetention(stemDeadline(job)),
     };
   }
