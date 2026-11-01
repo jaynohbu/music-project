@@ -127,6 +127,14 @@ progress { width: 100%; height: 12px; accent-color: #3459c9; }
 .staff-clef.treble { top: 46px; }
 .staff-clef.bass { top: 40px; font-size: 34px; }
 .staff-now { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: #3459c9; opacity: .45; pointer-events: none; }
+.console-transport { padding: 10px 14px; border-bottom: 1px solid #aebacb; }
+.task-note { overflow: hidden; margin-top: 10px; padding: 6px 0; border-radius: 6px; background: #f1f4f9; color: #42536b; font-size: .85rem; white-space: nowrap; }
+.task-note span { display: inline-block; padding-left: 100%; animation: task-note-flow 26s linear infinite; }
+@keyframes task-note-flow { to { transform: translateX(-100%); } }
+@media (prefers-reduced-motion: reduce) {
+  .task-note { white-space: normal; padding: 6px 10px; }
+  .task-note span { padding-left: 0; animation: none; }
+}
 .section-start { display: inline-flex; align-items: center; gap: 8px; }
 .section-start button { margin: 0; padding: 2px 8px; font-size: .7rem; }
 .version-switch { display: inline-flex; border: 1px solid #697b92; border-radius: 6px; overflow: hidden; }

@@ -374,6 +374,12 @@ function newTrack(name: string): StemTrack {
                 @if (track.name === 'vocals' && lyricsFailure()) { <span class="error">{{ lyricsFailure() }}</span> }
                 @if (isHarmonic(track.name) && chordsFailure()) { <span class="error">{{ chordsFailure() }}</span> }
               </div>
+              @if (track.name === 'vocals' && !lyricLines() && findingLyrics()) {
+                <div class="task-note" role="status"><span>{{ lyricsNote }}</span></div>
+              }
+              @if (isHarmonic(track.name) && !harmonyParts() && findingChords()) {
+                <div class="task-note" role="status"><span>{{ chordsNote }}</span></div>
+              }
               @if (isHarmonic(track.name) && harmonyParts(); as parts) {
                 @if (hasMusic(parts[track.name])) {
                   <app-harmony-strip [part]="parts[track.name]" [stem]="track.name" [time]="position()"></app-harmony-strip>
@@ -455,7 +461,35 @@ function newTrack(name: string): StemTrack {
                 <span>End {{ sectionEndTime().toFixed(2) }}s</span>
               </div>
               </div>
-              <div class="stem-transport" role="group" [attr.aria-label]="track.label + ' transport, mute and solo'">
+              <div class="stem-transport">
+                <div class="seek-row">
+                  <span>{{ formatTime(position()) }}</span>
+                  <input [attr.aria-label]="track.label + ' seek all stems'" type="range" [min]="sectionStart()"
+                    [max]="sectionEndTime() || 0" step="0.01"
+                    [value]="position()" (input)="seek($event)" [disabled]="!canPlay()">
+                  <span>{{ formatTime(duration()) }}</span>
+                </div>
+              </div>
+                <button type="button" class="console-heading" [id]="'mixer-toggle-' + track.name"
+                  [attr.aria-label]="track.label + ' mixer controls'"
+                  [attr.aria-expanded]="expandedStem() === track.name"
+                  [attr.aria-controls]="'mixer-panel-' + track.name"
+                  (click)="toggleMixer(track.name)">
+                  <span class="console-title"><span class="console-chevron" aria-hidden="true"></span>
+                    Mixer <span class="console-action">{{ expandedStem() === track.name ? 'Hide controls' : 'Show controls' }}</span>
+                  </span>
+                  <span class="console-status">
+                    <span class="console-volume">{{ track.volume }}%</span>
+                    @if (track.muted) { <span class="console-state">Muted</span> }
+                    @if (track.solo) { <span class="console-state">Solo</span> }
+                    <span class="console-led" aria-hidden="true"
+                    [class.on]="playing() && !track.muted && !suppressedBySolo(track)"></span>
+                    {{ track.bypassed ? 'FX bypassed' : 'FX active' }}</span>
+                </button>
+                <div class="console-panel" [id]="'mixer-panel-' + track.name" role="region"
+                  [attr.aria-labelledby]="'mixer-toggle-' + track.name"
+                  [hidden]="expandedStem() !== track.name">
+                <div class="console-transport" role="group" [attr.aria-label]="track.label + ' transport, mute and solo'">
                 <div class="transport-buttons">
                   <button type="button" (click)="play()" [disabled]="!canPlay() || playing()"
                     [attr.aria-label]="track.label + ' play all stems'">
@@ -494,33 +528,7 @@ function newTrack(name: string): StemTrack {
                       [value]="masterVolume()" (input)="setMasterVolume($event)" [disabled]="!canPlay()">
                   </div>
                 </div>
-                <div class="seek-row">
-                  <span>{{ formatTime(position()) }}</span>
-                  <input [attr.aria-label]="track.label + ' seek all stems'" type="range" [min]="sectionStart()"
-                    [max]="sectionEndTime() || 0" step="0.01"
-                    [value]="position()" (input)="seek($event)" [disabled]="!canPlay()">
-                  <span>{{ formatTime(duration()) }}</span>
                 </div>
-              </div>
-                <button type="button" class="console-heading" [id]="'mixer-toggle-' + track.name"
-                  [attr.aria-label]="track.label + ' mixer controls'"
-                  [attr.aria-expanded]="expandedStem() === track.name"
-                  [attr.aria-controls]="'mixer-panel-' + track.name"
-                  (click)="toggleMixer(track.name)">
-                  <span class="console-title"><span class="console-chevron" aria-hidden="true"></span>
-                    Mixer <span class="console-action">{{ expandedStem() === track.name ? 'Hide controls' : 'Show controls' }}</span>
-                  </span>
-                  <span class="console-status">
-                    <span class="console-volume">{{ track.volume }}%</span>
-                    @if (track.muted) { <span class="console-state">Muted</span> }
-                    @if (track.solo) { <span class="console-state">Solo</span> }
-                    <span class="console-led" aria-hidden="true"
-                    [class.on]="playing() && !track.muted && !suppressedBySolo(track)"></span>
-                    {{ track.bypassed ? 'FX bypassed' : 'FX active' }}</span>
-                </button>
-                <div class="console-panel" [id]="'mixer-panel-' + track.name" role="region"
-                  [attr.aria-labelledby]="'mixer-toggle-' + track.name"
-                  [hidden]="expandedStem() !== track.name">
                 <div class="console-scroll" tabindex="0"
                   [attr.aria-label]="track.label + ' faders; scroll horizontally on small screens'">
                   <div class="console-channels">
@@ -611,6 +619,8 @@ export class MixerPage implements OnInit, OnDestroy {
   private readonly chordsLoadError = signal('');
   private chordsLoading = false;
 
+  readonly lyricsNote = 'Converting voice to text takes time. The timing may not match well at first but improves when reloaded. You can edit the text later.';
+  readonly chordsNote = 'Converting to chords and melody takes time, and the result is not the same as the original. You can edit the chords and melody later.';
   readonly lyricLines = signal<LyricLine[] | null>(null);
   readonly harmonyParts = signal<Record<string, HarmonyPart> | null>(null);
   readonly Math = Math;

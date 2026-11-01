@@ -70,6 +70,8 @@ TunesBasis API and frontend are unchanged. As requested, this app creates its
   without restarting playback, because both versions play in sync. Original stems are
   never changed. Loading a cleaned stem adds another full WAV download on each visit.
   The UI has no delete button; `DELETE /api/stems/jobs/{id}/restorations/{id}` remains.
+- Mixer panel: Play, Pause, Stop, Mute, All Mute, Solo, Loop and Master are inside each stem's
+  Mixer panel, so opening a panel is how you reach them. The first panel opens by default.
 - Lyrics: the vocal stem has a Lyrics button. `backend/transcribe_vocals.py` runs faster-whisper
   (`large-v3`, `int8`) on the same Fargate task and saves timed words under
   `users/<id>/lyrics/`. Words then flow past a strip above the vocal waveform, following
