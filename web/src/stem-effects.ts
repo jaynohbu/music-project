@@ -154,10 +154,6 @@ export function createStemEffects(context: BaseAudioContext, destination: AudioN
   };
 }
 
-export function disposeStemEffects(nodes: StemEffects): void {
-  for (const node of Object.values(nodes)) node.disconnect();
-}
-
 export function applyStemEffects(
   context: BaseAudioContext, nodes: StemEffects, settings: EffectSettings, bypass: boolean,
 ): void {

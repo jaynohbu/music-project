@@ -103,16 +103,11 @@ input.console-fader:disabled { opacity: .45; cursor: not-allowed; }
 .control-note { display: block; min-height: 16px; font-size: .59rem; color: #526177; }
 .console-note { margin: 0; padding: 7px 14px; border-top: 1px solid #a9b5c580; font-size: .68rem; color: #526177; }
 progress { width: 100%; height: 12px; accent-color: #3459c9; }
-.danger { background: #fff0f0; color: #a52c35; }
-.restore-panel { padding: 16px; margin: 16px 0; border: 1px solid #aebcd0; border-radius: 12px; background: #f3f6fd; }
-.restore-panel h2 { margin: 0 0 6px; font-size: 1rem; }
-.restore-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px 20px; margin-top: 12px; }
-.restore-controls > label { display: flex; flex-direction: column; gap: 6px; font-size: .85rem; }
-.restore-controls select { font: inherit; border: 1px solid #aebcd0; border-radius: 6px; background: white; padding: 8px; }
-.restore-controls fieldset { margin: 0; border: 1px solid #dce3ed; border-radius: 8px; padding: 6px 12px 10px; font-size: .85rem; }
-.restore-choice { display: inline-flex; gap: 6px; align-items: center; margin: 4px 12px 0 0; }
-.restore-choice input { width: auto; }
-.restore-status { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 12px 0 0; font-size: .85rem; }
+.stem-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-left: auto; }
+.stem-actions button { margin: 0; padding: 6px 12px; font-size: .75rem; }
+.version-switch { display: inline-flex; border: 1px solid #697b92; border-radius: 6px; overflow: hidden; }
+.version-switch button { border-radius: 0; background: transparent; color: #42536b; }
+.version-switch button.active { background: #3459c9; color: white; }
 .badge { font-size: .75rem; padding: 6px 10px; border-radius: 20px; background: #edf2fe; color: #3459c9; }
 .badge.failed { background: #fff0f0; color: #a52c35; }
 audio { width: 100%; display: block; margin: 18px 0; }

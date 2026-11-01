@@ -265,20 +265,11 @@ export class StemsService {
     ));
   }
 
-  async createRestoration(
-    jobId: string, stem: StemName, references: StemName[], strength: number,
-  ): Promise<{ restoration: Restoration }> {
+  async createRestoration(jobId: string, stem: StemName): Promise<{ restoration: Restoration }> {
     const token = await this.auth.token();
     return firstValueFrom(this.http.post<{ restoration: Restoration }>(
-      `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/restorations`, { stem, references, strength },
-      { headers: { Authorization: `Bearer ${token}` } },
-    ));
-  }
-
-  async deleteRestoration(jobId: string, id: string): Promise<void> {
-    const token = await this.auth.token();
-    await firstValueFrom(this.http.delete(
-      `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/restorations/${encodeURIComponent(id)}`,
+      `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/restorations`,
+      { stem, references: STEM_NAMES.filter(name => name !== stem) },
       { headers: { Authorization: `Bearer ${token}` } },
     ));
   }

@@ -57,16 +57,17 @@ TunesBasis API and frontend are unchanged. As requested, this app creates its
   Web Audio buffer looping. Stop returns to the start arrow. Markers also support
   arrow keys (Shift for larger steps), Home and End. Selections are local to
   the open mixer, not saved to the job.
-- Clean up a stem: on the mixer, choose a stem to clean, the other stems to compare
-  against, and a strength. `backend/restore_stem.py` runs on the same on-demand Fargate
-  task as separation, turning the stem down where its own spectrum looks like noise
-  and where the reference stems are much louder at the same time and frequency.
-  This is deterministic DSP: it only reduces sound, so it can lessen bleed but cannot add
-  missing detail, and the effect is modest. The new WAV is checked to match the original's
-  size, so it stays aligned, and is saved under `users/<id>/restored/`. It appears as an
-  extra channel, and Delete removes it permanently from the mixer and storage (the bucket
-  is unversioned). The API's S3 delete permission covers only `users/*/restored/*`,
-  and the task role can only read original stems for this, never replace them from this code.
+- Clean: each stem has a Clean button. `backend/restore_stem.py` runs on the same on-demand
+  Fargate task as separation, always comparing against the other five stems at a fixed
+  strength, and turns the stem down where its own spectrum looks like noise and where
+  the others are much louder at the same time and frequency. This is deterministic DSP:
+  it only reduces sound, so it can lessen bleed but cannot add missing detail, and the
+  effect is modest. The WAV's audio frames are checked against the original's, so it
+  stays aligned, and it is saved under `users/<id>/restored/`. When ready it replaces the
+  original in that mixer, with an Original/Cleaned switch that crossfades in about 20 ms
+  without restarting playback, because both versions play in sync. Original stems are
+  never changed. Loading a cleaned stem adds another full WAV download on each visit.
+  The UI has no delete button; `DELETE /api/stems/jobs/{id}/restorations/{id}` remains.
 - Logout: global Cognito sign-out and removal of the local session.
 
 ## Architecture
