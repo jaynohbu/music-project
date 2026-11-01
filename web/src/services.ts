@@ -214,8 +214,8 @@ export interface Lyrics {
 }
 export interface LyricWord { start: number; end: number; text: string }
 export interface LyricLine { start: number; end: number; words: LyricWord[] }
-export interface HarmonyPart { chords: { start: number; name: string }[]; notes: { start: number; pitch: number }[] }
-export const HARMONY_STEMS: readonly string[] = ['guitar', 'piano', 'other'];
+export interface HarmonyPart { chords: { start: number; name: string }[]; notes: { start: number; end: number; pitch: number }[] }
+export const HARMONY_STEMS: readonly string[] = ['guitar', 'piano', 'other', 'bass'];
 export interface StemUploadRequest {
   job: Job;
   upload: { url: string; fields: Record<string, string> };

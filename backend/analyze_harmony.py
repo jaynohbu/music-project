@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Finds the chords and top notes of harmonic stems, written as JSON. Output is approximate."""
+"""Finds chords, and clear melody lines with lengths, of stems, written as JSON. Output is approximate."""
 import argparse
 import json
 
 import librosa
 import numpy as np
+
+from note_lines import clear_line
 
 RATE = 22050
 HOP = 2048
@@ -14,6 +16,8 @@ NOTES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B']
 SHAPES = {'': (0, 4, 7), 'm': (0, 3, 7)}
 # Quieter than this share of the loudest stem at that moment is treated as bleed from that stem.
 BLEED_SHARE = 0.25
+SHORTEST_CHORD = 0.75
+MELODY_STEMS = ('guitar', 'piano')
 # Krumhansl-Schmuckler key profiles.
 MAJOR_PROFILE = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
 MINOR_PROFILE = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
@@ -63,25 +67,35 @@ def chord_path(chroma, bonus, weight=8, stay=0.985):
     return [names[index] for index in path]
 
 
-def top_notes(path, audible):
+def note_events(path):
     from basic_pitch import ICASSP_2022_MODEL_PATH
     from basic_pitch.inference import predict
     _, _, events = predict(path, ICASSP_2022_MODEL_PATH)
-    kept = []
-    for start, end, pitch, confidence, _ in sorted(events, key=lambda event: event[0]):
-        frame = min(int(start / SECONDS), len(audible) - 1)
-        if confidence < 0.4 or end - start < 0.08 or not audible[frame]:
+    return [(float(start), float(end), int(pitch), float(strength)) for start, end, pitch, strength, _ in events]
+
+
+def chord_changes(names, audible):
+    """Audible chord spans, ignoring any too brief to be a real change or to read while scrolling."""
+    spans = []
+    for frame, name in enumerate(names):
+        if not audible[frame]:
             continue
-        # Keep a note unless a higher one is already sounding when it starts.
-        if not any(began <= start < ended - 0.03 and higher > pitch for began, ended, higher in kept):
-            kept.append((float(start), float(end), int(pitch)))
-    return [{'start': round(start, 2), 'pitch': pitch} for start, _, pitch in kept]
+        if spans and spans[-1][2] == name and spans[-1][1] == frame:
+            spans[-1][1] = frame + 1
+        else:
+            spans.append([frame, frame + 1, name])
+    changes = []
+    for start, end, name in spans:
+        if (end - start) * SECONDS >= SHORTEST_CHORD and (not changes or changes[-1]['name'] != name):
+            changes.append({'start': round(start * SECONDS, 2), 'name': name})
+    return changes
 
 
 def analyze(stems):
     chromas, levels = {}, {}
-    for name, path in stems.items():
-        audio, _ = librosa.load(path, sr=RATE, mono=True)
+    harmonic_stems = [name for name in stems if name != 'bass']
+    for name in harmonic_stems:
+        audio, _ = librosa.load(stems[name], sr=RATE, mono=True)
         harmonic = librosa.effects.harmonic(audio, margin=2)
         chromas[name] = librosa.feature.chroma_cqt(y=harmonic, sr=RATE, hop_length=HOP, bins_per_octave=36)
         levels[name] = librosa.feature.rms(y=harmonic, hop_length=HOP)[0]
@@ -90,15 +104,16 @@ def analyze(stems):
     floor = np.percentile(loudest, 95) * 0.03
     bonus = key_bonus(sum(chroma[:, :frames] for chroma in chromas.values()))
     result = {}
-    for name, path in stems.items():
+    for name in harmonic_stems:
         audible = (levels[name][:frames] > loudest * BLEED_SHARE) & (levels[name][:frames] > floor)
-        chords = []
-        last = None
-        for frame, chord in enumerate(chord_path(chromas[name][:, :frames], bonus)):
-            if audible[frame] and chord != last:
-                chords.append({'start': round(frame * SECONDS, 2), 'name': chord})
-                last = chord
-        result[name] = {'chords': chords, 'notes': top_notes(path, audible)}
+        notes = []
+        if name in MELODY_STEMS:
+            events = [event for event in note_events(stems[name])
+                      if audible[min(int(event[0] / SECONDS), frames - 1)]]
+            notes = clear_line(events)
+        result[name] = {'chords': chord_changes(chord_path(chromas[name][:, :frames], bonus), audible), 'notes': notes}
+    if 'bass' in stems:
+        result['bass'] = {'chords': [], 'notes': clear_line(note_events(stems['bass']), bass=True)}
     return {'stems': result}
 
 

@@ -75,12 +75,15 @@ TunesBasis API and frontend are unchanged. As requested, this app creates its
   `users/<id>/lyrics/`. Words then flow past a strip above the vocal waveform, following
   playback and scrubbing. Regions come from the stem's loudness because Silero VAD
   discards singing. Recognized words can be wrong or missing, and there is no editing.
-- Chords: guitar, piano and other have a Chords button that analyzes all three at once with
-  `backend/analyze_harmony.py` on the same Fargate task. Chords come from chroma matched to
-  major and minor triads, favoring the song's estimated key; notes come from Basic Pitch,
-  keeping the highest sounding one. Sound well below the loudest of these stems counts as
-  bleed and is ignored. Above each stem, chord names flow over a treble staff of noteheads
-  without durations, folded by octaves onto the staff. Results are approximate.
+- Chords & melody: guitar, piano, other and bass share one button that analyzes them together
+  with `backend/analyze_harmony.py` on the same Fargate task. Chords come from chroma matched
+  to major and minor triads, favoring the song's estimated key, and show on all but bass.
+  Melody comes from Basic Pitch through `backend/note_lines.py`, on guitar, piano and bass only:
+  strummed passages stay blank, only clear notes are kept, and same-pitch notes with nothing
+  between them connect. Sound well below the loudest of guitar, piano and other counts as bleed.
+  Above each stem, chord names flow over a staff, with note length drawn to scale in time
+  rather than as note values. Guitar sounds an octave below the staff, as usual; bass too, on
+  a bass clef. Other notes outside the staff's range fold by octaves. Results are approximate.
 - Logout: global Cognito sign-out and removal of the local session.
 
 ## Architecture

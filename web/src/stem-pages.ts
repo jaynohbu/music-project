@@ -343,10 +343,10 @@ function newTrack(name: string): StemTrack {
                   }
                   @if (isHarmonic(track.name) && !harmonyParts()) {
                     @if (findingChords()) {
-                      <button type="button" class="secondary" disabled>Finding chords...</button>
+                      <button type="button" class="secondary" disabled>Finding notes...</button>
                     } @else {
                       <button type="button" class="secondary" (click)="findChords()" [disabled]="!canPlay()"
-                        [attr.aria-label]="'Find chords and notes for guitar, piano and other'">Chords</button>
+                        aria-label="Find chords and melody for guitar, piano, other and bass">Chords &amp; melody</button>
                     }
                   }
                   @if (track.hasCleaned) {
@@ -376,9 +376,9 @@ function newTrack(name: string): StemTrack {
               </div>
               @if (isHarmonic(track.name) && harmonyParts(); as parts) {
                 @if (hasMusic(parts[track.name])) {
-                  <app-harmony-strip [part]="parts[track.name]" [time]="position()"></app-harmony-strip>
+                  <app-harmony-strip [part]="parts[track.name]" [stem]="track.name" [time]="position()"></app-harmony-strip>
                 } @else {
-                  <p class="hint">No chords or notes were found in this stem.</p>
+                  <p class="hint">No clear chords or notes were found in this stem.</p>
                 }
               }
               @if (track.name === 'vocals' && lyricLines(); as lines) {

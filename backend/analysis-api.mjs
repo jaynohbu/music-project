@@ -8,13 +8,15 @@ import { STEM_WINDOW_MS } from './stem-shared.mjs';
 
 export const ANALYSES = {
   lyrics: { label: 'Lyrics', folder: 'lyrics', notReady: 'Find lyrics after the stems are ready.', noStart: 'Unable to start lyrics recognition. Please try again.' },
-  harmony: { label: 'Chords', folder: 'harmony', notReady: 'Find chords after the stems are ready.', noStart: 'Unable to start chord analysis. Please try again.' },
+  // Bump version when the result format changes: older results are ignored, so they get redone.
+  harmony: { version: 2, label: 'Chords', folder: 'harmony', notReady: 'Find chords after the stems are ready.', noStart: 'Unable to start chord analysis. Please try again.' },
 };
 
 // A song has one result of each type: the newest record that has not failed, else the newest failure.
 export async function currentAnalysis(type, parent, { database, signer, storage }) {
   const now = Date.now();
   const visible = (await childRecords(parent, type, database))
+    .filter(item => item.version === ANALYSES[type].version)
     .map(item => visibleJob(item, now)).filter(item => !failedHistoryExpired(item, now))
     .sort((a, b) => b.generatedAt.localeCompare(a.generatedAt));
   const item = visible.find(record => record.status !== 'failed') ?? visible[0];
@@ -47,7 +49,7 @@ export function createAnalysisRoutes({ database, storage, orchestrator, signer }
     const now = Date.now();
     const id = randomUUID();
     const child = {
-      userId, jobId: id, type, parentJobId, status: 'queued',
+      userId, jobId: id, type, parentJobId, status: 'queued', ...(analysis.version ? { version: analysis.version } : {}),
       title: analysis.label, key: `users/${userId}/${analysis.folder}/${parentJobId}/${id}.json`,
       // No createdAt: keeps analyses out of the ByCreatedAt library index.
       generatedAt: new Date(now).toISOString(), startedAt: new Date(now).toISOString(),

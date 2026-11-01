@@ -31,13 +31,13 @@ export function checkHarmony(value, duration) {
   if (!parts?.length || !parts.every(part => Array.isArray(part.chords) && Array.isArray(part.notes) &&
       part.chords.every(chord => typeof chord.name === 'string' && chord.name && validTime(chord.start, duration)) &&
       part.notes.every(note => Number.isInteger(note.pitch) && note.pitch >= 0 && note.pitch <= 127 &&
-        validTime(note.start, duration)))) {
+        validTime(note.start, duration) && validTime(note.end, duration) && note.end >= note.start))) {
     throw new Error('Invalid harmony.');
   }
   return value;
 }
 
-export const HARMONY_STEMS = ['guitar', 'piano', 'other'];
+export const HARMONY_STEMS = ['guitar', 'piano', 'other', 'bass'];
 
 const LYRICS = {
   type: 'lyrics', code: 'LYRICS', stems: ['vocals'], check: checkLyrics,

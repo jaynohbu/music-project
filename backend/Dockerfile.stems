@@ -17,5 +17,5 @@ RUN HF_HUB_DISABLE_XET=1 /opt/stems/bin/python -c "from faster_whisper.utils imp
 ENV HF_HUB_OFFLINE=1
 COPY package*.json ./
 RUN npm ci --omit=dev
-COPY stem-*.mjs shared.mjs separate.py restore_stem.py transcribe_vocals.py analyze_harmony.py ./
+COPY stem-*.mjs shared.mjs separate.py restore_stem.py transcribe_vocals.py analyze_harmony.py note_lines.py ./
 CMD ["node", "stem-task.mjs"]
