@@ -236,3 +236,56 @@ test('a preview excerpt keeps the level of its place in the song instead of bein
   };
   assert.ok(excerpt(4) / excerpt(15) > 4);
 });
+
+test('bundled instruments are complete, licensed, and the old library is gone', async () => {
+  const { readdir } = await import('node:fs/promises');
+  const directory = new URL('../public/instruments/', import.meta.url);
+  const files = await readdir(directory);
+  assert.deepEqual(files.sort(), ['LICENSE.txt', 'musyngkite-acoustic-guitar-v1.json', 'musyngkite-electric-guitar-v1.json', 'salamander-piano-v1.json']);
+  for (const [file, layers, notes] of [['salamander-piano-v1', 4, 13], ['musyngkite-acoustic-guitar-v1', 1, 37], ['musyngkite-electric-guitar-v1', 1, 37]]) {
+    const content = JSON.parse(await readFile(new URL(`${file}.json`, directory), 'utf8'));
+    assert.equal(content.layers.length, layers);
+    for (const layer of content.layers) {
+      assert.equal(Object.keys(layer).length, notes);
+      for (const value of Object.values(layer)) assert.ok(value.startsWith('data:audio/mp3;base64,'));
+      const samples = { layers: [new Map(Object.keys(layer).map(note => [Number(note), { note: Number(note) }]))] };
+      for (let midi = 48; midi <= 84; midi++) assert.ok(audio.pickSample(samples, midi, 0).sample);
+    }
+  }
+  const license = await readFile(new URL('LICENSE.txt', directory), 'utf8');
+  for (const credit of ['Alexander Holm', 'Attribution 3.0', 'Musyng Kite', 'Attribution-ShareAlike 3.0']) assert.ok(license.includes(credit));
+  assert.equal(/FluidR3|Frank Wen/.test(license), false);
+});
+
+test('sample picking repitches from the nearest recording in the chosen velocity layer', () => {
+  const layer = name => new Map([48, 51, 54].map(note => [note, { name, note }]));
+  const samples = { layers: [layer('soft'), layer('hard')] };
+  const picked = audio.pickSample(samples, 50, 1);
+  assert.equal(picked.sample.name, 'hard');
+  assert.equal(picked.sample.note, 51);
+  assert.ok(Math.abs(picked.rate - 2 ** (-1 / 12)) < 1e-12);
+  assert.equal(audio.pickSample(samples, 48, 0).rate, 1);
+  assert.equal(audio.pickSample(samples, 48, 9).sample.name, 'hard', 'layer is clamped');
+  assert.throws(() => audio.pickSample(samples, 60, 0), /Missing instrument note/);
+});
+
+test('samples are measured for start time and leveled so velocity layers match', () => {
+  const rate = 8000;
+  const recording = amplitude => {
+    const data = new Float32Array(rate);
+    for (let i = 400; i < rate; i++) data[i] = amplitude * Math.sin(i * 0.3);
+    return data;
+  };
+  const soft = audio.measureSample([recording(0.05)], rate), hard = audio.measureSample([recording(0.8)], rate);
+  assert.ok(Math.abs(soft.onset - 0.048) < 0.002, `onset ${soft.onset}`);
+  assert.ok(Math.abs(soft.gain * 0.05 - hard.gain * 0.8) < 0.001);
+  assert.throws(() => audio.measureSample([new Float32Array(100)], rate), /silent/);
+});
+
+test('velocity layer rises with source loudness around the average', () => {
+  const profile = { target: 0.1, gains: Float32Array.from([10 ** (-18 / 20), 10 ** (-9 / 20), 1, 10 ** (6 / 20)]) };
+  const layerAt = frame => regions.loudnessLayer(profile, (frame + 0.5) * regions.HOP_SECONDS, 4);
+  assert.deepEqual([0, 1, 2, 3].map(layerAt), [0, 0, 2, 3]);
+  assert.equal(regions.loudnessLayer(profile, 0, 1), 0, 'single-layer instruments always use it');
+  assert.equal(regions.loudnessLayer(profile, 999, 4), 3);
+});

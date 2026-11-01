@@ -3,10 +3,10 @@ import { FormsModule } from '@angular/forms';
 import { AccompanimentSettings, GeneratedStem, StemName, StemsService, errorMessage } from './services';
 import {
   CHORD_NAMES, ChordEvent, HarmonySource, INSTRUMENTS, Instrument, PlayingStyle, STYLE_LABELS,
-  downsampleSources, encodeWav, loadInstrument, planNotes, renderAccompaniment, stylesFor,
+  InstrumentSamples, downsampleSources, encodeWav, loadInstrument, planNotes, renderAccompaniment, stylesFor,
 } from './accompaniment-audio';
 import {
-  Region, StemAnalysis, analyzeStem, detectRegions, loudnessProfile, regionHasChord, shapeRender,
+  Region, StemAnalysis, analyzeStem, detectRegions, loudnessLayer, loudnessProfile, regionHasChord, shapeRender,
 } from './accompaniment-regions';
 import { LISTENING_GAIN, RegionEditor } from './region-editor';
 
@@ -100,9 +100,10 @@ import { LISTENING_GAIN, RegionEditor } from './region-editor';
           </button>
         </div>
       }
-      <p class="hint instrument-credit">Instrument samples: FluidR3 by Frank Wen, via midi-js-soundfonts.
-        <a href="/instruments/LICENSE.txt" target="_blank" rel="noopener">CC BY 3.0 attribution</a>.
-        Generated WAVs using those samples should retain this attribution when shared.</p>
+      <p class="hint instrument-credit">Piano: Salamander Grand Piano V3 by Alexander Holm (CC BY 3.0).
+        Guitars: Musyng Kite soundfont (CC BY-SA 3.0).
+        <a href="/instruments/LICENSE.txt" target="_blank" rel="noopener">Full attribution</a>.
+        Keep this credit when sharing generated WAVs.</p>
     </section>
   `,
 })
@@ -145,7 +146,7 @@ export class AccompanimentWizard implements OnDestroy {
   private worker?: Worker;
   private rejectAnalysis?: (error: Error) => void;
   private previewSources: AudioBufferSourceNode[] = [];
-  private sampleCache?: { instrument: Instrument; samples: Map<number, AudioBuffer> };
+  private sampleCache?: { instrument: Instrument; samples: InstrumentSamples };
   private destroyed = false;
 
   @HostListener('window:beforeunload', ['$event'])
@@ -212,9 +213,11 @@ export class AccompanimentWizard implements OnDestroy {
     } finally { if (!this.destroyed) this.busy.set(false); }
   }
 
-  private shaped(offset: number, exact: boolean): (channels: Float32Array[], sampleRate: number) => void {
+  private render(samples: InstrumentSamples, duration: number, offset: number, exact: boolean): Promise<AudioBuffer> {
     const profile = loudnessProfile(this.stems, this.regions), regions = this.regions;
-    return (channels, sampleRate) => shapeRender(channels, sampleRate, offset, profile, regions, exact);
+    return renderAccompaniment(this.notes(), this.instrument, samples, duration, offset,
+      (channels, sampleRate) => shapeRender(channels, sampleRate, offset, profile, regions, exact),
+      (time, layers) => loudnessLayer(profile, time, layers));
   }
   private notes() {
     return planNotes(this.chords, this.instrument, this.style, this.tempo, this.regions, this.seed);
@@ -255,7 +258,7 @@ export class AccompanimentWizard implements OnDestroy {
     }
   }
 
-  private async engine(): Promise<{ context: AudioContext; samples: Map<number, AudioBuffer> }> {
+  private async engine(): Promise<{ context: AudioContext; samples: InstrumentSamples }> {
     const context = this.audio();
     await context.resume();
     if (this.sampleCache?.instrument !== this.instrument) {
@@ -278,7 +281,7 @@ export class AccompanimentWizard implements OnDestroy {
       const offset = Math.max(region.start, chord.start);
       const duration = Math.min(12, this.duration - offset);
       this.status.set('Rendering preview...');
-      const buffer = await renderAccompaniment(this.notes(), this.instrument, samples, duration, offset, this.shaped(offset, false));
+      const buffer = await this.render(samples, duration, offset, false);
       this.controller.signal.throwIfAborted();
       const start = context.currentTime + 0.05;
       this.stopPreview();
@@ -319,7 +322,7 @@ export class AccompanimentWizard implements OnDestroy {
       if (!this.pending) {
         const { samples } = await this.engine();
         this.status.set('Rendering full-length accompaniment locally...');
-        const buffer = await renderAccompaniment(this.notes(), this.instrument, samples, this.duration, 0, this.shaped(0, true));
+        const buffer = await this.render(samples, this.duration, 0, true);
         this.controller.signal.throwIfAborted();
         this.pending = {
           settings: { requestId: crypto.randomUUID(), instrument: this.instrument, style: this.style,

@@ -136,6 +136,15 @@ export function loudnessProfile(stems: StemAnalysis[], regions: Region[]): Loudn
   return { target, gains };
 }
 
+// Chooses a recording played softer or harder from how loud the sources are around that moment.
+const SOFTEST_LAYER_DB = -12, HARDEST_LAYER_DB = 6;
+export function loudnessLayer(profile: LoudnessProfile, time: number, layers: number): number {
+  if (layers <= 1 || !profile.gains.length) return 0;
+  const frame = Math.max(0, Math.min(profile.gains.length - 1, Math.floor(time / HOP_SECONDS)));
+  const position = (20 * Math.log10(profile.gains[frame]) - SOFTEST_LAYER_DB) / (HARDEST_LAYER_DB - SOFTEST_LAYER_DB);
+  return Math.max(0, Math.min(layers - 1, Math.floor(position * layers)));
+}
+
 function activeRms(channels: Float32Array[]): { rms: number; peak: number } {
   let energy = 0, count = 0, peak = 0;
   for (const channel of channels) {

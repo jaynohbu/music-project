@@ -330,9 +330,10 @@ function newTrack(name: string): StemTrack {
           </accompaniment-wizard>
         }
         @if (job()?.generatedStems?.length) {
-          <p class="hint instrument-credit">Generated instrument audio uses FluidR3 samples by Frank Wen.
-            <a href="/instruments/LICENSE.txt" target="_blank" rel="noopener">CC BY 3.0 attribution</a>
-            should accompany shared guitar/piano downloads.</p>
+          <p class="hint instrument-credit">Generated piano uses Salamander Grand Piano V3 by Alexander Holm (CC BY 3.0).
+            Generated guitars use the Musyng Kite soundfont (CC BY-SA 3.0).
+            <a href="/instruments/LICENSE.txt" target="_blank" rel="noopener">Full attribution</a>
+            should accompany shared downloads.</p>
         }
         <div class="stem-tracks" [attr.inert]="showWizard() ? '' : null">
           @for (track of tracks(); track track.name) {

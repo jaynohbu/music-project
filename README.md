@@ -84,11 +84,15 @@ TunesBasis API and frontend are unchanged. As requested, this app creates its
   music is sent to an external analysis or generation service. Keep the page open
   until save completes. Full-length rendering adds about 148 MB of float audio
   and a 74 MB WAV for a seven-minute song, on top of decoded original stems.
-  Piano/guitar use bundled FluidR3 samples by Frank Wen, licensed CC BY 3.0;
-  see `web/public/instruments/LICENSE.txt`. The pinned sample-selection script
-  is `npm run bundle:instruments --prefix web`; normal deployment needs no download.
-  Sampled piano re-articulates sustained chords; guitar articulation is basic,
-  not a realistic performer model or exact transcription of the original.
+  Piano uses Salamander Grand Piano V3 by Alexander Holm (CC BY 3.0), with four velocity
+  layers chosen from the source stems' loudness and each layer leveled so it changes
+  tone rather than volume. Guitars use the Musyng Kite soundfont (CC BY-SA 3.0), so a
+  shared guitar WAV should carry that credit and license; see
+  `web/public/instruments/LICENSE.txt`. The pinned sample-selection script is
+  `npm run bundle:instruments --prefix web` (needs FFmpeg); normal deployment needs no
+  download. Instrument files are cached as immutable, so give changed samples a new
+  file name. Guitar articulation is basic: no string choice or strum direction.
+  It is not a realistic performer model or exact transcription of the original.
   Saving uses an exact-size private S3 POST, validates canonical PCM16 stereo
   44.1 kHz WAV length against the parent song, then copies to a write-once output.
   Separate DynamoDB accompaniment records store instrument/style/tempo, selected
@@ -102,7 +106,7 @@ TunesBasis API and frontend are unchanged. As requested, this app creates its
   stems cannot be deleted through it. Already-issued signed links stop working.
   Signed links renew with the original stems. A generated channel load failure
   does not prevent original six-stem playback. Do not share sampled instrument
-  downloads without their CC BY attribution.
+  downloads without their attribution.
 - Logout: global Cognito sign-out and removal of the local session.
 
 ## Architecture
