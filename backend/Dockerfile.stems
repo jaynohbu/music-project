@@ -13,5 +13,5 @@ ENV STEM_DEVICE=cpu
 RUN /opt/stems/bin/python -c "from demucs.pretrained import get_model; get_model('htdemucs_6s')"
 COPY package*.json ./
 RUN npm ci --omit=dev
-COPY stem-*.mjs shared.mjs separate.py ./
+COPY stem-*.mjs shared.mjs separate.py restore_stem.py ./
 CMD ["node", "stem-task.mjs"]

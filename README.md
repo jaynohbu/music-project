@@ -20,8 +20,8 @@ TunesBasis API and frontend are unchanged. As requested, this app creates its
   nine vertical faders: Volume, Pre-gain, Compression, Distortion, Bass, Mid,
   Treble, Pan and Reverb. All nine are meaningful on all six stems. Not-ready
   audio and bypassed effects stay visible but disabled, with a reason.
-  Effects panels start collapsed; waveforms and transport remain visible inside
-  each mixer. Play/Pause/Stop, Loop, seek and Master Volume are available in every
+  The first stem's effects panel opens on load and the others start collapsed;
+  waveforms and transport remain visible inside each mixer. Play/Pause/Stop, Loop, seek and Master Volume are available in every
   mixer; Master uses a horizontal metallic fader beside the transport buttons.
   Loop uses the same illuminated toggle styling as Mute, with keyboard activation
   and a shared pressed state across all mixers.
@@ -57,56 +57,16 @@ TunesBasis API and frontend are unchanged. As requested, this app creates its
   Web Audio buffer looping. Stop returns to the start arrow. Markers also support
   arrow keys (Shift for larger steps), Home and End. Selections are local to
   the open mixer, not saved to the job.
-- Generate accompaniment: four browser-side wizard steps select harmonic sources
-  (vocals are optional and off by default) and tempo, estimate/review major/minor
-  chords (including silence), choose a warm synth, acoustic guitar, clean electric
-  guitar or piano with instrument-appropriate playing styles, then select regions,
-  preview with source stems and save a full-length WAV.
-  The last step shows a waveform for each selected stem on one shared scale and
-  automatically selects regions where those stems contain audible music, ignoring
-  faint separation bleed. Regions can be resized, moved, added or removed anywhere
-  in the song by dragging, by keyboard or by typing exact times; overlaps merge.
-  Play selection plays the selected stems inside the regions, skipping the gaps,
-  before anything is generated. Accompaniment is generated only inside the regions
-  and every other sample is exactly zero, so the saved stem stays aligned.
-  A region with only "N" chords stays silent and is flagged in the editor.
-  Every note draws its own random onset and length change of 0.01% to 0.05% of its
-  length, in either direction, from a saved seed so the preview matches the saved render.
-  The accompaniment's level is matched to the average loudness of the selected
-  stems while they play inside the regions, then rises and falls with them, from
-  -18 dB to +6 dB around that average with a peak ceiling. Regions over silent source
-  audio stay quietly audible. A short preview keeps its place in the song's dynamics
-  rather than being matched on its own, so its level is close to, not identical to, the save.
-  Chord detection is approximate and uses a bar grid starting at time zero;
-  set the tempo and correct estimated chords before rendering. Complex harmony,
-  tempo changes, separation artifacts and pickup beats can need manual corrections.
-  Generation is local, in a Web Worker plus OfflineAudioContext; no uploaded
-  music is sent to an external analysis or generation service. Keep the page open
-  until save completes. Full-length rendering adds about 148 MB of float audio
-  and a 74 MB WAV for a seven-minute song, on top of decoded original stems.
-  Piano uses Salamander Grand Piano V3 by Alexander Holm (CC BY 3.0), with four velocity
-  layers chosen from the source stems' loudness and each layer leveled so it changes
-  tone rather than volume. Guitars use the Musyng Kite soundfont (CC BY-SA 3.0), so a
-  shared guitar WAV should carry that credit and license; see
-  `web/public/instruments/LICENSE.txt`. The pinned sample-selection script is
-  `npm run bundle:instruments --prefix web` (needs FFmpeg); normal deployment needs no
-  download. Instrument files are cached as immutable, so give changed samples a new
-  file name. Guitar articulation is basic: no string choice or strum direction.
-  It is not a realistic performer model or exact transcription of the original.
-  Saving uses an exact-size private S3 POST, validates canonical PCM16 stereo
-  44.1 kHz WAV length against the parent song, then copies to a write-once output.
-  Separate DynamoDB accompaniment records store instrument/style/tempo, selected
-  sources, corrected chord timings, regions and the random seed. Retries use the same request ID and keep
-  rendered audio. If a save expires, use Back to generate a fresh save.
-  Completed audio has no expiry and reloads automatically as additional channels
-  with the same transport, markers, master, mute/solo/effects/reset and download.
-  Delete on a generated channel, after confirmation, permanently removes that stem
-  from the mixer and private storage. The bucket is not versioned, so this cannot be
-  undone. The API's S3 delete permission excludes `users/*/stems/*`, so original
-  stems cannot be deleted through it. Already-issued signed links stop working.
-  Signed links renew with the original stems. A generated channel load failure
-  does not prevent original six-stem playback. Do not share sampled instrument
-  downloads without their attribution.
+- Clean up a stem: on the mixer, choose a stem to clean, the other stems to compare
+  against, and a strength. `backend/restore_stem.py` runs on the same on-demand Fargate
+  task as separation, turning the stem down where its own spectrum looks like noise
+  and where the reference stems are much louder at the same time and frequency.
+  This is deterministic DSP: it only reduces sound, so it can lessen bleed but cannot add
+  missing detail, and the effect is modest. The new WAV is checked to match the original's
+  size, so it stays aligned, and is saved under `users/<id>/restored/`. It appears as an
+  extra channel, and Delete removes it permanently from the mixer and storage (the bucket
+  is unversioned). The API's S3 delete permission covers only `users/*/restored/*`,
+  and the task role can only read original stems for this, never replace them from this code.
 - Logout: global Cognito sign-out and removal of the local session.
 
 ## Architecture
@@ -228,19 +188,13 @@ For frontend-only updates to an existing stack:
 bash publish-web.sh youtube-audio-library
 ```
 
+Stem cleanup changes the Fargate image. To release that, build it and pass it through:
+`STEM_IMAGE="$(bash build-stem-image.sh)" bash publish-api.sh youtube-audio-library`.
+
 For API/infrastructure-only changes without rebuilding either audio worker image:
 `bash publish-api.sh youtube-audio-library` uses AWS CloudFormation packaging for the current backend and
 preserves the deployed YouTube and Demucs image URIs. Review template changes
 before running it; it deploys the stack without an interactive changeset prompt.
-Accompaniment changes require this deployment before publishing the frontend.
-
-Focused accompaniment tests: `npm run test:accompaniment --prefix web` and
-`node --test backend/test/accompaniment.test.mjs`.
-The explicit live runner `SMOKE_API_URL=https://d324d1xuqjbi6.cloudfront.net/api node
-backend/test/live-accompaniment-smoke.mjs` creates and deletes only a temporary
-account, synthetic parent stems, generated audio and records. It verifies S3/IAM,
-write-once persistence and authenticated signed reload; it is not run by unit tests.
-
 The final output gives the HTTPS website URL and Cognito pool ID. The Register
 page creates the account using the backend, marks its email verified without
 checking ownership, suppresses automatic email, disables it, and sets the secret

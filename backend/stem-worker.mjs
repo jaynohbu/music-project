@@ -155,7 +155,9 @@ export async function finalize(event) {
       ExpressionAttributeNames: { '#status': 'status', '#error': 'error' },
       ExpressionAttributeValues: {
         ':queued': 'queued', ':processing': 'processing', ':failed': 'failed',
-        ':error': 'The separation task stopped before completion. Please try again.',
+        ':error': result.Item.type === 'restoration'
+          ? 'Stem cleanup stopped before completion. Please try again.'
+          : 'The separation task stopped before completion. Please try again.',
         ':at': retention.failedAt, ':expiry': retention.expiresAt,
         ':code': 'STEM_TASK_STOPPED', ':stage': 'worker',
       },

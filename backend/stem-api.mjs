@@ -6,14 +6,14 @@ import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { visibleJob } from './shared.mjs';
+import { createRestorationRoutes, listRestorations } from './restoration-api.mjs';
 import { STEM_NAMES, stemInput, UPLOAD_WINDOW_MS, STEM_WINDOW_MS } from './stem-shared.mjs';
-import { createAccompanimentRoutes, listGeneratedStems } from './accompaniment-api.mjs';
 
 const db = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const s3 = new S3Client({});
 const sfn = new SFNClient({});
 
-export async function signedStemJob(job, signer = getSignedUrl, storage = s3, database = db) {
+export async function signedStemJob(job, signer = getSignedUrl, storage = s3) {
   const visible = visibleJob(job);
   if (visible.status !== 'completed') return visible;
   if (!STEM_NAMES.every(name => typeof visible.stems?.[name]?.key === 'string')) {
@@ -28,15 +28,14 @@ export async function signedStemJob(job, signer = getSignedUrl, storage = s3, da
       }), { expiresIn: 3600 }),
     }];
   })));
-  const generatedStems = await listGeneratedStems(visible, { database, signer, storage });
-  return { ...visible, stems, generatedStems };
+  return { ...visible, stems };
 }
 
 export function createStemHandler({
   database = db, storage = s3, orchestrator = sfn,
   uploadSigner = createPresignedPost, signer = getSignedUrl,
 } = {}) {
-  const accompaniments = createAccompanimentRoutes({ database, storage, uploadSigner, signer });
+  const restorations = createRestorationRoutes({ database, storage, orchestrator, signer });
   return async event => {
     const reply = (statusCode, body) => ({
       statusCode, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
@@ -49,17 +48,12 @@ export function createStemHandler({
     const body = () => JSON.parse(event.isBase64Encoded
       ? Buffer.from(event.body ?? '', 'base64').toString() : event.body ?? '{}');
     try {
-      const generated = /^\/api\/stems\/jobs\/([0-9a-f-]{36})\/accompaniments(?:\/([0-9a-f-]{36})(\/complete)?)?$/
-        .exec(route ?? '');
-      if (generated) {
-        const [, parentJobId, id, completing] = generated;
-        if (id && !completing && method === 'DELETE') {
-          return await accompaniments.remove({ userId, parentJobId, id, reply });
-        }
-        if (method !== 'POST' || (id && !completing)) return reply(404, { message: 'Endpoint not found.' });
-        return await (id
-          ? accompaniments.complete({ userId, parentJobId, id, reply })
-          : accompaniments.create({ userId, parentJobId, body, reply }));
+      const restoring = /^\/api\/stems\/jobs\/([0-9a-f-]{36})\/restorations(?:\/([0-9a-f-]{36}))?$/.exec(route ?? '');
+      if (restoring) {
+        const [, parentJobId, id] = restoring;
+        if (id && method === 'DELETE') return await restorations.remove({ userId, parentJobId, id, reply });
+        if (!id && method === 'POST') return await restorations.create({ userId, parentJobId, body, reply });
+        return reply(404, { message: 'Endpoint not found.' });
       }
       if (route === '/api/stems/uploads' && method === 'POST') {
         let input;
@@ -94,7 +88,11 @@ export function createStemHandler({
       }));
       const job = result.Item;
       if (!job || job.type !== 'stems') return reply(404, { message: 'Separation job not found.' });
-      if (!match[2]) return reply(200, { job: await signedStemJob(job, signer, storage, database) });
+      if (!match[2]) {
+        const signed = await signedStemJob(job, signer, storage);
+        return reply(200, { job: signed.status === 'completed'
+          ? { ...signed, restorations: await listRestorations(job, { database, signer, storage }) } : signed });
+      }
       if (visibleJob(job).status === 'failed') return reply(409, { message: 'This job expired or failed. Upload again.' });
       if (job.status === 'completed' || job.status === 'processing') return reply(200, { job });
       if (job.status === 'uploading') {

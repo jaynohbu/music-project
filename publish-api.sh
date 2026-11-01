@@ -8,8 +8,9 @@ ARTIFACT_BUCKET="$(aws cloudformation describe-stacks --stack-name "$STACK-artif
 WORKER="$(aws cloudformation describe-stack-resource --stack-name "$STACK" --logical-resource-id Worker \
   --region "$REGION" --query StackResourceDetail.PhysicalResourceId --output text)"
 WORKER_IMAGE="$(aws lambda get-function --function-name "$WORKER" --region "$REGION" --query Code.ImageUri --output text)"
-STEM_IMAGE="$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
-  --query "Stacks[0].Parameters[?ParameterKey=='StemImageUri'].ParameterValue | [0]" --output text)"
+# Pass STEM_IMAGE (from build-stem-image.sh) to release worker changes; otherwise the deployed image stays.
+STEM_IMAGE="${STEM_IMAGE:-$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
+  --query "Stacks[0].Parameters[?ParameterKey=='StemImageUri'].ParameterValue | [0]" --output text)}"
 export WORKER_IMAGE
 node --input-type=module <<'JS'
 import { readFile, mkdir, writeFile } from 'node:fs/promises';

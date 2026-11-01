@@ -29,12 +29,7 @@ node --input-type=module -e '
 npm run build --prefix web
 aws s3 sync web/dist/youtube-library/browser/ "s3://$BUCKET/" --region "$REGION" \
   --exclude index.html --exclude config.json --exclude config.example.json \
-  --exclude harmony-worker.mjs --exclude harmony-analysis.mjs \
   --cache-control 'public,max-age=31536000,immutable'
-for module in harmony-worker.mjs harmony-analysis.mjs; do
-  aws s3 cp "web/dist/youtube-library/browser/$module" "s3://$BUCKET/$module" \
-    --region "$REGION" --content-type text/javascript --cache-control no-cache
-done
 aws s3 cp web/dist/youtube-library/browser/index.html "s3://$BUCKET/index.html" \
   --region "$REGION" --content-type text/html --cache-control no-cache
 aws s3 cp web/dist/youtube-library/browser/config.json "s3://$BUCKET/config.json" \

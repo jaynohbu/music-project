@@ -3,3 +3,4 @@ torch==2.2.2
 torchaudio==2.2.2
 demucs==4.0.1
 soundfile==0.13.1
+scipy==1.13.1

@@ -2,9 +2,7 @@ import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
-import { GeneratedStem, Job, STEM_NAMES, StemsService, errorMessage } from './services';
-import { AccompanimentWizard } from './accompaniment-wizard';
-import { HarmonySource } from './accompaniment-audio';
+import { Job, Restoration, STEM_NAMES, StemName, StemsService, errorMessage } from './services';
 import {
   EffectControl, EffectSettings, FaderControl, FADER_CONTROLS,
   StemEffects, applyStemEffects, createStemEffects, defaultEffects, disposeStemEffects,
@@ -268,7 +266,7 @@ interface StemTrack extends EffectSettings {
   name: string;
   label: string;
   downloadUrl?: string;
-  generated?: boolean;
+  cleaned?: boolean;
   status: 'waiting' | 'loading' | 'ready' | 'error';
   error?: string;
   muted: boolean;
@@ -291,7 +289,7 @@ function newTrack(name: string): StemTrack {
 
 @Component({
   standalone: true,
-  imports: [RouterLink, FormsModule, AccompanimentWizard],
+  imports: [RouterLink, FormsModule],
   template: `
     <section class="card">
       <div class="section-heading">
@@ -318,30 +316,52 @@ function newTrack(name: string): StemTrack {
         </div>
         <p class="hint">Drag the S/E arrows to set the shared interval; drag a waveform or red playhead to scrub.
           Transport, Loop and Master in any mixer control all stems together.</p>
-        <div class="generation-actions">
-          <button type="button" (click)="openWizard()" [disabled]="!canPlay() || showWizard()">
-            Generate accompaniment
-          </button>
-          <span class="hint">Add a synth, guitar or piano stem. Saved sounds return next time.</span>
-        </div>
-        @if (showWizard()) {
-          <accompaniment-wizard [jobId]="job()!.jobId" [duration]="job()!.duration || duration()"
-            [sources]="harmonySources()" (closed)="showWizard.set(false)" (saved)="onGenerated($event)">
-          </accompaniment-wizard>
-        }
-        @if (job()?.generatedStems?.length) {
-          <p class="hint instrument-credit">Generated piano uses Salamander Grand Piano V3 by Alexander Holm (CC BY 3.0).
-            Generated guitars use the Musyng Kite soundfont (CC BY-SA 3.0).
-            <a href="/instruments/LICENSE.txt" target="_blank" rel="noopener">Full attribution</a>
-            should accompany shared downloads.</p>
-        }
-        <div class="stem-tracks" [attr.inert]="showWizard() ? '' : null">
+        <section class="restore-panel" aria-label="Clean up a stem">
+          <h2>Clean up a stem</h2>
+          <p class="hint">Uses the other stems to find sound that bled into this one and turns it down.
+            The result is a new channel, aligned with the song. It reduces bleed but cannot add detail
+            the stem is missing. Original stems are never changed. It runs in AWS and can take a few minutes.</p>
+          <div class="restore-controls">
+            <label>Stem to clean
+              <select [value]="restoreTarget()" (change)="chooseRestoreTarget($event)">
+                @for (name of stemNames; track name) { <option [value]="name" [selected]="name === restoreTarget()">{{ name }}</option> }
+              </select>
+            </label>
+            <fieldset>
+              <legend>Compare against</legend>
+              @for (name of stemNames; track name) {
+                @if (name !== restoreTarget()) {
+                  <label class="restore-choice"><input type="checkbox" [checked]="restoreReferences().includes(name)"
+                    (change)="toggleRestoreReference(name)"> {{ name }}</label>
+                }
+              }
+            </fieldset>
+            <label>Strength {{ restoreStrength() }}%
+              <input type="range" min="0" max="100" step="5" [value]="restoreStrength()" (input)="setRestoreStrength($event)">
+            </label>
+            <button type="button" (click)="startRestoration()"
+              [disabled]="!canPlay() || restoreStarting() || !restoreReferences().length">
+              {{ restoreStarting() ? 'Starting...' : 'Create cleaned stem' }}
+            </button>
+          </div>
+          @for (item of job()?.restorations ?? []; track item.id) {
+            @if (item.status !== 'completed') {
+              <p class="restore-status" [class.error]="item.status === 'failed'" role="status">
+                {{ item.title }}: {{ item.status === 'failed' ? item.error : 'working...' }}
+                @if (item.status === 'failed') {
+                  <button type="button" class="secondary" (click)="dismissRestoration(item)">Dismiss</button>
+                }
+              </p>
+            }
+          }
+        </section>
+        <div class="stem-tracks">
           @for (track of tracks(); track track.name) {
             <article class="stem-track">
               <section class="mixing-console" [attr.aria-label]="track.label + ' mixer'">
               <div class="console-stem-view">
               <div class="stem-heading">
-                <h2>{{ track.label }} @if (track.generated) { <span class="badge">Generated</span> }</h2>
+                <h2>{{ track.label }} @if (track.cleaned) { <span class="badge">Cleaned</span> }</h2>
                 @if (track.status === 'loading') { <span class="hint">Loading audio...</span> }
                 @if (track.status === 'ready') {
                   <a [href]="track.downloadUrl" [download]="job()!.title + '-' + track.label">
@@ -349,8 +369,8 @@ function newTrack(name: string): StemTrack {
                   </a>
                 }
                 @if (track.status === 'error') { <span class="error">{{ track.error }}</span> }
-                @if (track.generated) {
-                  <button type="button" class="secondary danger" (click)="deleteGenerated(track)"
+                @if (track.cleaned) {
+                  <button type="button" class="secondary danger" (click)="deleteCleaned(track)"
                     [disabled]="deletingStem() !== null">
                     {{ deletingStem() === track.name ? 'Deleting...' : 'Delete' }}
                   </button>
@@ -578,61 +598,97 @@ export class MixerPage implements OnInit, OnDestroy {
   readonly sectionStart = signal(0);
   readonly sectionEnd = signal<number | null>(null);
   readonly loopSection = signal(false);
-  readonly expandedStem = signal<string | null>(null);
-  readonly showWizard = signal(false);
+  readonly expandedStem = signal<string | null>(STEM_NAMES[0]);
+
+  readonly stemNames = STEM_NAMES;
+  readonly restoreTarget = signal<StemName>('guitar');
+  readonly restoreReferences = signal<StemName[]>(STEM_NAMES.filter(name => name !== 'guitar'));
+  readonly restoreStrength = signal(45);
+  readonly restoreStarting = signal(false);
   readonly deletingStem = signal<string | null>(null);
 
   toggleMixer(name: string): void {
     this.expandedStem.update(current => current === name ? null : name);
   }
 
-  openWizard(): void {
-    this.pause();
-    this.showWizard.set(true);
+  chooseRestoreTarget(event: Event): void {
+    if (!(event.target instanceof HTMLSelectElement)) return;
+    const target = event.target.value as StemName;
+    this.restoreTarget.set(target);
+    this.restoreReferences.set(STEM_NAMES.filter(name => name !== target));
   }
 
-  harmonySources(): HarmonySource[] {
-    return STEM_NAMES.flatMap(name => {
-      const runtime = this.runtimes.get(name);
-      return runtime ? [{ name, buffer: runtime.buffer }] : [];
-    });
+  toggleRestoreReference(name: StemName): void {
+    this.restoreReferences.update(current =>
+      current.includes(name) ? current.filter(item => item !== name) : [...current, name]);
   }
 
-  async onGenerated(stem: GeneratedStem): Promise<void> {
-    this.showWizard.set(false);
-    this.pause();
-    const job = this.job();
-    if (!job) return;
-    const updated = { ...job, generatedStems: [
-      ...(job.generatedStems ?? []).filter(item => item.id !== stem.id), stem,
-    ] };
-    this.job.set(updated);
-    await this.loadStems(updated, this.generation);
-    this.expandedStem.set(stem.id);
+  setRestoreStrength(event: Event): void {
+    if (event.target instanceof HTMLInputElement) this.restoreStrength.set(Number(event.target.value));
   }
 
-  async deleteGenerated(track: StemTrack): Promise<void> {
-    if (!track.generated || this.deletingStem() !== null) return;
-    if (!window.confirm(`Permanently delete "${track.label}" from the mixer and private storage? This cannot be undone. Original stems are not affected.`)) return;
+  async startRestoration(): Promise<void> {
+    if (this.restoreStarting() || !this.restoreReferences().length) return;
     const generation = this.generation;
-    this.deletingStem.set(track.name);
+    this.restoreStarting.set(true);
     this.error.set('');
     try {
-      await this.stems.deleteAccompaniment(this.jobId, track.name);
+      await this.stems.createRestoration(
+        this.jobId, this.restoreTarget(), this.restoreReferences(), this.restoreStrength() / 100,
+      );
       if (this.destroyed || generation !== this.generation) return;
-      this.removeGeneratedTrack(track.name);
+      await this.refreshJob(generation);
+      this.watchRestorations(generation);
     } catch (error) {
       if (!this.destroyed && generation === this.generation) {
-        this.error.set(`Could not delete the generated stem: ${errorMessage(error)} Try again.`);
+        this.error.set(`Could not start stem cleanup: ${errorMessage(error)}`);
+      }
+    } finally {
+      if (generation === this.generation) this.restoreStarting.set(false);
+    }
+  }
+
+  private restoring(job: Job | null): boolean {
+    return !!job?.restorations?.some(item => item.status === 'queued' || item.status === 'processing');
+  }
+
+  private watchRestorations(generation: number): void {
+    clearInterval(this.pollTimer);
+    if (!this.restoring(this.job())) return;
+    this.pollTimer = setInterval(() => { void this.refreshJob(generation); }, STEM_POLL_MS);
+  }
+
+  async dismissRestoration(item: Restoration): Promise<void> {
+    await this.removeRestoration(item.id);
+  }
+
+  async deleteCleaned(track: StemTrack): Promise<void> {
+    if (!track.cleaned || this.deletingStem() !== null) return;
+    if (!window.confirm(`Permanently delete "${track.label}" from the mixer and private storage? This cannot be undone. Original stems are not affected.`)) return;
+    await this.removeRestoration(track.name);
+  }
+
+  private async removeRestoration(id: string): Promise<void> {
+    const generation = this.generation;
+    this.deletingStem.set(id);
+    this.error.set('');
+    try {
+      await this.stems.deleteRestoration(this.jobId, id);
+      if (this.destroyed || generation !== this.generation) return;
+      this.removeCleanedTrack(id);
+    } catch (error) {
+      if (!this.destroyed && generation === this.generation) {
+        this.error.set(`Could not delete the cleaned stem: ${errorMessage(error)} Try again.`);
       }
     } finally {
       if (generation === this.generation) this.deletingStem.set(null);
     }
   }
 
-  private removeGeneratedTrack(name: string): void {
-    const resume = this.playing();
-    this.pause();
+  private removeCleanedTrack(name: string): void {
+    const hadTrack = this.tracks().some(track => track.name === name);
+    const resume = hadTrack && this.playing();
+    if (hadTrack) this.pause();
     this.deletedStems.add(name);
     const runtime = this.runtimes.get(name);
     if (runtime) {
@@ -651,8 +707,8 @@ export class MixerPage implements OnInit, OnDestroy {
 
   // A response requested before a delete finished must not bring the stem back.
   private withoutDeleted(job: Job): Job {
-    return job.generatedStems
-      ? { ...job, generatedStems: job.generatedStems.filter(stem => !this.deletedStems.has(stem.id)) }
+    return job.restorations
+      ? { ...job, restorations: job.restorations.filter(item => !this.deletedStems.has(item.id)) }
       : job;
   }
 
@@ -839,8 +895,7 @@ export class MixerPage implements OnInit, OnDestroy {
   }
 
   private resetMixer(): void {
-    this.showWizard.set(false);
-    this.expandedStem.set(null);
+    this.expandedStem.set(STEM_NAMES[0]);
     this.stopScrub();
     ++this.playbackToken;
     this.starting = false;
@@ -873,7 +928,7 @@ export class MixerPage implements OnInit, OnDestroy {
       this.job.set(job);
       this.error.set('');
       if (job.status === 'completed') {
-        clearInterval(this.pollTimer);
+        if (!this.restoring(job)) clearInterval(this.pollTimer);
         this.scheduleLinkRenewal(generation);
         if (!this.loadingStems) await this.loadStems(job, generation);
       } else if (job.status === 'failed') {
@@ -928,19 +983,16 @@ export class MixerPage implements OnInit, OnDestroy {
     const controller = new AbortController();
     this.mediaController?.abort();
     this.mediaController = controller;
-    const files = [
-      ...STEM_NAMES.map(name => ({ name, label: name, file: job.stems?.[name], generated: false })),
-      ...(this.withoutDeleted(job).generatedStems ?? []).map(stem => ({
-        name: stem.id, label: stem.title, file: stem, generated: true,
-      })),
+    const files: { name: string; label: string; file?: { playUrl?: string; downloadUrl?: string }; cleaned: boolean }[] = [
+      ...STEM_NAMES.map(name => ({ name, label: name, file: job.stems?.[name], cleaned: false })),
+      ...(this.withoutDeleted(job).restorations ?? []).filter(item => item.status === 'completed')
+        .map(item => ({ name: item.id, label: item.title, file: item, cleaned: true })),
     ];
     for (const item of files) {
       if (!this.tracks().some(track => track.name === item.name)) {
         this.tracks.update(tracks => [...tracks, newTrack(item.name)]);
       }
-      this.updateTrack(item.name, {
-        label: item.label, downloadUrl: item.file?.downloadUrl, generated: item.generated,
-      });
+      this.updateTrack(item.name, { label: item.label, downloadUrl: item.file?.downloadUrl, cleaned: item.cleaned });
     }
     const failedNames = STEM_NAMES.filter(name =>
       !this.runtimes.has(name) && !job.stems?.[name]?.playUrl,
@@ -984,7 +1036,7 @@ export class MixerPage implements OnInit, OnDestroy {
     // Handled below in order; this only covers results left behind by an early return.
     for (const pending of decoding) pending.catch(() => undefined);
 
-    // Stems download together but become ready in order, so originals stay the alignment reference.
+    // Stems download together but become ready in order, so the alignment reference stays stable.
     for (const [index, { name }] of missing.entries()) {
       try {
         const buffer = await decoding[index];
@@ -1017,6 +1069,11 @@ export class MixerPage implements OnInit, OnDestroy {
     }
     if (this.destroyed || generation !== this.generation) return;
     this.loadingStems = false;
+    // A channel that arrives during playback needs a restart to join in sync.
+    if (missing.length && this.playing()) {
+      this.pause();
+      void this.play();
+    }
     if (!this.canPlay()) {
       this.error.set('One or more stems could not be loaded or are not time-aligned. Failed stems are identified above.');
     }

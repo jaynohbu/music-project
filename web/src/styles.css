@@ -102,41 +102,17 @@ input.console-fader:disabled { opacity: .45; cursor: not-allowed; }
 .control-inactive .channel-name { color: #65748a; }
 .control-note { display: block; min-height: 16px; font-size: .59rem; color: #526177; }
 .console-note { margin: 0; padding: 7px 14px; border-top: 1px solid #a9b5c580; font-size: .68rem; color: #526177; }
-.generation-actions, .wizard-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 16px 0; }
-.generation-wizard { padding: 20px; margin: 16px 0; border: 1px solid #aebcd0; border-radius: 12px; background: #f3f6fd; }
-.generation-wizard fieldset { margin: 18px 0; border: 1px solid #dce3ed; border-radius: 8px; padding: 14px; }
-.generation-wizard legend { font-weight: 650; }
-.generation-wizard select { font: inherit; border: 1px solid #aebcd0; border-radius: 6px; background: white; padding: 8px; max-width: 100%; }
-.generation-wizard fieldset > label:not(.wizard-choice) { display: block; margin: 12px 0 6px; }
-.wizard-choice { display: inline-flex; gap: 8px; align-items: center; margin: 8px 14px 8px 0; }
-.wizard-choice input { width: auto; }
-.chord-review { max-height: 320px; overflow-y: auto; }
-.chord-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid #dce3ed; font-size: .8rem; }
-.chord-row small { color: #526177; font-weight: 400; }
-.danger { background: #fff0f0; color: #a52c35; }
-.region-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 12px 0; }
-.region-toolbar .wizard-choice { margin: 0; }
-.region-scroll { overflow-x: auto; border: 1px solid #dce3ed; border-radius: 8px; background: white; }
-.region-timeline { position: relative; min-width: 100%; touch-action: pan-y; cursor: crosshair; user-select: none; }
-.region-lane { position: relative; height: 64px; border-bottom: 1px solid #dce3ed; }
-.region-lane:last-of-type { border-bottom: 0; }
-.region-lane svg { display: block; width: 100%; height: 100%; fill: #3459c9; }
-.region-lane-name { position: sticky; left: 6px; display: block; width: fit-content; height: 0; font-size: .75rem; line-height: 1.4; color: #526177; }
-.region-block { position: absolute; top: 0; bottom: 0; min-width: 2px; background: rgba(52, 89, 201, .16); border-inline: 1px solid #3459c9; cursor: grab; touch-action: none; }
-.region-block.silent { background: rgba(165, 44, 53, .12); border-color: #a52c35; }
-.region-edge { position: absolute; top: 0; bottom: 0; width: 12px; min-width: 0; padding: 0; border-radius: 0; background: rgba(52, 89, 201, .35); cursor: ew-resize; touch-action: none; }
-.region-edge.start { left: -6px; }
-.region-edge.end { right: -6px; }
-.region-remove { position: absolute; top: 2px; left: 50%; transform: translateX(-50%); min-width: 0; width: 22px; height: 22px; padding: 0; line-height: 1; border-radius: 50%; background: white; color: #a52c35; }
-.region-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #c62828; pointer-events: none; }
-.region-list { max-height: 260px; overflow-y: auto; margin: 12px 0; }
-.region-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #dce3ed; font-size: .85rem; }
-.region-row label { display: inline-flex; align-items: center; gap: 6px; }
-.region-row input { width: 92px; }
-.region-row small { color: #526177; }
-.region-row small.error { color: #a52c35; }
-.instrument-credit { margin-top: 18px; font-size: .7rem; }
 progress { width: 100%; height: 12px; accent-color: #3459c9; }
+.danger { background: #fff0f0; color: #a52c35; }
+.restore-panel { padding: 16px; margin: 16px 0; border: 1px solid #aebcd0; border-radius: 12px; background: #f3f6fd; }
+.restore-panel h2 { margin: 0 0 6px; font-size: 1rem; }
+.restore-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px 20px; margin-top: 12px; }
+.restore-controls > label { display: flex; flex-direction: column; gap: 6px; font-size: .85rem; }
+.restore-controls select { font: inherit; border: 1px solid #aebcd0; border-radius: 6px; background: white; padding: 8px; }
+.restore-controls fieldset { margin: 0; border: 1px solid #dce3ed; border-radius: 8px; padding: 6px 12px 10px; font-size: .85rem; }
+.restore-choice { display: inline-flex; gap: 6px; align-items: center; margin: 4px 12px 0 0; }
+.restore-choice input { width: auto; }
+.restore-status { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 12px 0 0; font-size: .85rem; }
 .badge { font-size: .75rem; padding: 6px 10px; border-radius: 20px; background: #edf2fe; color: #3459c9; }
 .badge.failed { background: #fff0f0; color: #a52c35; }
 audio { width: 100%; display: block; margin: 18px 0; }

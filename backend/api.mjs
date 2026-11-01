@@ -90,7 +90,7 @@ export function createHandler({ database = db, invoker = lambda, signer = getSig
       const visible = (result.Items ?? []).map(item => visibleJob(item, now))
         .filter(job => !failedHistoryExpired(job, now));
       const jobs = await Promise.all(visible.map(async job => {
-        if (job.type === 'stems') return signedStemJob(job, signer, s3, database);
+        if (job.type === 'stems') return signedStemJob(job, signer, s3);
         if (job.status !== 'completed') return job;
         const params = { Bucket: process.env.BUCKET_NAME, Key: job.key };
         return {

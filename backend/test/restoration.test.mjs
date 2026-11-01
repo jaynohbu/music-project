@@ -1,0 +1,376 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { Readable } from 'node:stream';
+import { fileURLToPath } from 'node:url';
+import { createStemHandler } from '../stem-api.mjs';
+import { createHandler } from '../api.mjs';
+import { createLocalServer } from '../local-server.mjs';
+import { createRestoreWorker, runStemTask, wavFormat } from '../stem-restore.mjs';
+import { finalize } from '../stem-worker.mjs';
+import { STEM_NAMES } from '../stem-shared.mjs';
+import { restorationInput } from '../restoration-api.mjs';
+
+process.env.TABLE_NAME = 'jobs';
+process.env.BUCKET_NAME = 'bucket';
+process.env.STEM_STATE_MACHINE = 'machine';
+const parentId = '11111111-1111-4111-8111-111111111111';
+const failure = (name, status) => Object.assign(new Error(name), { name, $metadata: { httpStatusCode: status } });
+const clone = value => value && structuredClone(value);
+
+function fakeDatabase() {
+  const items = new Map();
+  const id = key => `${key.userId}|${key.jobId}`;
+  return {
+    items,
+    put: item => items.set(id(item), clone(item)),
+    get: (userId, jobId) => clone(items.get(id({ userId, jobId }))),
+    async send(command) {
+      const input = command.input, kind = command.constructor.name;
+      if (kind === 'GetCommand') return { Item: clone(items.get(id(input.Key))) };
+      if (kind === 'PutCommand') { items.set(id(input.Item), clone(input.Item)); return {}; }
+      if (kind === 'QueryCommand') {
+        const values = input.ExpressionAttributeValues;
+        return { Items: [...items.values()].filter(item => item.userId === values[':userId'] &&
+          item.parentJobId === values[':parent'] && item.type === values[':type']).map(clone) };
+      }
+      if (kind === 'DeleteCommand') {
+        const current = items.get(id(input.Key)), values = input.ExpressionAttributeValues;
+        if (!current || current.type !== values[':type'] || current.parentJobId !== values[':parent']) {
+          throw failure('ConditionalCheckFailedException', 400);
+        }
+        items.delete(id(input.Key));
+        return {};
+      }
+      if (kind === 'UpdateCommand') {
+        const current = items.get(id(input.Key));
+        const names = input.ExpressionAttributeNames ?? {}, values = input.ExpressionAttributeValues;
+        const expected = values[':expected'] ?? values[':queued'];
+        if (input.ConditionExpression?.includes('IN (')) {
+          if (!current || !['queued', 'processing'].includes(current.status)) throw failure('ConditionalCheckFailedException', 400);
+        } else if (expected !== undefined && current?.status !== expected) {
+          throw failure('ConditionalCheckFailedException', 400);
+        }
+        const [setPart, removePart] = input.UpdateExpression.replace(/^SET /, '').split(' REMOVE ');
+        for (const pair of setPart.split(', ')) {
+          const [name, value] = pair.split(' = ');
+          current[names[name] ?? name] = values[value];
+        }
+        for (const name of removePart?.split(', ') ?? []) delete current[names[name] ?? name];
+        return {};
+      }
+      throw new Error(`Unexpected ${kind}`);
+    },
+  };
+}
+
+function fakeStorage() {
+  const objects = new Map(), calls = [];
+  return {
+    objects, calls,
+    async send(command) {
+      const input = command.input, kind = command.constructor.name;
+      calls.push({ kind, key: input.Key });
+      if (kind === 'GetObjectCommand') {
+        if (!objects.has(input.Key)) throw failure('NoSuchKey', 404);
+        return { Body: Readable.from([objects.get(input.Key)]) };
+      }
+      if (kind === 'PutObjectCommand') {
+        const chunks = [];
+        for await (const chunk of input.Body) chunks.push(chunk);
+        objects.set(input.Key, Buffer.concat(chunks));
+        return {};
+      }
+      if (kind === 'DeleteObjectCommand') { objects.delete(input.Key); return {}; }
+      throw new Error(`Unexpected ${kind}`);
+    },
+  };
+}
+
+const stemKey = (name, user = 'owner') => `users/${user}/stems/${parentId}/${name}.wav`;
+const parent = (overrides = {}) => ({
+  userId: 'owner', jobId: parentId, type: 'stems', status: 'completed', title: 'Song',
+  createdAt: new Date().toISOString(), duration: 2,
+  stems: Object.fromEntries(STEM_NAMES.map(name => [name, { key: stemKey(name) }])), ...overrides,
+});
+
+function setup() {
+  const database = fakeDatabase(), storage = fakeStorage(), started = [];
+  database.put(parent());
+  const orchestrator = { async send(command) {
+    if (orchestrator.fail) throw new Error('down');
+    started.push(command.input);
+    return {};
+  } };
+  const handler = createStemHandler({
+    database, storage, orchestrator, uploadSigner: async () => ({}),
+    signer: async (_s, command) => `https://signed/${command.input.Key}`,
+  });
+  const call = async (path, body, method = 'POST', user = 'owner') => {
+    const response = await handler({
+      rawPath: `/api/stems/jobs/${path}`, body: body === undefined ? undefined : JSON.stringify(body),
+      requestContext: { http: { method }, authorizer: { jwt: { claims: { sub: user } } } },
+    });
+    return { status: response.statusCode, body: JSON.parse(response.body) };
+  };
+  return { database, storage, orchestrator, started, call };
+}
+const good = { stem: 'guitar', references: ['vocals', 'bass'], strength: 0.5 };
+const route = `${parentId}/restorations`;
+
+test('input needs one target, other stems as references, and a valid strength', () => {
+  for (const bad of [null, [], {}, { stem: 'guitar' }, { stem: 'guitar', references: [] }, { stem: 'kazoo', references: ['bass'] },
+    { stem: 'guitar', references: ['guitar'] }, { stem: 'guitar', references: ['bass', 'bass'] }, { stem: 'guitar', references: ['kazoo'] },
+    { stem: 'guitar', references: 'bass' }, { ...good, strength: 1.1 }, { ...good, strength: -0.1 }, { ...good, strength: '1' }, { ...good, strength: null }]) {
+    assert.throws(() => restorationInput(bad), undefined, JSON.stringify(bad));
+  }
+  assert.deepEqual(restorationInput({ stem: 'guitar', references: ['bass', 'drums'] }),
+    { stem: 'guitar', references: ['drums', 'bass'], strength: 0.45 });
+});
+
+test('create stores a separate record, starts the task with its kind, and repeats safely', async () => {
+  const { call, database, started } = setup();
+  const made = await call(route, good);
+  assert.equal(made.status, 202);
+  const id = made.body.restoration.id;
+  const child = database.get('owner', id);
+  assert.equal(child.type, 'restoration');
+  assert.equal(child.status, 'queued');
+  assert.equal(child.key, `users/owner/restored/${parentId}/${id}.wav`);
+  assert.equal('createdAt' in child, false, 'must stay out of the library index');
+  assert.ok(child.expiresAt > Date.now() / 1000);
+  assert.deepEqual(JSON.parse(started[0].input), { userId: 'owner', jobId: id, kind: 'restoration' });
+  assert.equal(started[0].name, id);
+  assert.equal(made.body.restoration.playUrl, undefined);
+  const again = await call(route, { ...good, references: ['bass', 'vocals'] });
+  assert.equal(again.status, 200);
+  assert.equal(again.body.restoration.id, id);
+  assert.equal(started.length, 1);
+  assert.equal((await call(route, { ...good, strength: 0.6 })).status, 202);
+  assert.deepEqual(database.get('owner', parentId).stems, parent().stems);
+});
+
+test('create rejects invalid input, other owners, and unfinished parents', async () => {
+  const { call, database, started } = setup();
+  assert.equal((await call(route, { stem: 'guitar', references: [] })).status, 400);
+  assert.equal((await call(route, good, 'POST', 'intruder')).status, 404);
+  database.put(parent({ status: 'processing', stems: undefined }));
+  assert.equal((await call(route, good)).status, 409);
+  assert.equal(started.length, 0);
+});
+
+test('a failed start is recorded and reported, and can be retried', async () => {
+  const context = setup();
+  context.orchestrator.fail = true;
+  assert.equal((await context.call(route, good)).status, 503);
+  const job = await context.call(parentId, undefined, 'GET');
+  assert.equal(job.body.job.restorations[0].status, 'failed');
+  context.orchestrator.fail = false;
+  assert.equal((await context.call(route, good)).status, 202);
+});
+
+test('parent GET lists progress and signs only completed stems; failed history expires', async () => {
+  const { call, database } = setup();
+  const id = (await call(route, good)).body.restoration.id;
+  let list = (await call(parentId, undefined, 'GET')).body.job.restorations;
+  assert.equal(list[0].status, 'queued');
+  assert.equal(list[0].playUrl, undefined);
+  database.put({ ...database.get('owner', id), status: 'completed' });
+  list = (await call(parentId, undefined, 'GET')).body.job.restorations;
+  assert.equal(list[0].playUrl, `https://signed/users/owner/restored/${parentId}/${id}.wav`);
+  assert.equal('key' in list[0], false);
+  database.put({ ...database.get('owner', id), status: 'failed', error: 'x', failedAt: '2020-01-01T00:00:00.000Z', expiresAt: 1 });
+  assert.deepEqual((await call(parentId, undefined, 'GET')).body.job.restorations, []);
+});
+
+test('a stuck record shows as failed after the deadline', async () => {
+  const { call, database } = setup();
+  const id = (await call(route, good)).body.restoration.id;
+  database.put({ ...database.get('owner', id), status: 'processing', startedAt: new Date(Date.now() - 2 * 60 * 60 * 1000 - 60000).toISOString() });
+  const [item] = (await call(parentId, undefined, 'GET')).body.job.restorations;
+  assert.equal(item.status, 'failed');
+  assert.match(item.error, /cleanup expired/);
+});
+
+test('delete removes only the cleaned stem and never an original', async () => {
+  const { call, database, storage } = setup();
+  for (const name of STEM_NAMES) storage.objects.set(stemKey(name), Buffer.from(name));
+  const id = (await call(route, good)).body.restoration.id;
+  const key = `users/owner/restored/${parentId}/${id}.wav`;
+  const path = `${route}/${id}`;
+  assert.equal((await call(path, undefined, 'DELETE')).status, 409, 'not while running');
+  database.put({ ...database.get('owner', id), status: 'completed' });
+  storage.objects.set(key, Buffer.from('cleaned'));
+  const before = database.get('owner', parentId);
+  assert.equal((await call(`22222222-2222-4222-8222-222222222222/restorations/${id}`, undefined, 'DELETE')).status, 404);
+  assert.equal((await call(`${route}/${parentId}`, undefined, 'DELETE')).status, 404, 'a parent job id is refused');
+  assert.equal((await call(path, undefined, 'DELETE', 'intruder')).status, 200);
+  assert.ok(storage.objects.has(key));
+  assert.equal((await call(path, undefined, 'DELETE')).status, 200);
+  assert.equal(storage.objects.has(key), false);
+  assert.equal(database.get('owner', id), undefined);
+  for (const name of STEM_NAMES) assert.ok(storage.objects.has(stemKey(name)));
+  assert.deepEqual(database.get('owner', parentId), before);
+  assert.equal((await call(path, undefined, 'DELETE')).status, 200, 'repeat is safe');
+  database.put({ ...parent({ jobId: id }), type: 'restoration', parentJobId: parentId, status: 'completed', key: stemKey('vocals') });
+  assert.equal((await call(path, undefined, 'DELETE')).status, 500, 'an unexpected key is refused');
+  assert.ok(storage.objects.has(stemKey('vocals')));
+});
+
+test('cleaned stems are not library jobs', async () => {
+  const { call, database } = setup();
+  await call(route, good);
+  const seen = [];
+  const list = createHandler({
+    database: { async send(command) {
+      seen.push(command.input);
+      return { Items: [...database.items.values()].filter(item => item.createdAt) };
+    } },
+    signer: async () => 'https://signed',
+  });
+  const response = await list({ requestContext: { http: { method: 'GET' }, authorizer: { jwt: { claims: { sub: 'owner' } } } } });
+  assert.deepEqual(JSON.parse(response.body).jobs.map(job => job.type), ['stems']);
+  assert.equal(seen[0].IndexName, 'ByCreatedAt');
+});
+
+test('the task runs the worker that matches the job kind', async () => {
+  const run = runStemTask({ separate: async () => 'separate', restore: async () => 'restore' });
+  assert.equal(await run({ jobId: 'a' }), 'separate');
+  assert.equal(await run({ jobId: 'a', kind: 'restoration' }), 'restore');
+});
+
+function workerCase(run) {
+  const context = setup();
+  for (const name of STEM_NAMES) context.storage.objects.set(stemKey(name), wavFile());
+  const child = {
+    userId: 'owner', jobId: '33333333-3333-4333-8333-333333333333', type: 'restoration', parentJobId: parentId,
+    status: 'queued', stem: 'guitar', references: ['vocals', 'bass'], strength: 0.45, title: 't',
+    key: `users/owner/restored/${parentId}/33333333-3333-4333-8333-333333333333.wav`,
+    generatedAt: new Date().toISOString(), startedAt: new Date().toISOString(), expiresAt: 9999999999,
+  };
+  context.database.put(child);
+  const worker = createRestoreWorker({ database: context.database, storage: context.storage, run });
+  return { ...context, child, worker, input: { userId: 'owner', jobId: child.jobId, kind: 'restoration' } };
+}
+
+function wavFile(seconds = 1, frequency = 330) {
+  const frames = 44100 * seconds, data = Buffer.alloc(44 + frames * 4);
+  data.write('RIFF'); data.writeUInt32LE(36 + frames * 4, 4); data.write('WAVEfmt ', 8); data.writeUInt32LE(16, 16);
+  data.writeUInt16LE(1, 20); data.writeUInt16LE(2, 22); data.writeUInt32LE(44100, 24); data.writeUInt32LE(176400, 28);
+  data.writeUInt16LE(4, 32); data.writeUInt16LE(16, 34); data.write('data', 36); data.writeUInt32LE(frames * 4, 40);
+  for (let i = 0; i < frames; i++) {
+    const sample = Math.round(8000 * Math.sin(2 * Math.PI * frequency * i / 44100));
+    data.writeInt16LE(sample, 44 + i * 4); data.writeInt16LE(sample, 46 + i * 4);
+  }
+  return data;
+}
+
+test('worker failure records a safe message and leaves originals alone', async () => {
+  const { worker, input, database, storage, child } = workerCase(async () => { throw new Error('secret path /tmp/x'); });
+  const before = [...storage.objects.entries()];
+  await worker(input);
+  const saved = database.get('owner', child.jobId);
+  assert.equal(saved.status, 'failed');
+  assert.equal(saved.failureStage, 'clean');
+  assert.equal(saved.error.includes('secret'), false);
+  assert.deepEqual([...storage.objects.entries()], before);
+  assert.equal(storage.calls.some(call => call.kind === 'PutObjectCommand'), false);
+});
+
+test('worker refuses output whose length does not match the original', async () => {
+  const { worker, input, database, storage, child } = workerCase(async (_python, args) => {
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(args[2], Buffer.alloc(100));
+    return { stdout: '' };
+  });
+  await worker(input);
+  assert.equal(database.get('owner', child.jobId).failureStage, 'validate');
+  assert.equal(storage.objects.has(child.key), false);
+});
+
+test('worker ignores records that are already running, and other record types', async () => {
+  let ran = 0;
+  const { worker, input, database, child } = workerCase(async () => { ran++; return { stdout: '' }; });
+  database.put({ ...child, status: 'processing' });
+  await worker(input);
+  assert.equal(ran, 0);
+  database.put({ ...child, type: 'stems' });
+  await assert.rejects(worker(input));
+});
+
+// ffmpeg writes a LIST chunk before the audio, as in real separated stems.
+function wavWithList() {
+  const plain = wavFile();
+  const list = Buffer.alloc(8 + 26);
+  list.write('LIST'); list.writeUInt32LE(26, 4); list.write('INFOISFT', 8);
+  const output = Buffer.concat([plain.subarray(0, 36), list, plain.subarray(36)]);
+  output.writeUInt32LE(output.length - 8, 4);
+  return output;
+}
+
+test('alignment is judged on audio frames, not file size', async () => {
+  const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const directory = await mkdtemp(`${tmpdir()}/wav-`);
+  try {
+    const write = async (name, data) => { await writeFile(`${directory}/${name}`, data); return `${directory}/${name}`; };
+    const plain = await wavFormat(await write('plain.wav', wavFile()));
+    assert.deepEqual(plain, { channels: 2, sampleRate: 44100, bits: 16, dataBytes: 176400 });
+    assert.deepEqual(await wavFormat(await write('list.wav', wavWithList())), plain);
+    assert.notDeepEqual(await wavFormat(await write('short.wav', wavFile(2))), plain);
+    await assert.rejects(wavFormat(await write('bad.wav', Buffer.alloc(100))));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+const python = fileURLToPath(new URL('../../.venv-stems/bin/python', import.meta.url));
+let hasPython = false;
+try { execFileSync(python, ['-c', 'import scipy, soundfile']); hasPython = true; } catch { /* Skipped below. */ }
+
+test('real script produces an aligned stem through the worker, writing only the new key', { skip: !hasPython }, async () => {
+  const { input, database, storage, child } = workerCase();
+  // Same layout as real stems, whose extra chunk makes the file larger than the output.
+  storage.objects.set(stemKey('guitar'), wavWithList());
+  const real = createRestoreWorker({ database, storage, pythonPath: python });
+  const before = new Map([...storage.objects].map(([key, value]) => [key, createHash('md5').update(value).digest('hex')]));
+  await real(input);
+  const saved = database.get('owner', child.jobId);
+  assert.equal(saved.status, 'completed', saved.error);
+  assert.equal('expiresAt' in saved, false);
+  const output = storage.objects.get(child.key);
+  assert.equal(output.length, wavFile().length, 'same audio frames as the original');
+  assert.equal(saved.bytes, output.length);
+  assert.equal(output.toString('ascii', 0, 4), 'RIFF');
+  for (const [key, hash] of before) assert.equal(createHash('md5').update(storage.objects.get(key)).digest('hex'), hash);
+  assert.deepEqual(storage.calls.filter(call => call.kind === 'PutObjectCommand').map(call => call.key), [child.key]);
+});
+
+test('local server routes cleanup with verified identity', async t => {
+  let seen;
+  const server = createLocalServer({
+    verify: async () => ({ sub: 'real-owner' }),
+    stems: async e => { seen = e; return { statusCode: 202, headers: {}, body: '{}' }; },
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const base = `http://127.0.0.1:${server.address().port}/api/stems/jobs/${parentId}/restorations`;
+  const headers = { Authorization: 'Bearer token' };
+  assert.equal((await fetch(base, { method: 'POST', body: '{}' })).status, 401);
+  assert.equal((await fetch(base, { method: 'POST', headers, body: '{}' })).status, 202);
+  assert.equal(seen.requestContext.authorizer.jwt.claims.sub, 'real-owner');
+  assert.equal((await fetch(base, { method: 'DELETE', headers })).status, 405);
+  assert.equal((await fetch(`${base}/${parentId}`, { method: 'DELETE', headers })).status, 202);
+  assert.equal((await fetch(`${base}/${parentId}`, { method: 'POST', headers })).status, 405);
+});
+
+test('the template keeps delete permission away from original stems', () => {
+  const template = readFileSync(new URL('../../template.yaml', import.meta.url), 'utf8');
+  const taskPolicy = template.slice(template.indexOf('StemTaskRole:'), template.indexOf('StemTask:\n'));
+  assert.ok(taskPolicy.includes("users/*/restored/*"));
+  const api = template.slice(template.indexOf('Deliberately excludes users/*/stems/*'), template.indexOf('Lets HEAD on a missing'));
+  assert.ok(api.includes("users/*/restored/*"));
+  assert.equal(api.includes('stems/*\''), false);
+});

@@ -79,10 +79,6 @@ Resources:
             Status: Enabled
             Prefix: stem-inputs/
             ExpirationInDays: 1
-          - Id: ExpireGeneratedInputs
-            Status: Enabled
-            Prefix: generated-inputs/
-            ExpirationInDays: 1
   AudioBucketPolicy:
     Type: AWS::S3::BucketPolicy
     Properties:
@@ -227,22 +223,15 @@ Resources:
               Resource: !Ref StemWorkflow
             - Effect: Allow
               Action: [s3:PutObject, s3:GetObject]
-              Resource:
-                - !Sub '${AudioBucket.Arn}/stem-inputs/*'
-                - !Sub '${AudioBucket.Arn}/generated-inputs/*'
+              Resource: !Sub '${AudioBucket.Arn}/stem-inputs/*'
             - Effect: Allow
               Action: s3:GetObject
               Resource: !Sub '${AudioBucket.Arn}/users/*'
-            - Effect: Allow
-              Action: s3:PutObject
-              Resource: !Sub '${AudioBucket.Arn}/users/*/accompaniments/*'
             # Deliberately excludes users/*/stems/*: original stems cannot be deleted here.
             - Effect: Allow
               Action: s3:DeleteObject
-              Resource:
-                - !Sub '${AudioBucket.Arn}/users/*/accompaniments/*'
-                - !Sub '${AudioBucket.Arn}/generated-inputs/*'
-            # Lets HEAD on a missing upload/output return 404 instead of 403.
+              Resource: !Sub '${AudioBucket.Arn}/users/*/restored/*'
+            # Lets HEAD on a missing upload return 404 instead of 403.
             - Effect: Allow
               Action: s3:ListBucket
               Resource: !GetAtt AudioBucket.Arn
@@ -265,23 +254,17 @@ Resources:
             ApiId: !Ref HttpApi
             Path: /api/stems/jobs/{jobId}
             Method: GET
-        CreateAccompaniment:
+        CreateRestoration:
           Type: HttpApi
           Properties:
             ApiId: !Ref HttpApi
-            Path: /api/stems/jobs/{jobId}/accompaniments
+            Path: /api/stems/jobs/{jobId}/restorations
             Method: POST
-        CompleteAccompaniment:
+        DeleteRestoration:
           Type: HttpApi
           Properties:
             ApiId: !Ref HttpApi
-            Path: /api/stems/jobs/{jobId}/accompaniments/{accompanimentId}/complete
-            Method: POST
-        DeleteAccompaniment:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref HttpApi
-            Path: /api/stems/jobs/{jobId}/accompaniments/{accompanimentId}
+            Path: /api/stems/jobs/{jobId}/restorations/{restorationId}
             Method: DELETE
   StemVpc:
     Type: AWS::EC2::VPC
@@ -364,7 +347,12 @@ Resources:
                 Resource: !GetAtt Jobs.Arn
               - Effect: Allow
                 Action: s3:GetObject
-                Resource: !Sub '${AudioBucket.Arn}/stem-inputs/*'
+                Resource:
+                  - !Sub '${AudioBucket.Arn}/stem-inputs/*'
+                  - !Sub '${AudioBucket.Arn}/users/*/stems/*'
+              - Effect: Allow
+                Action: [s3:PutObject, s3:DeleteObject]
+                Resource: !Sub '${AudioBucket.Arn}/users/*/restored/*'
               - Effect: Allow
                 Action: [s3:PutObject, s3:DeleteObject]
                 Resource: !Sub '${AudioBucket.Arn}/users/*/stems/*'

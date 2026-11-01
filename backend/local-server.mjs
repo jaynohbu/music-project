@@ -11,6 +11,7 @@ import { createWorker } from './worker.mjs';
 import { createAccountHandler } from './accounts.mjs';
 import { createStemHandler } from './stem-api.mjs';
 import { createStemWorker } from './stem-worker.mjs';
+import { createRestoreWorker, runStemTask } from './stem-restore.mjs';
 
 const execute = promisify(execFile);
 
@@ -48,15 +49,15 @@ export function createLocalServer({ api, accounts, stems, verify }) {
       const accountRoutes = ['session', 'register', 'forgot-password', 'confirm-password'];
       const isAccount = accountRoutes.some(action => url.pathname === `/api/accounts/${action}`);
       const isJobs = url.pathname === '/api/jobs';
-      const isAccompaniment =
-        /^\/api\/stems\/jobs\/[0-9a-f-]{36}\/accompaniments(\/[0-9a-f-]{36}(\/complete)?)?$/.test(url.pathname);
-      const isGeneratedStem = /^\/api\/stems\/jobs\/[0-9a-f-]{36}\/accompaniments\/[0-9a-f-]{36}$/.test(url.pathname);
-      const isStems = url.pathname === '/api/stems/uploads' || isAccompaniment ||
+      const isRestorations = /^\/api\/stems\/jobs\/[0-9a-f-]{36}\/restorations$/.test(url.pathname);
+      const isRestoration = /^\/api\/stems\/jobs\/[0-9a-f-]{36}\/restorations\/[0-9a-f-]{36}$/.test(url.pathname);
+      const isStems = url.pathname === '/api/stems/uploads' || isRestorations || isRestoration ||
         /^\/api\/stems\/jobs\/[0-9a-f-]{36}(\/complete)?$/.test(url.pathname);
       if (!isAccount && !isJobs && !isStems) { reply(404, 'Endpoint not found.'); return; }
       if ((isAccount && request.method !== 'POST') ||
-          (isGeneratedStem ? request.method !== 'DELETE'
-            : (isJobs || isStems) && !['GET', 'POST'].includes(request.method))) {
+          (isRestoration ? request.method !== 'DELETE'
+            : isRestorations ? request.method !== 'POST'
+              : (isJobs || isStems) && !['GET', 'POST'].includes(request.method))) {
         reply(405, 'Method not allowed.');
         return;
       }
@@ -76,8 +77,7 @@ export function createLocalServer({ api, accounts, stems, verify }) {
       let length = 0;
       for await (const chunk of request) {
         length += chunk.length;
-        // Chord timelines (up to 500 entries) need more room than other JSON requests.
-        if (length > (isAccompaniment ? 65536 : 4096)) { reply(413, 'Request body is too large.'); return; }
+        if (length > 4096) { reply(413, 'Request body is too large.'); return; }
         chunks.push(chunk);
       }
       const event = {
@@ -135,7 +135,10 @@ async function main() {
   const queue = localQueue(createWorker({ ffmpegPath, downloaderPath }));
   const stemPython = process.env.STEM_PYTHON_PATH ??
     fileURLToPath(new URL('../.venv-stems/bin/python', import.meta.url));
-  const stemQueue = localQueue(createStemWorker({ pythonPath: stemPython, ffmpegPath }), 1);
+  const stemQueue = localQueue(runStemTask({
+    separate: createStemWorker({ pythonPath: stemPython, ffmpegPath }),
+    restore: createRestoreWorker({ pythonPath: stemPython }),
+  }), 1);
   const acceptedStemJobs = new Set();
   const stemOrchestrator = {
     async send(command) {
