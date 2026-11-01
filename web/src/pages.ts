@@ -131,7 +131,8 @@ export class UploadPage {
       @if (busy() && !jobs().length) { <p role="status">Loading your library...</p> }
       @if (!busy() && !jobs().length && !error()) {
         <div class="empty"><h2>No files yet</h2><p>Your converted audio will appear here.</p>
-          <a routerLink="/upload">Convert your first video</a></div>
+          <a routerLink="/upload">Convert a video</a> ·
+          <a routerLink="/split">Upload audio to split</a></div>
       }
       <ul class="library">
         @for (job of jobs(); track job.jobId) {
@@ -141,10 +142,19 @@ export class UploadPage {
               <span class="badge" [class.failed]="job.status === 'failed'">{{ job.status }}</span>
             </div>
             <p class="hint">{{ job.createdAt | date:'medium' }}</p>
-            <a [href]="job.sourceUrl" target="_blank" rel="noopener noreferrer">Original video</a>
-            @if (job.status === 'completed' && job.playUrl && job.downloadUrl) {
-              <audio controls preload="none" [src]="job.playUrl" (error)="playbackError()"></audio>
-              <a class="download" [href]="job.downloadUrl">Download WAV</a>
+            @if (job.type === 'stems') {
+              <p class="hint">Six-stem audio separation</p>
+              @if (job.status === 'completed') {
+                <a class="download" [routerLink]="['/mixer', job.jobId]">Open stem mixer</a>
+              }
+            } @else {
+              @if (job.sourceUrl) {
+                <a [href]="job.sourceUrl" target="_blank" rel="noopener noreferrer">Original video</a>
+              }
+              @if (job.status === 'completed' && job.playUrl && job.downloadUrl) {
+                <audio controls preload="none" [src]="job.playUrl" (error)="playbackError()"></audio>
+                <a class="download" [href]="job.downloadUrl">Download WAV</a>
+              }
             }
             @if (job.error) { <p class="error">{{ job.error }}</p> }
             @if (job.errorCode) {

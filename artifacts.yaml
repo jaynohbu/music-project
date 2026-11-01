@@ -2,6 +2,14 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: Deployment artifacts for the standalone YouTube audio library
 
 Resources:
+  StemRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      ImageTagMutability: IMMUTABLE
   ArtifactBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
@@ -32,5 +40,7 @@ Resources:
                 aws:SecureTransport: false
 
 Outputs:
+  StemRepositoryUri:
+    Value: !GetAtt StemRepository.RepositoryUri
   ArtifactBucketName:
     Value: !Ref ArtifactBucket

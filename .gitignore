@@ -4,3 +4,5 @@ web/dist/
 web/.angular/
 web/public/config.json
 .venv-download/
+.venv-stems/
+**/__pycache__/

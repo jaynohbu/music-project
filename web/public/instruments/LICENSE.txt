@@ -1,0 +1,17 @@
+FluidR3 General MIDI instrument samples
+
+These piano, steel-string acoustic guitar and clean electric guitar samples
+are derived from FluidR3_GM.sf2 by Frank Wen and distributed via
+gleitz/midi-js-soundfonts.
+
+License: Creative Commons Attribution 3.0 United States
+https://creativecommons.org/licenses/by/3.0/us/
+
+Source: https://github.com/gleitz/midi-js-soundfonts
+Pinned revision: 044fab8e1456bfafc5776e86dfd6bb8697149aef
+Upstream licensing: https://github.com/gleitz/midi-js-soundfonts/blob/044fab8e1456bfafc5776e86dfd6bb8697149aef/README.md
+
+Modifications: selected MIDI notes 48 through 84; converted the JavaScript
+sample map into JSON. No upstream JavaScript is executed.
+Generated accompaniment uses these samples with new note timing, envelopes
+and voicing. No affiliation or endorsement by the original authors is implied.

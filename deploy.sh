@@ -11,7 +11,6 @@ npm ci --prefix web
 npm test --prefix backend
 npm run build --prefix web
 sam validate --lint --region "$REGION"
-sam build
 aws secretsmanager describe-secret \
   --secret-id youtube-audio-library/registration-password --region "$REGION" \
   --query ARN --output text >/dev/null
@@ -27,6 +26,9 @@ if [[ -z "$ARTIFACT_BUCKET" || "$ARTIFACT_BUCKET" == "None" ]]; then
   exit 1
 fi
 aws s3api head-bucket --bucket "$ARTIFACT_BUCKET" --region "$REGION"
+STEM_IMAGE="$(bash build-stem-image.sh "$STACK")"
+sam build
 sam deploy --stack-name "$STACK" --region "$REGION" --s3-bucket "$ARTIFACT_BUCKET" \
-  --resolve-image-repos --capabilities CAPABILITY_IAM --confirm-changeset
+  --resolve-image-repos --capabilities CAPABILITY_IAM --confirm-changeset \
+  --parameter-overrides "InitialPasswordSecretName=youtube-audio-library/registration-password" "StemImageUri=$STEM_IMAGE"
 bash publish-web.sh "$STACK"

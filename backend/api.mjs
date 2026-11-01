@@ -5,6 +5,7 @@ import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { youtubeUrl, visibleJob, failureRetention, jobExpiry, failedHistoryExpired } from './shared.mjs';
+import { signedStemJob } from './stem-api.mjs';
 
 const db = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const lambda = new LambdaClient({});
@@ -89,6 +90,7 @@ export function createHandler({ database = db, invoker = lambda, signer = getSig
       const visible = (result.Items ?? []).map(item => visibleJob(item, now))
         .filter(job => !failedHistoryExpired(job, now));
       const jobs = await Promise.all(visible.map(async job => {
+        if (job.type === 'stems') return signedStemJob(job, signer, s3, database);
         if (job.status !== 'completed') return job;
         const params = { Bucket: process.env.BUCKET_NAME, Key: job.key };
         return {

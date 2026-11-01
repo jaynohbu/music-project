@@ -17,6 +17,7 @@ export function jobExpiry(job) {
     if (!Number.isFinite(failedAt)) throw new Error('Failed job has an invalid timestamp.');
     return Math.ceil((failedAt + FAILED_HISTORY_MS) / 1000);
   }
+  if (job.type === 'stems') return Math.ceil((stemDeadline(job) + FAILED_HISTORY_MS) / 1000);
   const createdAt = Date.parse(job.createdAt);
   if (!Number.isFinite(createdAt)) throw new Error('Job has an invalid creation timestamp.');
   return Math.ceil((createdAt + JOB_LIFETIME_MS + FAILED_HISTORY_MS) / 1000);
@@ -56,6 +57,14 @@ export function youtubeUrl(input) {
 }
 
 export function visibleJob(job, now = Date.now()) {
+  if (job.type === 'stems' && ['uploading', 'queued', 'processing'].includes(job.status) &&
+      now >= stemDeadline(job)) {
+    return {
+      ...job, status: 'failed', error: 'Upload or separation expired. Please upload again.',
+      ...failureRetention(stemDeadline(job)),
+    };
+  }
+  if (job.type === 'stems') return job;
   if (['queued', 'processing'].includes(job.status) &&
       now - Date.parse(job.createdAt) >= JOB_LIFETIME_MS) {
     return {
@@ -65,3 +74,4 @@ export function visibleJob(job, now = Date.now()) {
   }
   return job;
 }
+import { stemDeadline } from './stem-shared.mjs';

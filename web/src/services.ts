@@ -1,6 +1,8 @@
 import { Injectable, InjectionToken, inject, signal } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
+import type { ChordEvent, Instrument, PlayingStyle } from './accompaniment-audio';
+import type { Region } from './accompaniment-regions';
 
 export interface Config {
   region: string;
@@ -177,14 +179,51 @@ export class AuthService {
 export interface Job {
   jobId: string;
   createdAt: string;
-  sourceUrl: string;
-  status: 'queued' | 'processing' | 'completed' | 'failed';
+  type?: 'youtube' | 'stems';
+  sourceUrl?: string;
+  status: 'uploading' | 'queued' | 'processing' | 'completed' | 'failed';
   title?: string;
+  duration?: number;
+  stems?: Partial<Record<StemName, StemFile>>;
+  generatedStems?: GeneratedStem[];
   error?: string;
   errorCode?: string;
   failureStage?: string;
   playUrl?: string;
   downloadUrl?: string;
+}
+
+export const STEM_NAMES = ['drums', 'bass', 'vocals', 'guitar', 'piano', 'other'] as const;
+export type StemName = typeof STEM_NAMES[number];
+export interface StemFile { playUrl: string; downloadUrl: string }
+export interface AccompanimentSettings {
+  requestId: string;
+  instrument: Instrument;
+  style: PlayingStyle;
+  tempo: number;
+  sources: StemName[];
+  chords: ChordEvent[];
+  regions: Region[];
+  seed: number;
+}
+export interface GeneratedStem extends StemFile {
+  id: string;
+  title: string;
+  instrument: Instrument;
+  style: PlayingStyle;
+  tempo: number;
+  sources: StemName[];
+  chords: ChordEvent[];
+  regions?: Region[];
+  createdAt: string;
+}
+export interface AccompanimentUpload {
+  accompaniment: { id: string } | GeneratedStem;
+  upload?: { url: string; fields: Record<string, string> };
+}
+export interface StemUploadRequest {
+  job: Job;
+  upload: { url: string; fields: Record<string, string> };
 }
 export interface JobPage { jobs: Job[]; cursor: string | null }
 
@@ -207,6 +246,63 @@ export class LibraryService {
     return firstValueFrom(this.http.get<JobPage>(
       `${this.config.apiBaseUrl}/jobs`,
       { headers: { Authorization: `Bearer ${token}` }, params: cursor ? { cursor } : {} },
+    ));
+  }
+}
+
+@Injectable({ providedIn: 'root' })
+export class StemsService {
+  private readonly http = inject(HttpClient);
+  private readonly auth = inject(AuthService);
+  private readonly config = inject(CONFIG);
+
+  async createUpload(fileName: string, bytes: number, title: string): Promise<StemUploadRequest> {
+    const token = await this.auth.token();
+    return firstValueFrom(this.http.post<StemUploadRequest>(
+      `${this.config.apiBaseUrl}/stems/uploads`,
+      { fileName, bytes, title },
+      { headers: { Authorization: `Bearer ${token}` } },
+    ));
+  }
+
+  async complete(jobId: string): Promise<{ job: Job }> {
+    const token = await this.auth.token();
+    return firstValueFrom(this.http.post<{ job: Job }>(
+      `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/complete`,
+      {},
+      { headers: { Authorization: `Bearer ${token}` } },
+    ));
+  }
+
+  async getJob(jobId: string): Promise<{ job: Job }> {
+    const token = await this.auth.token();
+    return firstValueFrom(this.http.get<{ job: Job }>(
+      `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    ));
+  }
+
+  async createAccompaniment(jobId: string, settings: AccompanimentSettings): Promise<AccompanimentUpload> {
+    const token = await this.auth.token();
+    return firstValueFrom(this.http.post<AccompanimentUpload>(
+      `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/accompaniments`, settings,
+      { headers: { Authorization: `Bearer ${token}` } },
+    ));
+  }
+
+  async completeAccompaniment(jobId: string, id: string): Promise<{ accompaniment: GeneratedStem }> {
+    const token = await this.auth.token();
+    return firstValueFrom(this.http.post<{ accompaniment: GeneratedStem }>(
+      `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/accompaniments/${encodeURIComponent(id)}/complete`, {},
+      { headers: { Authorization: `Bearer ${token}` } },
+    ));
+  }
+
+  async deleteAccompaniment(jobId: string, id: string): Promise<void> {
+    const token = await this.auth.token();
+    await firstValueFrom(this.http.delete(
+      `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/accompaniments/${encodeURIComponent(id)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
     ));
   }
 }

@@ -9,6 +9,8 @@ import { CognitoJwtVerifier } from 'aws-jwt-verify';
 import { createHandler } from './api.mjs';
 import { createWorker } from './worker.mjs';
 import { createAccountHandler } from './accounts.mjs';
+import { createStemHandler } from './stem-api.mjs';
+import { createStemWorker } from './stem-worker.mjs';
 
 const execute = promisify(execFile);
 
@@ -30,7 +32,7 @@ export function localQueue(worker, capacity = 2) {
   };
 }
 
-export function createLocalServer({ api, accounts, verify }) {
+export function createLocalServer({ api, accounts, stems, verify }) {
   return createServer(async (request, response) => {
     const reply = (status, message) => {
       response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -46,14 +48,20 @@ export function createLocalServer({ api, accounts, verify }) {
       const accountRoutes = ['session', 'register', 'forgot-password', 'confirm-password'];
       const isAccount = accountRoutes.some(action => url.pathname === `/api/accounts/${action}`);
       const isJobs = url.pathname === '/api/jobs';
-      if (!isAccount && !isJobs) { reply(404, 'Endpoint not found.'); return; }
+      const isAccompaniment =
+        /^\/api\/stems\/jobs\/[0-9a-f-]{36}\/accompaniments(\/[0-9a-f-]{36}(\/complete)?)?$/.test(url.pathname);
+      const isGeneratedStem = /^\/api\/stems\/jobs\/[0-9a-f-]{36}\/accompaniments\/[0-9a-f-]{36}$/.test(url.pathname);
+      const isStems = url.pathname === '/api/stems/uploads' || isAccompaniment ||
+        /^\/api\/stems\/jobs\/[0-9a-f-]{36}(\/complete)?$/.test(url.pathname);
+      if (!isAccount && !isJobs && !isStems) { reply(404, 'Endpoint not found.'); return; }
       if ((isAccount && request.method !== 'POST') ||
-          (isJobs && !['GET', 'POST'].includes(request.method))) {
+          (isGeneratedStem ? request.method !== 'DELETE'
+            : (isJobs || isStems) && !['GET', 'POST'].includes(request.method))) {
         reply(405, 'Method not allowed.');
         return;
       }
       let claims;
-      if (isJobs) {
+      if (isJobs || isStems) {
         const authorization = request.headers.authorization;
         if (!authorization?.startsWith('Bearer ')) { reply(401, 'Sign in to continue.'); return; }
         try {
@@ -68,7 +76,8 @@ export function createLocalServer({ api, accounts, verify }) {
       let length = 0;
       for await (const chunk of request) {
         length += chunk.length;
-        if (length > 4096) { reply(413, 'Request body is too large.'); return; }
+        // Chord timelines (up to 500 entries) need more room than other JSON requests.
+        if (length > (isAccompaniment ? 65536 : 4096)) { reply(413, 'Request body is too large.'); return; }
         chunks.push(chunk);
       }
       const event = {
@@ -79,7 +88,7 @@ export function createLocalServer({ api, accounts, verify }) {
           ...(claims ? { authorizer: { jwt: { claims } } } : {}),
         },
       };
-      const result = await (isAccount ? accounts : api)(event);
+      const result = await (isAccount ? accounts : isStems ? stems : api)(event);
       response.writeHead(result.statusCode, result.headers);
       response.end(result.body);
     } catch (error) {
@@ -124,8 +133,22 @@ async function main() {
     userPoolId: process.env.USER_POOL_ID, tokenUse: 'id', clientId: process.env.USER_POOL_CLIENT_ID,
   });
   const queue = localQueue(createWorker({ ffmpegPath, downloaderPath }));
+  const stemPython = process.env.STEM_PYTHON_PATH ??
+    fileURLToPath(new URL('../.venv-stems/bin/python', import.meta.url));
+  const stemQueue = localQueue(createStemWorker({ pythonPath: stemPython, ffmpegPath }), 1);
+  const acceptedStemJobs = new Set();
+  const stemOrchestrator = {
+    async send(command) {
+      const job = JSON.parse(command.input.input);
+      if (acceptedStemJobs.has(job.jobId)) return {};
+      await stemQueue.send({ input: { Payload: Buffer.from(JSON.stringify(job)) } });
+      acceptedStemJobs.add(job.jobId);
+      return {};
+    },
+  };
   const server = createLocalServer({
     api: createHandler({ invoker: queue }), accounts: createAccountHandler(),
+    stems: createStemHandler({ orchestrator: stemOrchestrator }),
     verify: token => verifier.verify(token),
   });
   server.requestTimeout = 30000;
@@ -137,10 +160,11 @@ async function main() {
   });
   console.log(`Local API http://127.0.0.1:${port}; conversion=local, Cognito/DynamoDB/S3=AWS (${stackName})`);
   console.log(`Downloader: ${downloaderPath} (${downloaderVersion})`);
+  console.log(`Stem worker: ${stemPython}; device=${process.env.STEM_DEVICE ?? 'cpu'}`);
   const stop = () => {
     console.log('Stopping local API; allowing active conversions to finish.');
     server.close(async () => {
-      await Promise.allSettled(queue.running);
+      await Promise.allSettled([...queue.running, ...stemQueue.running]);
     });
   };
   process.once('SIGTERM', stop);

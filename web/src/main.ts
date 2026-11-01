@@ -4,6 +4,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { CanActivateFn, Router, RouterLink, RouterLinkActive, RouterOutlet, provideRouter, withHashLocation } from '@angular/router';
 import { AuthService, CONFIG, Config, errorMessage } from './services';
 import { ListPage, LoginPage, UploadPage } from './pages';
+import { MixerPage, SplitPage } from './stem-pages';
 import { ForgotPasswordPage, RegisterPage } from './account-pages';
 
 const authenticated: CanActivateFn = () =>
@@ -21,6 +22,7 @@ const anonymous: CanActivateFn = () =>
       @if (auth.signedIn()) {
         <nav aria-label="Main navigation">
           <a routerLink="/upload" routerLinkActive="active">Upload</a>
+          <a routerLink="/split" routerLinkActive="active">Split audio</a>
           <a routerLink="/list" routerLinkActive="active">List</a>
           <button class="secondary" (click)="logout()" [disabled]="busy()">Log out</button>
         </nav>
@@ -85,6 +87,8 @@ async function start(): Promise<void> {
         { path: 'register', component: RegisterPage, canActivate: [anonymous] },
         { path: 'forgot-password', component: ForgotPasswordPage, canActivate: [anonymous] },
         { path: 'upload', component: UploadPage, canActivate: [authenticated] },
+        { path: 'split', component: SplitPage, canActivate: [authenticated] },
+        { path: 'mixer/:jobId', component: MixerPage, canActivate: [authenticated] },
         { path: 'list', component: ListPage, canActivate: [authenticated] },
         { path: '', redirectTo: 'upload', pathMatch: 'full' },
         { path: '**', redirectTo: 'upload' },

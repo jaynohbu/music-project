@@ -3,6 +3,9 @@ Transform: AWS::Serverless-2016-10-31
 Description: Private YouTube audio library - Angular, Cognito, API and on-demand CPU container
 
 Parameters:
+  StemImageUri:
+    Type: String
+    Description: ECR URI of the separately built CPU Demucs image
   InitialPasswordSecretName:
     Type: String
     Default: youtube-audio-library/registration-password
@@ -67,9 +70,19 @@ Resources:
       CorsConfiguration:
         CorsRules:
           - AllowedOrigins: ['*']
-            AllowedMethods: [GET, HEAD]
+            AllowedMethods: [GET, HEAD, POST]
             AllowedHeaders: ['*']
             ExposedHeaders: [Accept-Ranges, Content-Range, Content-Length]
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireStemInputs
+            Status: Enabled
+            Prefix: stem-inputs/
+            ExpirationInDays: 1
+          - Id: ExpireGeneratedInputs
+            Status: Enabled
+            Prefix: generated-inputs/
+            ExpirationInDays: 1
   AudioBucketPolicy:
     Type: AWS::S3::BucketPolicy
     Properties:
@@ -170,7 +183,7 @@ Resources:
               Resource: !GetAtt Jobs.Arn
             - Effect: Allow
               Action: dynamodb:Query
-              Resource: !Sub '${Jobs.Arn}/index/ByCreatedAt'
+              Resource: [!GetAtt Jobs.Arn, !Sub '${Jobs.Arn}/index/ByCreatedAt']
             - Effect: Allow
               Action: lambda:InvokeFunction
               Resource: !GetAtt Worker.Arn
@@ -190,6 +203,284 @@ Resources:
             ApiId: !Ref HttpApi
             Path: /api/jobs
             Method: GET
+  StemApi:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend
+      Handler: stem-api.handler
+      Runtime: nodejs22.x
+      MemorySize: 256
+      Timeout: 20
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Jobs
+          BUCKET_NAME: !Ref AudioBucket
+          STEM_STATE_MACHINE: !Ref StemWorkflow
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem, dynamodb:Query]
+              Resource: !GetAtt Jobs.Arn
+            - Effect: Allow
+              Action: states:StartExecution
+              Resource: !Ref StemWorkflow
+            - Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource:
+                - !Sub '${AudioBucket.Arn}/stem-inputs/*'
+                - !Sub '${AudioBucket.Arn}/generated-inputs/*'
+            - Effect: Allow
+              Action: s3:GetObject
+              Resource: !Sub '${AudioBucket.Arn}/users/*'
+            - Effect: Allow
+              Action: s3:PutObject
+              Resource: !Sub '${AudioBucket.Arn}/users/*/accompaniments/*'
+            # Deliberately excludes users/*/stems/*: original stems cannot be deleted here.
+            - Effect: Allow
+              Action: s3:DeleteObject
+              Resource:
+                - !Sub '${AudioBucket.Arn}/users/*/accompaniments/*'
+                - !Sub '${AudioBucket.Arn}/generated-inputs/*'
+            # Lets HEAD on a missing upload/output return 404 instead of 403.
+            - Effect: Allow
+              Action: s3:ListBucket
+              Resource: !GetAtt AudioBucket.Arn
+      Events:
+        Upload:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/stems/uploads
+            Method: POST
+        Complete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/stems/jobs/{jobId}/complete
+            Method: POST
+        GetJob:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/stems/jobs/{jobId}
+            Method: GET
+        CreateAccompaniment:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/stems/jobs/{jobId}/accompaniments
+            Method: POST
+        CompleteAccompaniment:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/stems/jobs/{jobId}/accompaniments/{accompanimentId}/complete
+            Method: POST
+        DeleteAccompaniment:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/stems/jobs/{jobId}/accompaniments/{accompanimentId}
+            Method: DELETE
+  StemVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.83.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+  StemGateway:
+    Type: AWS::EC2::InternetGateway
+  StemGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref StemVpc
+      InternetGatewayId: !Ref StemGateway
+  StemSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref StemVpc
+      CidrBlock: 10.83.0.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+  StemRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref StemVpc
+  StemSubnetRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref StemSubnet
+      RouteTableId: !Ref StemRouteTable
+  StemInternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: StemGatewayAttachment
+    Properties:
+      RouteTableId: !Ref StemRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref StemGateway
+  StemSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Outbound-only stem worker
+      VpcId: !Ref StemVpc
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+  StemCluster:
+    Type: AWS::ECS::Cluster
+  StemLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 14
+  StemExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+  StemTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StemStorage
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:UpdateItem]
+                Resource: !GetAtt Jobs.Arn
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub '${AudioBucket.Arn}/stem-inputs/*'
+              - Effect: Allow
+                Action: [s3:PutObject, s3:DeleteObject]
+                Resource: !Sub '${AudioBucket.Arn}/users/*/stems/*'
+  StemTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '4096'
+      Memory: '16384'
+      ExecutionRoleArn: !GetAtt StemExecutionRole.Arn
+      TaskRoleArn: !GetAtt StemTaskRole.Arn
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ContainerDefinitions:
+        - Name: stems
+          Image: !Ref StemImageUri
+          Essential: true
+          Environment:
+            - Name: TABLE_NAME
+              Value: !Ref Jobs
+            - Name: BUCKET_NAME
+              Value: !Ref AudioBucket
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: OMP_NUM_THREADS
+              Value: '4'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref StemLogs
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: separation
+  StemFinalize:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend
+      Handler: stem-worker.finalize
+      Runtime: nodejs22.x
+      Timeout: 20
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Jobs
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:UpdateItem]
+              Resource: !GetAtt Jobs.Arn
+  StemWorkflow:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      Definition:
+        StartAt: Separate
+        TimeoutSeconds: 7200
+        States:
+          Separate:
+            Type: Task
+            Resource: arn:aws:states:::ecs:runTask.sync
+            TimeoutSeconds: 6900
+            Parameters:
+              LaunchType: FARGATE
+              Cluster: !GetAtt StemCluster.Arn
+              TaskDefinition: !Ref StemTask
+              NetworkConfiguration:
+                AwsvpcConfiguration:
+                  AssignPublicIp: ENABLED
+                  Subnets: [!Ref StemSubnet]
+                  SecurityGroups: [!Ref StemSecurityGroup]
+              Overrides:
+                ContainerOverrides:
+                  - Name: stems
+                    Environment:
+                      - Name: STEM_JOB
+                        Value.$: States.JsonToString($)
+            ResultPath: null
+            Catch:
+              - ErrorEquals: [States.ALL]
+                ResultPath: null
+                Next: Finalize
+            Next: Finalize
+          Finalize:
+            Type: Task
+            Resource: !GetAtt StemFinalize.Arn
+            Retry:
+              - ErrorEquals: [States.TaskFailed]
+                IntervalSeconds: 2
+                MaxAttempts: 3
+                BackoffRate: 2
+            End: true
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: ecs:RunTask
+              Resource: !Ref StemTask
+            - Effect: Allow
+              Action: [ecs:StopTask, ecs:DescribeTasks]
+              Resource: '*'
+              Condition:
+                ArnEquals:
+                  ecs:cluster: !GetAtt StemCluster.Arn
+            - Effect: Allow
+              Action: iam:PassRole
+              Resource: [!GetAtt StemTaskRole.Arn, !GetAtt StemExecutionRole.Arn]
+              Condition:
+                StringEquals:
+                  iam:PassedToService: ecs-tasks.amazonaws.com
+            - Effect: Allow
+              Action: [events:PutTargets, events:PutRule, events:DescribeRule]
+              Resource: !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForECSTaskRule'
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !GetAtt StemFinalize.Arn
   AccountSessions:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -403,6 +694,8 @@ Resources:
                 aws:SecureTransport: false
 
 Outputs:
+  StemStateMachineArn:
+    Value: !Ref StemWorkflow
   WebsiteUrl:
     Value: !Sub 'https://${Website.DomainName}'
   WebsiteBucketName:

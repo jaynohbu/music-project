@@ -8,6 +8,8 @@
     "start:local": "node local-server.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-sfn": "^3.958.0",
+    "@aws-sdk/s3-presigned-post": "^3.958.0",
     "@aws-sdk/client-cloudformation": "^3.958.0",
     "@aws-sdk/client-cognito-identity-provider": "^3.958.0",
     "@aws-sdk/client-secrets-manager": "^3.958.0",
