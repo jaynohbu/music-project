@@ -70,8 +70,8 @@ TunesBasis API and frontend are unchanged. As requested, this app creates its
   before anything is generated. Accompaniment is generated only inside the regions
   and every other sample is exactly zero, so the saved stem stays aligned.
   A region with only "N" chords stays silent and is flagged in the editor.
-  Each played chord (each note for arpeggios) has a random onset and a random length
-  of up to 1% either way, from a saved seed so the preview matches the saved render.
+  Every note draws its own random onset and length change of 0.01% to 0.05% of its
+  length, in either direction, from a saved seed so the preview matches the saved render.
   The accompaniment's level is matched to the average loudness of the selected
   stems while they play inside the regions, then rises and falls with them, from
   -18 dB to +6 dB around that average with a peak ceiling. Regions over silent source

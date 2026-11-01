@@ -134,28 +134,33 @@ test('region edits are clamped, ordered, merged, and may go anywhere in the song
   assert.equal(regions.regionHasChord({ start: 1, end: 2.1 }, chords), true);
 });
 
-test('each chord strike varies onset and length by at most 1%, repeatably, keeping chord notes together', () => {
-  const chords = [{ start: 0, end: 8, chord: 'C' }, { start: 8, end: 16, chord: 'Am' }];
+test('every note draws its own onset and length change of 0.01% to 0.05%, repeatably', () => {
+  const chords = [{ start: 1, end: 9, chord: 'C' }, { start: 9, end: 17, chord: 'Am' }];
   for (const style of ['pad', 'arpeggio', 'rhythm', 'strum']) {
     const nominal = audio.accompanimentNotes(chords, style, 120);
     const varied = audio.humanizeNotes(nominal, audio.seededRandom(42));
     assert.equal(varied.length, nominal.length);
-    let onsetChanges = 0, lengthChanges = 0;
+    const onsets = [], lengths = [];
     nominal.forEach((note, i) => {
-      const onset = Math.abs(varied[i].start - note.start), length = Math.abs(varied[i].duration - note.duration);
-      assert.ok(onset <= note.duration * 0.01 + 1e-9, `${style} onset ${onset}`);
-      assert.ok(length <= note.duration * 0.01 + 1e-9, `${style} length ${length}`);
-      if (onset > 0) onsetChanges++;
-      if (length > 0) lengthChanges++;
+      const onset = (varied[i].start - note.start) / note.duration, length = (varied[i].duration - note.duration) / note.duration;
+      for (const change of [onset, length]) {
+        assert.ok(Math.abs(change) >= 0.0001 - 1e-9 && Math.abs(change) <= 0.0005 + 1e-9, `${style} ${change}`);
+      }
+      onsets.push(onset);
+      lengths.push(length);
     });
-    assert.ok(onsetChanges > 0 && lengthChanges > 0);
+    assert.equal(new Set(onsets).size, onsets.length, `${style} onsets are all different`);
+    assert.equal(new Set(lengths).size, lengths.length, `${style} lengths are all different`);
     assert.deepEqual(audio.humanizeNotes(nominal, audio.seededRandom(42)), varied);
     assert.notDeepEqual(audio.humanizeNotes(nominal, audio.seededRandom(43)), varied);
   }
-  const pad = audio.humanizeNotes(audio.accompanimentNotes(chords, 'pad', 120), audio.seededRandom(1));
-  assert.equal(new Set(pad.slice(0, 4).map(note => note.start)).size, 1);
-  assert.equal(new Set(pad.slice(0, 4).map(note => note.duration)).size, 1);
-  assert.notEqual(pad[0].duration / 8, pad[4].duration / 8);
+  const many = audio.humanizeNotes(audio.accompanimentNotes(chords, 'rhythm', 240), audio.seededRandom(9));
+  const nominal = audio.accompanimentNotes(chords, 'rhythm', 240);
+  const changes = many.map((note, i) => (note.start - nominal[i].start) / nominal[i].duration);
+  assert.ok(changes.some(change => change > 0) && changes.some(change => change < 0), 'varies both ways');
+  const sizes = changes.map(Math.abs);
+  assert.ok(Math.max(...sizes) - Math.min(...sizes) > 0.0002, 'uses the range, not one fixed amount');
+  assert.equal(audio.humanizeNotes([{ midi: 60, start: 0, duration: 1, velocity: 0.1 }], () => 0)[0].start, 0, 'never before the song starts');
 });
 
 test('planned notes sit only inside regions and keep the song beat grid', () => {
@@ -166,7 +171,7 @@ test('planned notes sit only inside regions and keep the song beat grid', () => 
     assert.ok(notes.length, style);
     for (const note of notes) {
       assert.ok(selection.some(region => note.start >= region.start && note.start + note.duration <= region.end + 1e-9), JSON.stringify(note));
-      assert.ok(note.start < 4 || note.start >= 8 - 0.04 - 1e-9, 'N chords stay silent apart from the 1% early onset limit');
+      assert.ok(note.start < 4 || note.start >= 8 - 0.002 - 1e-9, 'N chords stay silent apart from the 0.05% early onset limit');
     }
   }
   const rhythm = audio.planNotes(chords, 'synth', 'rhythm', 120, [{ start: 1.3, end: 2.6 }], 5);

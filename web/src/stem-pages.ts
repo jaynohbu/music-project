@@ -13,6 +13,7 @@ import {
 const MAX_UPLOAD_BYTES = 30_000_000;
 const MAX_AUDIO_SECONDS = 420;
 const STEM_POLL_MS = 4000;
+const STEM_DOWNLOAD_POOL = 4;
 
 @Component({
   standalone: true,
@@ -971,17 +972,21 @@ export class MixerPage implements OnInit, OnDestroy {
       return;
     }
 
-    for (const { name, file } of files) {
-      const url = file?.playUrl;
-      if (this.runtimes.has(name)) continue;
-      if (!url) continue;
+    const missing = files.flatMap(({ name, file }) =>
+      !this.runtimes.has(name) && file?.playUrl ? [{ name, url: file.playUrl }] : []);
+    const decoding = inPool(missing, STEM_DOWNLOAD_POOL, async ({ name, url }) => {
       this.updateTrack(name, { status: 'loading', error: undefined });
+      const response = await fetch(url, { signal: controller.signal });
+      if (!response.ok) throw new Error(`Audio request failed (HTTP ${response.status}).`);
+      return context.decodeAudioData(await response.arrayBuffer());
+    });
+    // Handled below in order; this only covers results left behind by an early return.
+    for (const pending of decoding) pending.catch(() => undefined);
+
+    // Stems download together but become ready in order, so originals stay the alignment reference.
+    for (const [index, { name }] of missing.entries()) {
       try {
-        const response = await fetch(url, { signal: controller.signal });
-        if (!response.ok) throw new Error(`Audio request failed (HTTP ${response.status}).`);
-        const encoded = await response.arrayBuffer();
-        if (this.destroyed || generation !== this.generation) return;
-        const buffer = await context.decodeAudioData(encoded);
+        const buffer = await decoding[index];
         if (this.destroyed || generation !== this.generation) return;
         if (this.deletedStems.has(name)) continue;
         if (!Number.isFinite(buffer.duration) || buffer.duration <= 0) {
@@ -1254,6 +1259,21 @@ export class MixerPage implements OnInit, OnDestroy {
     const seconds = Math.floor(value);
     return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
   }
+}
+
+function inPool<T, R>(items: T[], size: number, task: (item: T) => Promise<R>): Promise<R>[] {
+  const waiting: (() => void)[] = [];
+  let free = size;
+  return items.map(async item => {
+    if (free > 0) free--;
+    else await new Promise<void>(resolve => waiting.push(resolve));
+    try {
+      return await task(item);
+    } finally {
+      const next = waiting.shift();
+      if (next) next(); else free++;
+    }
+  });
 }
 
 function waveformPeaks(buffer: AudioBuffer): number[] {

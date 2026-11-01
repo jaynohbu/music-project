@@ -44,32 +44,28 @@ function chordNotes(chord: string): number[] {
   return [48 + root, 60 + root, 60 + root + (match[2] ? 3 : 4), 60 + root + 7];
 }
 
-// `strike` groups the notes of one played chord so they vary together.
-export interface NoteEvent { midi: number; start: number; duration: number; velocity: number; strike: number }
+export interface NoteEvent { midi: number; start: number; duration: number; velocity: number }
 export function accompanimentNotes(chords: ChordEvent[], style: PlayingStyle, tempo: number): NoteEvent[] {
   if (!Number.isFinite(tempo) || tempo < 40 || tempo > 240) throw new Error('Tempo must be between 40 and 240 BPM.');
   const beat = 60 / tempo;
   const result: NoteEvent[] = [];
-  let strike = 0;
   for (const chord of chords) {
     const notes = chordNotes(chord.chord);
     if (!notes.length) continue;
     if (style === 'pad') {
-      strike++;
-      for (const midi of notes) result.push({ midi, start: chord.start, duration: chord.end - chord.start, velocity: 0.13, strike });
+      for (const midi of notes) result.push({ midi, start: chord.start, duration: chord.end - chord.start, velocity: 0.13 });
       continue;
     }
     const step = style === 'arpeggio' ? beat / 2 : beat;
     for (let start = chord.start, index = 0; start < chord.end - 0.001; start += step, index++) {
-      strike++;
       if (style === 'arpeggio') {
         result.push({ midi: notes[index % notes.length], start,
-          duration: Math.min(step * 1.5, chord.end - start), velocity: 0.24, strike });
+          duration: Math.min(step * 1.5, chord.end - start), velocity: 0.24 });
       } else {
         for (let i = 0; i < notes.length; i++) {
           const time = start + (style === 'strum' ? i * 0.025 : 0);
           if (time < chord.end) result.push({ midi: notes[i], start: time,
-            duration: Math.min(beat * 0.85, chord.end - time), velocity: 0.13, strike });
+            duration: Math.min(beat * 0.85, chord.end - time), velocity: 0.13 });
         }
       }
     }
@@ -110,16 +106,19 @@ export function seededRandom(seed: number): () => number {
   };
 }
 
-export const MAX_TIMING_VARIATION = 0.01;
+export const MIN_TIMING_VARIATION = 0.0001;
+export const MAX_TIMING_VARIATION = 0.0005;
+// Every note draws its own onset and length change, early or late, short or long.
 export function humanizeNotes(notes: NoteEvent[], random: () => number): NoteEvent[] {
-  const variation = (): number => (random() * 2 - 1) * MAX_TIMING_VARIATION;
-  const strikes = new Map<number, { onset: number; length: number }>();
-  return notes.map(note => {
-    let choice = strikes.get(note.strike);
-    if (!choice) { choice = { onset: variation(), length: variation() }; strikes.set(note.strike, choice); }
-    return { ...note, start: Math.max(0, note.start + choice.onset * note.duration),
-      duration: note.duration * (1 + choice.length) };
-  });
+  const variation = (): number => {
+    const size = MIN_TIMING_VARIATION + random() * (MAX_TIMING_VARIATION - MIN_TIMING_VARIATION);
+    return random() < 0.5 ? -size : size;
+  };
+  return notes.map(note => ({
+    ...note,
+    start: Math.max(0, note.start + variation() * note.duration),
+    duration: note.duration * (1 + variation()),
+  }));
 }
 
 // A note crossing a region start restarts there; a short leftover would only click.
