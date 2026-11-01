@@ -1,0 +1,7 @@
+{
+  "/api/**": {
+    "target": "https://d324d1xuqjbi6.cloudfront.net",
+    "secure": true,
+    "changeOrigin": true
+  }
+}

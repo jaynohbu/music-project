@@ -1,0 +1,38 @@
+{
+  "$schema": "./node_modules/@angular/cli/lib/config/schema.json",
+  "version": 1,
+  "projects": {
+    "youtube-library": {
+      "projectType": "application",
+      "root": "",
+      "sourceRoot": "src",
+      "architect": {
+        "build": {
+          "builder": "@angular/build:application",
+          "options": {
+            "browser": "src/main.ts",
+            "index": "src/index.html",
+            "tsConfig": "tsconfig.json",
+            "assets": [{ "glob": "**/*", "input": "public" }],
+            "styles": ["src/styles.css"],
+            "outputPath": "dist/youtube-library",
+            "budgets": [
+              { "type": "initial", "maximumWarning": "500kB", "maximumError": "1MB" }
+            ],
+            "outputHashing": "all"
+          },
+          "configurations": {
+            "development": { "optimization": false, "sourceMap": true }
+          }
+        },
+        "serve": {
+          "builder": "@angular/build:dev-server",
+          "options": { "buildTarget": "youtube-library:build:development" }
+        }
+      }
+    }
+  },
+  "cli": {
+    "analytics": "3569f812-1e2a-40bd-9e1c-12d31ede148d"
+  }
+}

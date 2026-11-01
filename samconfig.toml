@@ -1,0 +1,9 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "youtube-audio-library"
+region = "us-west-2"
+resolve_s3 = false
+resolve_image_repos = true
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true

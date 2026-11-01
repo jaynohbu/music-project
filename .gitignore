@@ -1,0 +1,6 @@
+**/node_modules/
+web/dist/
+.aws-sam/
+web/.angular/
+web/public/config.json
+.venv-download/
