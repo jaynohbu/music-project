@@ -53,7 +53,7 @@ export function createWorker({
         '--retries', '2', '--fragment-retries', '2',
         '--match-filter', `duration <= ${MAX_DURATION} & !is_live`,
         '--max-filesize', String(MAX_BYTES), '--format', 'bestaudio/best',
-        '--extract-audio', '--audio-format', 'wav',
+        '--extract-audio', '--audio-format', 'mp3', '--audio-quality', '192K',
         '--ffmpeg-location', path.dirname(ffmpegPath),
         '--write-info-json', '--output', path.join(directory, 'audio.%(ext)s'),
         '--', url,
@@ -63,7 +63,7 @@ export function createWorker({
         // Python must load system OpenSSL, not the Lambda Node runtime's libraries.
         env: { ...process.env, LD_LIBRARY_PATH: '', HOME: '/tmp', XDG_CACHE_HOME: '/tmp/.cache' },
       });
-      const file = path.join(directory, 'audio.wav');
+      const file = path.join(directory, 'audio.mp3');
       stage = 'output';
       let details;
       try {
@@ -78,11 +78,11 @@ export function createWorker({
       if (!info || typeof info !== 'object' || Array.isArray(info)) {
         throw new ConversionError('METADATA_INVALID');
       }
-      const key = `users/${job.userId}/${job.jobId}.wav`;
+      const key = `users/${job.userId}/${job.jobId}.mp3`;
       stage = 'upload';
       await storage.send(new PutObjectCommand({
         Bucket: process.env.BUCKET_NAME, Key: key,
-        Body: createReadStream(file), ContentLength: details.size, ContentType: 'audio/wav',
+        Body: createReadStream(file), ContentLength: details.size, ContentType: 'audio/mpeg',
       }));
       stage = 'record';
       await update('completed', {

@@ -149,6 +149,23 @@ test('list queries only current user and signs completed private files', async (
     signer: async (_, command, options) => { signed.push({ input: command.input, options }); return 'https://signed.test'; },
   });
 
+  test('download names follow the stored format, old WAV and new MP3', async () => {
+    const dispositions = [];
+    const createdAt = new Date().toISOString();
+    const handler = createHandler({
+      database: { send: async () => ({ Items: [
+        { jobId: 'old', createdAt, status: 'completed', key: 'users/alice/old.wav' },
+        { jobId: 'new', createdAt, status: 'completed', key: 'users/alice/new.mp3' },
+      ] }) },
+      signer: async (_, command) => {
+        if (command.input.ResponseContentDisposition) dispositions.push(command.input.ResponseContentDisposition);
+        return 'https://signed.test';
+      },
+    });
+    assert.equal((await handler(request('GET'))).statusCode, 200);
+    assert.deepEqual(dispositions, ['attachment; filename="old.wav"', 'attachment; filename="new.mp3"']);
+  });
+
   test('failed history is hidden at exactly ten minutes, successful records remain', async () => {
     const now = Date.now();
     const createdAt = new Date(now - 3600000).toISOString();

@@ -104,7 +104,8 @@ export function createHandler({ database = db, invoker = lambda, signer = getSig
           ...job,
           playUrl: await signer(s3, new GetObjectCommand(params), { expiresIn: 3600 }),
           downloadUrl: await signer(s3, new GetObjectCommand({
-            ...params, ResponseContentDisposition: `attachment; filename="${job.jobId}.wav"`,
+            // Older files are WAV, newer ones MP3.
+            ...params, ResponseContentDisposition: `attachment; filename="${job.jobId}${job.key.endsWith('.mp3') ? '.mp3' : '.wav'}"`,
           }), { expiresIn: 3600 }),
         };
       }));

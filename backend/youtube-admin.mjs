@@ -18,7 +18,7 @@ export async function restrictLegacyYoutube({ database, storage, table, bucket, 
     }));
     for (const job of page.Items ?? []) {
       if (!job.key) continue;
-      if (job.key !== `users/${job.userId}/${job.jobId}.wav`) {
+      if (![`users/${job.userId}/${job.jobId}.wav`, `users/${job.userId}/${job.jobId}.mp3`].includes(job.key)) {
         throw new Error('Unexpected legacy YouTube storage key; review before revoking access.');
       }
       let existing;
