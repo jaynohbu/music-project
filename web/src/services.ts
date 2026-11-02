@@ -314,10 +314,17 @@ export class LibraryService {
 
   async create(url: string): Promise<{ job: Job }> {
     const token = await this.auth.token();
-    return firstValueFrom(this.http.post<{ job: Job }>(
-      `${this.config.apiBaseUrl}/jobs`, { url },
+    try {
+      return await firstValueFrom(this.http.post<{ job: Job }>(
+      'http://127.0.0.1:3001/api/jobs', { url },
       { headers: { Authorization: `Bearer ${token}` } },
     ));
+    } catch (error) {
+      if (error instanceof HttpErrorResponse && error.status === 0) {
+        throw new Error('Cannot reach the local conversion service at http://127.0.0.1:3001. Start the local service on this computer and allow local-network access in your browser.');
+      }
+      throw error;
+    }
   }
 
   async list(cursor?: string): Promise<JobPage> {

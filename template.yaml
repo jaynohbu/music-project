@@ -14,6 +14,10 @@ Parameters:
     Type: String
     Default: youtube-audio-library/registration-password
     Description: Secrets Manager secret containing the initial permanent password as plain text
+  WebsiteCertificateArn:
+    Type: String
+    Default: arn:aws:acm:us-east-1:086723604095:certificate/1b3f6e5a-ca7f-4c81-9e95-8de787d3a82e
+    Description: us-east-1 ACM certificate for tunesbasis.com and www.tunesbasis.com
 
 Resources:
   UserPool:
@@ -714,9 +718,21 @@ Resources:
               issuer: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}'
               audience: [!Ref UserPoolClient]
       CorsConfiguration:
-        AllowOrigins: ['http://localhost:4200']
+        AllowOrigins:
+          - http://localhost:4200
+          - https://tunesbasis.com
+          - https://www.tunesbasis.com
+          - https://d324d1xuqjbi6.cloudfront.net
         AllowHeaders: [Authorization, Content-Type, X-Account-Session]
         AllowMethods: [GET, POST, PATCH, DELETE, OPTIONS]
+  # The domain name and its certificate already exist outside this stack.
+  ApiDomainMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    DependsOn: HttpApiApiGatewayDefaultStage
+    Properties:
+      DomainName: api.tunesbasis.com
+      ApiId: !Ref HttpApi
+      Stage: $default
   WebsiteBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -759,6 +775,11 @@ Resources:
     Properties:
       DistributionConfig:
         Enabled: true
+        Aliases: [tunesbasis.com, www.tunesbasis.com]
+        ViewerCertificate:
+          AcmCertificateArn: !Ref WebsiteCertificateArn
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
         DefaultRootObject: index.html
         HttpVersion: http2and3
         PriceClass: PriceClass_100
@@ -825,7 +846,9 @@ Outputs:
   StemStateMachineArn:
     Value: !Ref StemWorkflow
   WebsiteUrl:
-    Value: !Sub 'https://${Website.DomainName}'
+    Value: https://tunesbasis.com
+  PublicApiUrl:
+    Value: https://api.tunesbasis.com/api
   WebsiteBucketName:
     Value: !Ref WebsiteBucket
   DistributionId:

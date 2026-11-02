@@ -35,13 +35,44 @@ export function localQueue(worker, capacity = 2) {
   };
 }
 
+const HOSTED_ORIGINS = ['https://tunesbasis.com', 'https://www.tunesbasis.com', 'https://d324d1xuqjbi6.cloudfront.net'];
+
 export function createLocalServer({ api, accounts, stems, scenes, verify }) {
   return createServer(async (request, response) => {
+    const origin = request.headers.origin;
+    const trustedOrigin = HOSTED_ORIGINS.includes(origin);
+    const localSubmission = request.url === '/api/jobs' && request.method === 'POST';
+    const preflight = request.url === '/api/jobs' && request.method === 'OPTIONS' &&
+      request.headers['access-control-request-method'] === 'POST';
+    if (trustedOrigin && (localSubmission || preflight)) {
+      response.setHeader('Access-Control-Allow-Origin', origin);
+      response.setHeader('Vary', 'Origin');
+    }
     const reply = (status, message) => {
       response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
       response.end(JSON.stringify({ message }));
     };
     try {
+      if (request.method === 'OPTIONS') {
+        const headers = (request.headers['access-control-request-headers'] ?? '').toLowerCase()
+          .split(',').map(header => header.trim()).filter(Boolean);
+        if (!trustedOrigin || !preflight || headers.some(header => !['authorization', 'content-type'].includes(header))) {
+          reply(403, 'Cross-origin request is not allowed.');
+          return;
+        }
+        response.setHeader('Access-Control-Allow-Methods', 'POST');
+        response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+        if (request.headers['access-control-request-private-network'] === 'true') {
+          response.setHeader('Access-Control-Allow-Private-Network', 'true');
+        }
+        response.writeHead(204);
+        response.end();
+        return;
+      }
+      if (origin && !trustedOrigin && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+        reply(403, 'Cross-origin request is not allowed.');
+        return;
+      }
       const url = new URL(request.url, 'http://127.0.0.1');
       if (request.method === 'GET' && url.pathname === '/health') {
         response.writeHead(200, { 'content-type': 'application/json' });

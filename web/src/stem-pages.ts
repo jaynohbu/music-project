@@ -22,7 +22,7 @@ const STEM_DOWNLOAD_POOL = 4;
   standalone: true,
   imports: [FormsModule, RouterLink],
   template: `
-    <section class="card narrow">
+    <section class="card upload-page">
       <span class="eyebrow">SIX-STEM SEPARATION</span>
       <h1>Upload audio to split</h1>
       <button type="button" class="secondary" (click)="back()">Back to Music</button>
@@ -327,7 +327,7 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
   standalone: true,
   imports: [RouterLink, FormsModule, LyricsStrip, LyricsEditor, HarmonyStrip],
   template: `
-    <section class="card">
+    <section class="card mixer-page">
       <div class="section-heading">
         <div>
           <span class="eyebrow">SIX-STEM MIXER</span>

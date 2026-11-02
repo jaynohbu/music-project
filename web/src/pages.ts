@@ -74,6 +74,9 @@ export class LoginPage {
     <section class="card">
       <span class="eyebrow">YOUR AUDIO LIBRARY</span>
       <h1>Turn a video into audio</h1>
+      <p class="hint">Conversion runs on this computer using http://127.0.0.1:3001.
+        Start the local service first and allow local-network access if your browser asks.
+        Your library and converted audio are still saved in AWS.</p>
       <a routerLink="/youtube-files">Your YouTube files</a>
       <p>Paste a YouTube video URL. We will extract a WAV file and save it privately.</p>
       <form (ngSubmit)="submit()">
@@ -124,7 +127,7 @@ export class UploadPage {
     <section class="card">
       <div class="section-heading">
         <div><span class="eyebrow">{{ youtubeView ? 'YOUR CONVERSIONS' : 'YOUR SPLIT SONGS' }}</span><h1>{{ youtubeView ? 'YouTube files' : 'Music' }}</h1></div>
-        <div class="scene-actions"><a routerLink="/split">Upload &amp; split</a>
+        <div class="scene-actions"><a class="button-link" routerLink="/split">Upload &amp; split</a>
           <button class="secondary" (click)="refresh()" [disabled]="busy()">Refresh</button></div>
       </div>
       <p class="hint">Jobs refresh every 5 seconds while this page is open.

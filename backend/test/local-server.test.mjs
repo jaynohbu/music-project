@@ -27,6 +27,60 @@ test('local health explicitly reports local conversion and AWS storage', async t
     { status: 'ok', conversion: 'local', storage: 'aws' });
 });
 
+test('hosted Sorituh can preflight local conversion with private-network access', async t => {
+  const { base, events } = await serverFixture(t);
+  const origin = 'https://d324d1xuqjbi6.cloudfront.net';
+  const response = await fetch(`${base}/api/jobs`, { method: 'OPTIONS', headers: {
+    Origin: origin, 'Access-Control-Request-Method': 'POST',
+    'Access-Control-Request-Headers': 'authorization,content-type',
+    'Access-Control-Request-Private-Network': 'true',
+  } });
+  assert.equal(response.status, 204);
+  assert.equal(response.headers.get('access-control-allow-origin'), origin);
+  assert.equal(response.headers.get('access-control-allow-private-network'), 'true');
+  assert.equal(response.headers.get('access-control-allow-methods'), 'POST');
+  assert.equal(events.length, 0);
+  const unauthorized = await fetch(`${base}/api/jobs`, { method: 'POST', headers: { Origin: origin } });
+  assert.equal(unauthorized.status, 401);
+  assert.equal(unauthorized.headers.get('access-control-allow-origin'), origin);
+  const submitted = await fetch(`${base}/api/jobs`, {
+    method: 'POST', headers: { Origin: origin, Authorization: 'Bearer valid-token' }, body: '{"url":"https://youtu.be/abcdefghijk"}',
+  });
+  assert.equal(submitted.status, 200);
+  assert.equal(submitted.headers.get('access-control-allow-origin'), origin);
+  assert.equal(events[0].requestContext.authorizer.jwt.claims.sub, 'cognito-user');
+});
+
+test('local conversion trusts the public site domains', async t => {
+  const { base } = await serverFixture(t);
+  for (const origin of ['https://tunesbasis.com', 'https://www.tunesbasis.com']) {
+    const response = await fetch(`${base}/api/jobs`, { method: 'OPTIONS', headers: {
+      Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'authorization',
+    } });
+    assert.equal(response.status, 204);
+    assert.equal(response.headers.get('access-control-allow-origin'), origin);
+  }
+});
+
+test('local CORS rejects untrusted sites, other routes, and unsupported headers', async t => {
+  const { base, events } = await serverFixture(t);
+  for (const [path, origin, headers] of [
+    ['/api/jobs', 'https://untrusted.example', 'authorization'],
+    ['/api/scenes', 'https://d324d1xuqjbi6.cloudfront.net', 'authorization'],
+    ['/api/jobs', 'https://d324d1xuqjbi6.cloudfront.net', 'x-untrusted'],
+  ]) {
+    const response = await fetch(base + path, { method: 'OPTIONS', headers: {
+      Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': headers,
+    } });
+    assert.equal(response.status, 403);
+    assert.equal(response.headers.get('access-control-allow-methods'), null);
+  }
+  assert.equal((await fetch(`${base}/api/jobs`, { method: 'POST', headers: {
+    Origin: 'https://untrusted.example', Authorization: 'Bearer valid-token',
+  } })).status, 403);
+  assert.equal(events.length, 0);
+});
+
 test('local jobs require verified Cognito JWT and use verified subject', async t => {
   const { base, events } = await serverFixture(t);
   assert.equal((await fetch(`${base}/api/jobs`)).status, 401);

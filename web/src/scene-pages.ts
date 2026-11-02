@@ -1,4 +1,4 @@
-import { Component, ElementRef, HostListener, OnDestroy, OnInit, ViewChild, inject, signal } from '@angular/core';
+import { Component, ElementRef, HostListener, Injector, OnDestroy, OnInit, ViewChild, afterNextRender, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { ConfirmationService } from './confirmation';
@@ -25,7 +25,7 @@ async function allSongs(library: LibraryService): Promise<Job[]> {
       <p>Save split songs in order, with independent mixer settings for each entry.</p>
       @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
       @if (addingSong) { <p class="hint">Choose a scene for this song, or create a new scene.</p> }
-      <form (ngSubmit)="create()">
+      <form class="scene-create" (ngSubmit)="create()">
         <label for="scene-name">New scene name</label>
         <input id="scene-name" name="name" [(ngModel)]="name" maxlength="200" required [disabled]="busy()">
         <button [disabled]="busy() || !name.trim()">Create scene</button>
@@ -125,36 +125,39 @@ export class ScenesPage implements OnInit {
           <button type="button" (click)="openPicker()">Add songs</button>
         </div>
         @if (saveError()) { <p class="error" role="alert">{{ saveError() }}</p> }
-        <p class="hint">Drag songs up or down to reorder. Settings and scene titles save automatically.
+        <p class="hint">Choose a song tab to open its mixer. Drag tabs to reorder, or use Move earlier/later.
+          Settings and scene titles save automatically.
           Loop repeats the current song; turn it off to continue to the next.</p>
-        <ol class="scene-song-list" (dragover)="dragOver($event)" (drop)="drop($event)">
+        <div #songTabs class="scene-song-tabs" role="tablist" aria-label="Scene songs"
+          (dragover)="dragOver($event)" (drop)="drop($event)">
           @for (entry of scene.entries; track entry.id; let i = $index) {
-            <li [class.current]="activeId() === entry.id" [attr.data-entry]="entry.id"
-              [class.dragging]="draggedId === entry.id">
-              <button type="button" class="drag-handle secondary" draggable="true"
-                (dragstart)="dragStart(entry.id, $event)" (dragend)="endDrag()"
-                [attr.aria-label]="'Drag ' + (i + 1) + '. ' + title(entry)">↕</button>
-              <div class="scene-entry-name">
-                <button type="button" class="song-select" (click)="select(entry.id)"
-                  [attr.aria-label]="'Load ' + (i + 1) + '. ' + title(entry)">
-                  {{ i + 1 }}. {{ title(entry) }}
-                </button>
-                <label [for]="'scene-title-' + entry.id">Scene song title</label>
-                <input [id]="'scene-title-' + entry.id" [ngModel]="entry.title ?? title(entry)"
-                  (ngModelChange)="renameEntry(entry.id, $event)" maxlength="200">
-              </div>
-              <div class="scene-actions">
-                <button type="button" class="secondary" (click)="move(entry.id, -1)" [disabled]="i === 0"
-                  [attr.aria-label]="'Move ' + (i + 1) + '. ' + title(entry) + ' up'">↑</button>
-                <button type="button" class="secondary" (click)="move(entry.id, 1)" [disabled]="i === scene.entries.length - 1"
-                  [attr.aria-label]="'Move ' + (i + 1) + '. ' + title(entry) + ' down'">↓</button>
-                <button type="button" class="secondary" (click)="removeEntry(entry.id)">Remove</button>
-              </div>
-            </li>
+            <button type="button" role="tab" class="scene-song-tab" draggable="true"
+              [id]="'song-tab-' + entry.id" [attr.data-entry]="entry.id"
+              [attr.aria-selected]="activeId() === entry.id" [attr.aria-controls]="'song-panel-' + entry.id"
+              [tabIndex]="activeId() === entry.id ? 0 : -1" [class.dragging]="draggedId === entry.id"
+              (click)="select(entry.id)" (keydown)="tabKey(entry.id, $event)"
+              (dragstart)="dragStart(entry.id, $event)" (dragend)="endDrag()">
+              <span class="tab-order">{{ i + 1 }}</span><span class="tab-title">{{ title(entry) }}</span>
+            </button>
           }
-        </ol>
+        </div>
         @if (!scene.entries.length) { <p>This scene is empty. Add songs to get started.</p> }
         @if (activeEntry(); as active) {
+          <div class="scene-song-tools">
+            <div class="scene-entry-name">
+              <label [for]="'scene-title-' + active.id">Scene song title</label>
+              <input [id]="'scene-title-' + active.id" [ngModel]="active.title ?? title(active)"
+                (ngModelChange)="renameEntry(active.id, $event)" maxlength="200">
+            </div>
+            <div class="scene-actions">
+              <button type="button" class="secondary" (click)="move(active.id, -1)"
+                [disabled]="activeIndex() === 0">Move earlier</button>
+              <button type="button" class="secondary" (click)="move(active.id, 1)"
+                [disabled]="activeIndex() === scene.entries.length - 1">Move later</button>
+              <button type="button" class="secondary" (click)="removeEntry(active.id)">Remove song</button>
+            </div>
+          </div>
+          <div role="tabpanel" [id]="'song-panel-' + active.id" [attr.aria-labelledby]="'song-tab-' + active.id">
           <div class="scene-actions">
             @if (playbackError()) {
               <p class="error" role="alert">{{ playbackError() }}</p>
@@ -170,6 +173,7 @@ export class ScenesPage implements OnInit {
               (settingsChanged)="settings(entry.id, $event)" (sceneTitleChanged)="renameEntry(entry.id, $event)"
               (songEnded)="next(true)" (audioReady)="ready()" (audioFailed)="failed($event)"></app-stem-mixer>
           }
+          </div>
         }
       } @else if (!error()) { <p role="status">Loading scene...</p> }
     </section>
@@ -195,6 +199,8 @@ export class ScenePage implements OnInit, OnDestroy {
   private readonly confirm = inject(ConfirmationService);
   @ViewChild('picker') picker?: ElementRef<HTMLDialogElement>;
   @ViewChild(MixerPage) mixer?: MixerPage;
+  @ViewChild('songTabs') songTabs?: ElementRef<HTMLElement>;
+  private readonly injector = inject(Injector);
   readonly scene = signal<Scene | null>(null);
   readonly songs = signal<Job[]>([]);
   readonly error = signal('');
@@ -212,8 +218,36 @@ export class ScenePage implements OnInit, OnDestroy {
   private autoPlay = false;
   private destroyed = false;
   private dragY = 0;
+  private dragX = 0;
   private dragFrame = 0;
   private readonly id = this.route.snapshot.paramMap.get('sceneId')!;
+
+  constructor() {
+    effect(() => {
+      const id = this.activeId();
+      const order = this.scene()?.entries.map(entry => entry.id).join(',');
+      if (id && order) afterNextRender(() => this.revealTab(id), { injector: this.injector });
+    });
+  }
+  private revealTab(id: string): void {
+    const list = this.songTabs?.nativeElement;
+    const tab = document.getElementById('song-tab-' + id);
+    if (!list || !tab) return;
+    const bounds = list.getBoundingClientRect(), item = tab.getBoundingClientRect();
+    if (item.left < bounds.left) list.scrollLeft += item.left - bounds.left - 4;
+    else if (item.right > bounds.right) list.scrollLeft += item.right - bounds.right + 4;
+  }
+  tabKey(id: string, event: KeyboardEvent): void {
+    const entries = this.scene()?.entries ?? [];
+    const index = entries.findIndex(entry => entry.id === id);
+    const target = event.key === 'ArrowRight' ? (index + 1) % entries.length
+      : event.key === 'ArrowLeft' ? (index - 1 + entries.length) % entries.length
+      : event.key === 'Home' ? 0 : event.key === 'End' ? entries.length - 1 : -1;
+    if (target < 0 || !entries[target]) return;
+    event.preventDefault();
+    this.select(entries[target].id);
+    document.getElementById('song-tab-' + entries[target].id)?.focus({ preventScroll: true });
+  }
 
   async ngOnInit(): Promise<void> {
     try {
@@ -345,10 +379,17 @@ export class ScenePage implements OnInit, OnDestroy {
   dragStart(id: string, event: DragEvent): void {
     this.draggedId = id;
     this.dragY = event.clientY;
+    this.dragX = event.clientX;
     event.dataTransfer?.setData('text/plain', id);
     if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
     const scroll = () => {
       if (!this.draggedId) return;
+      const tabs = this.songTabs?.nativeElement;
+      if (tabs) {
+        const bounds = tabs.getBoundingClientRect();
+        if (this.dragX < bounds.left + 60) tabs.scrollLeft -= 14;
+        else if (this.dragX > bounds.right - 60) tabs.scrollLeft += 14;
+      }
       if (this.dragY < 90) window.scrollBy(0, -14);
       else if (this.dragY > window.innerHeight - 90) window.scrollBy(0, 14);
       this.dragFrame = requestAnimationFrame(scroll);
@@ -356,7 +397,9 @@ export class ScenePage implements OnInit, OnDestroy {
     this.dragFrame = requestAnimationFrame(scroll);
   }
   @HostListener('document:dragover', ['$event'])
-  dragOver(event: DragEvent): void { if (this.draggedId) { event.preventDefault(); this.dragY = event.clientY; } }
+  dragOver(event: DragEvent): void {
+    if (this.draggedId) { event.preventDefault(); this.dragY = event.clientY; this.dragX = event.clientX; }
+  }
   @HostListener('document:visibilitychange')
   saveWhenHidden(): void { if (document.visibilityState === 'hidden') void this.flush(); }
   drop(event: DragEvent): void {

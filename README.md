@@ -11,6 +11,11 @@ TunesBasis API and frontend are unchanged. As requested, this app creates its
 
 ## Pages
 
+The desktop workspace is fluid-width with compact page gutters. Music and scene
+libraries use responsive cards; ordered scene songs appear as numbered tabs.
+Login/account forms remain focused and narrow, and the upload flow has its own
+readable form width. Mixer faders retain their hardware-style controls.
+
 - Login: email/password; supports administrator-issued temporary passwords.
 - Register: request an account, disabled until manually enabled in Cognito.
 - Forgot password: email reset code, then code/new-password confirmation.
@@ -19,6 +24,12 @@ TunesBasis API and frontend are unchanged. As requested, this app creates its
   by the deployment tooling, not a browser-supplied email. Other users cannot
   use the YouTube route or API, even for older jobs. The YouTube page links to
   the owner's separate conversion library.
+  YouTube submissions are hard-coded to `http://127.0.0.1:3001/api/jobs`,
+  including on the hosted website. Start the local service on the browser's
+  computer and grant local-network access if prompted. There is no Lambda
+  fallback; connection failures are shown explicitly. Listing and audio remain
+  on AWS. The local server allows authenticated conversion POSTs from the
+  Sorituh CloudFront origin, including CORS/private-network preflight.
 - Music: the default page after login, with the user's split songs, status/errors,
   pagination, **Open stem mixer**, **Add to scene**, and **Delete song**.
 - Upload & split: a dedicated full-screen flow hides the normal navigation,
@@ -28,7 +39,9 @@ TunesBasis API and frontend are unchanged. As requested, this app creates its
 - Scenes: private, named sets of up to 99 song entries, referencing completed
   split songs without copying their audio. Create a scene, add songs from Music
   or its song picker, edit scene-only song titles, remove songs, and reorder by
-  dragging with edge scrolling or the Up/Down buttons. Titles always carry the
+  dragging tabs with edge scrolling or the Move earlier/later buttons. Select a
+  numbered tab to open that song's mixer; arrow keys and Home/End navigate tabs.
+  Tabs scroll horizontally on smaller screens. Titles always carry the
   current order number. Duplicate songs have independent entry settings.
   Loading a scene opens the first song without autoplay. Play starts the mixer;
   natural completion advances and plays the next song, stopping after the last.
@@ -149,7 +162,10 @@ TunesBasis API and frontend are unchanged. As requested, this app creates its
 
 ## Architecture
 
-CloudFront serves the Angular app from a private S3 bucket and forwards `/api/*`
+The site is `https://tunesbasis.com` (also `www`) and the deployed frontend calls
+`https://api.tunesbasis.com/api`. The `api` domain and its us-west-2 certificate, and
+the Route 53 records, live outside the stack; the stack holds only the API mapping.
+CloudFront serves the Angular app from a private S3 bucket and still forwards `/api/*`
 to API Gateway. JWT-authenticated requests create/list per-user DynamoDB jobs.
 The stack creates its own zero-TTL cache policy for API requests and runtime
 configuration, so authenticated responses and configuration are never cached.
