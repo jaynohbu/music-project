@@ -6,33 +6,45 @@ import { AuthService, CONFIG, Config, errorMessage } from './services';
 import { ListPage, LoginPage, UploadPage } from './pages';
 import { MixerPage, SplitPage } from './stem-pages';
 import { ForgotPasswordPage, RegisterPage } from './account-pages';
+import { ConfirmationDialog } from './confirmation';
+import { ScenePage, ScenesPage } from './scene-pages';
 
 const authenticated: CanActivateFn = () =>
   inject(AuthService).signedIn() || inject(Router).createUrlTree(['/login']);
 const anonymous: CanActivateFn = () =>
-  !inject(AuthService).signedIn() || inject(Router).createUrlTree(['/upload']);
+  !inject(AuthService).signedIn() || inject(Router).createUrlTree(['/list']);
+const youtubeOnly: CanActivateFn = () =>
+  inject(AuthService).youtubeAllowed() || inject(Router).createUrlTree(['/list']);
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet, RouterLink, RouterLinkActive],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, ConfirmationDialog],
   template: `
+    @if (!uploadScreen()) {
     <header>
-      <a class="brand" routerLink="/upload">Audio Library</a>
+      <a class="brand" routerLink="/list" aria-label="Sorituh home">
+        <img src="/sorituh-mark.svg" width="40" height="40" alt="">
+        <span>Sorituh<small>The foundation of sound</small></span>
+      </a>
       @if (auth.signedIn()) {
         <nav aria-label="Main navigation">
-          <a routerLink="/upload" routerLinkActive="active">Upload</a>
-          <a routerLink="/split" routerLinkActive="active">Split audio</a>
-          <a routerLink="/list" routerLinkActive="active">List</a>
+          @if (auth.youtubeAllowed()) {
+            <a routerLink="/upload" routerLinkActive="active">YouTube</a>
+          }
+          <a routerLink="/list" routerLinkActive="active">Music</a>
+          <a routerLink="/scenes" routerLinkActive="active">Scenes</a>
           <button class="secondary" (click)="logout()" [disabled]="busy()">Log out</button>
         </nav>
       }
     </header>
+    }
     <main>
       @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
       <router-outlet />
     </main>
-    <footer>Private storage. On-demand conversion. No GPU required.</footer>
+    @if (!uploadScreen()) { <footer>Sorituh · The foundation of sound. Your music, privately stored.</footer> }
+    <app-confirmation />
   `,
 })
 class AppComponent {
@@ -40,7 +52,9 @@ class AppComponent {
   private readonly router = inject(Router);
   readonly error = signal('');
   readonly busy = signal(false);
+  readonly uploadScreen = signal(false);
   constructor() {
+    this.router.events.subscribe(() => this.uploadScreen.set(this.router.url.split('?')[0] === '/split'));
     let previouslySignedIn = this.auth.signedIn();
     effect(() => {
       const signedIn = this.auth.signedIn();
@@ -78,6 +92,8 @@ async function start(): Promise<void> {
   const config: Config = {
     region: value.region, userPoolId: value.userPoolId,
     clientId: value.clientId, apiBaseUrl: value.apiBaseUrl.replace(/\/$/, ''),
+    youtubeOwnerSubject: 'youtubeOwnerSubject' in value && typeof value.youtubeOwnerSubject === 'string'
+      ? value.youtubeOwnerSubject : undefined,
   };
   await bootstrapApplication(AppComponent, {
     providers: [
@@ -86,12 +102,16 @@ async function start(): Promise<void> {
         { path: 'login', component: LoginPage, canActivate: [anonymous] },
         { path: 'register', component: RegisterPage, canActivate: [anonymous] },
         { path: 'forgot-password', component: ForgotPasswordPage, canActivate: [anonymous] },
-        { path: 'upload', component: UploadPage, canActivate: [authenticated] },
-        { path: 'split', component: SplitPage, canActivate: [authenticated] },
+        { path: 'upload', component: UploadPage, canActivate: [authenticated, youtubeOnly] },
+        { path: 'split', component: SplitPage, canActivate: [authenticated], canDeactivate: [(page: SplitPage) => page.canLeave()] },
         { path: 'mixer/:jobId', component: MixerPage, canActivate: [authenticated] },
         { path: 'list', component: ListPage, canActivate: [authenticated] },
-        { path: '', redirectTo: 'upload', pathMatch: 'full' },
-        { path: '**', redirectTo: 'upload' },
+        { path: 'youtube-files', component: ListPage, canActivate: [authenticated, youtubeOnly], data: { youtube: true } },
+        { path: 'scenes', component: ScenesPage, canActivate: [authenticated] },
+        { path: 'scenes/:sceneId', component: ScenePage, canActivate: [authenticated],
+          canDeactivate: [(page: ScenePage) => page.canLeave()] },
+        { path: '', redirectTo: 'list', pathMatch: 'full' },
+        { path: '**', redirectTo: 'list' },
       ], withHashLocation()),
     ],
   });

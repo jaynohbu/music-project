@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 72">
+  <title>Sorituh — The foundation of sound</title>
+  <svg x="4" y="4" width="64" height="64" viewBox="0 0 64 64">
+    <rect width="64" height="64" rx="16" fill="#3459c9"/>
+    <path d="M14 45h36" fill="none" stroke="#b9d1ff" stroke-width="5" stroke-linecap="round"/>
+    <path d="M17 33v4m10-17v17m10-23v23m10-13v13" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round"/>
+  </svg>
+  <text x="82" y="38" font-family="system-ui,sans-serif" font-size="32" font-weight="750" fill="#192536">Sorituh</text>
+  <text x="83" y="58" font-family="system-ui,sans-serif" font-size="13" fill="#526177">The foundation of sound</text>
+</svg>

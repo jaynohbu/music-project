@@ -1,6 +1,6 @@
 export const STEM_NAMES = ['drums', 'bass', 'vocals', 'guitar', 'piano', 'other'];
 export const STEM_MAX_BYTES = 30_000_000;
-export const STEM_MAX_DURATION = 420;
+export const STEM_MAX_DURATION = 720;
 export const STEM_MAX_OUTPUT_BYTES = STEM_MAX_DURATION * 44100 * 2 * 2 + 4096;
 export const UPLOAD_WINDOW_MS = 15 * 60 * 1000;
 export const STEM_WINDOW_MS = 2 * 60 * 60 * 1000;

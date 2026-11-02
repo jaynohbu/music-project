@@ -6,7 +6,7 @@ import wave
 from pathlib import Path
 
 STEMS = ("drums", "bass", "vocals", "guitar", "piano", "other")
-MAX_SECONDS = 420
+MAX_SECONDS = 720
 
 
 def run(command: list[str]) -> None:

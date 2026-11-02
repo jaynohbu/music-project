@@ -9,12 +9,21 @@ import { visibleJob } from './shared.mjs';
 import { createRestorationRoutes, listRestorations } from './restoration-api.mjs';
 import { ANALYSES, createAnalysisRoutes, currentAnalysis } from './analysis-api.mjs';
 import { STEM_NAMES, stemInput, UPLOAD_WINDOW_MS, STEM_WINDOW_MS } from './stem-shared.mjs';
+import { createSongDeletion, guardChildWrites, SongDeletingError } from './scene-api.mjs';
 
 const db = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const s3 = new S3Client({});
 const sfn = new SFNClient({});
 
+// A song being deleted is shown as status "deleting", without its internal marker or stem keys.
+export function publicSong(job) {
+  if (!job.deleting) return job;
+  const { deleting, deletingAt, stems, ...rest } = job;
+  return { ...rest, status: 'deleting' };
+}
+
 export async function signedStemJob(job, signer = getSignedUrl, storage = s3) {
+  if (job.deleting) return publicSong(job);
   const visible = visibleJob(job);
   if (visible.status !== 'completed') return visible;
   if (!STEM_NAMES.every(name => typeof visible.stems?.[name]?.key === 'string')) {
@@ -34,10 +43,12 @@ export async function signedStemJob(job, signer = getSignedUrl, storage = s3) {
 
 export function createStemHandler({
   database = db, storage = s3, orchestrator = sfn,
-  uploadSigner = createPresignedPost, signer = getSignedUrl,
+  uploadSigner = createPresignedPost, signer = getSignedUrl, deleteOnly = false,
 } = {}) {
-  const restorations = createRestorationRoutes({ database, storage, orchestrator, signer });
-  const analyses = createAnalysisRoutes({ database, storage, orchestrator, signer });
+  const guarded = guardChildWrites(database, storage);
+  const restorations = createRestorationRoutes({ database: guarded, storage, orchestrator, signer });
+  const analyses = createAnalysisRoutes({ database: guarded, storage, orchestrator, signer });
+  const deleteSong = createSongDeletion({ database, storage });
   return async event => {
     const reply = (statusCode, body) => ({
       statusCode, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
@@ -50,6 +61,17 @@ export function createStemHandler({
     const body = () => JSON.parse(event.isBase64Encoded
       ? Buffer.from(event.body ?? '', 'base64').toString() : event.body ?? '{}');
     try {
+      const song = /^\/api\/stems\/jobs\/([0-9a-f-]{36})$/.exec(route ?? '');
+      if (song && method === 'DELETE') return await deleteSong({ userId, jobId: song[1], reply });
+      // The song-deletion function's role may delete original stems, so it serves nothing else.
+      if (deleteOnly) return reply(404, { message: 'Endpoint not found.' });
+      const child = /^\/api\/stems\/jobs\/([0-9a-f-]{36})\/(?:restorations|lyrics|harmony)(?:\/|$)/.exec(route ?? '');
+      if (child && method === 'POST') {
+        const parent = (await database.send(new GetCommand({
+          TableName: process.env.TABLE_NAME, Key: { userId, jobId: child[1] }, ConsistentRead: true,
+        }))).Item;
+        if (parent?.type === 'stems' && parent.deleting) return reply(409, { message: 'This song is being deleted.' });
+      }
       const restoring = /^\/api\/stems\/jobs\/([0-9a-f-]{36})\/restorations(?:\/([0-9a-f-]{36}))?$/.exec(route ?? '');
       if (restoring) {
         const [, parentJobId, id] = restoring;
@@ -86,7 +108,7 @@ export function createStemHandler({
         return reply(201, { job, upload });
       }
       const match = /^\/api\/stems\/jobs\/([0-9a-f-]{36})(\/complete)?$/.exec(route ?? '');
-      if (!match || (match[2] ? method !== 'POST' : method !== 'GET')) {
+      if (!match || (match[2] ? method !== 'POST' : !['GET', 'PATCH'].includes(method))) {
         return reply(404, { message: 'Endpoint not found.' });
       }
       const key = { userId, jobId: match[1] };
@@ -95,6 +117,40 @@ export function createStemHandler({
       }));
       const job = result.Item;
       if (!job || job.type !== 'stems') return reply(404, { message: 'Separation job not found.' });
+      if (job.deleting && !(method === 'PATCH' && !match[2])) {
+        return match[2] ? reply(409, { message: 'This song is being deleted.' }) : reply(200, { job: publicSong(job) });
+      }
+      if (!match[2] && method === 'PATCH') {
+        let metadata;
+        try {
+          const value = body();
+          if (!value || typeof value !== 'object' || Array.isArray(value) ||
+              typeof value.title !== 'string' || !value.title.trim() || value.title.trim().length > 200 ||
+              typeof value.author !== 'string' || value.author.trim().length > 200 ||
+              /[\u0000-\u001f\u007f]/.test(value.title + value.author)) throw new Error('Invalid music metadata.');
+          metadata = { title: value.title.trim(), author: value.author.trim() };
+        } catch (error) {
+          console.warn('Invalid music metadata', { name: error.name });
+          return reply(400, { message: 'Enter a title of 1–200 characters and an optional author up to 200 characters, without control characters.' });
+        }
+        try {
+          await database.send(new UpdateCommand({
+            TableName: process.env.TABLE_NAME, Key: key,
+            UpdateExpression: 'SET #title = :title, #author = :author',
+            ConditionExpression: 'attribute_exists(jobId) AND #type = :type AND attribute_not_exists(deleting)',
+            ExpressionAttributeNames: { '#type': 'type', '#title': 'title', '#author': 'author' },
+            ExpressionAttributeValues: { ':title': metadata.title, ':author': metadata.author, ':type': 'stems' },
+          }));
+        } catch (error) {
+          if (error.name !== 'ConditionalCheckFailedException') throw error;
+          const latest = (await database.send(new GetCommand({
+            TableName: process.env.TABLE_NAME, Key: key, ConsistentRead: true,
+          }))).Item;
+          if (latest?.type === 'stems' && latest.deleting) return reply(409, { message: 'This song is being deleted.' });
+          return reply(404, { message: 'Separation job not found.' });
+        }
+        return reply(200, { metadata });
+      }
       if (!match[2]) {
         const signed = await signedStemJob(job, signer, storage);
         return reply(200, { job: signed.status === 'completed' ? {
@@ -155,6 +211,7 @@ export function createStemHandler({
       }
       return reply(202, { job });
     } catch (error) {
+      if (error instanceof SongDeletingError) return reply(409, { message: 'This song is being deleted.' });
       console.error('Stem API failed', { name: error.name });
       return reply(500, { message: 'The separation service is unavailable. Please try again.' });
     }
@@ -162,3 +219,4 @@ export function createStemHandler({
 }
 
 export const handler = createStemHandler();
+export const songDeletionHandler = createStemHandler({ deleteOnly: true });

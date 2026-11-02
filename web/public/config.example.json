@@ -2,5 +2,6 @@
   "region": "us-west-2",
   "userPoolId": "REPLACE_WITH_SAM_OUTPUT",
   "clientId": "REPLACE_WITH_SAM_OUTPUT",
-  "apiBaseUrl": "/api"
+  "apiBaseUrl": "/api",
+  "youtubeOwnerSubject": "disabled"
 }

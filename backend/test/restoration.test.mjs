@@ -392,6 +392,54 @@ const writesLyrics = content => async (_python, args) => {
   return { stdout: '' };
 };
 
+function lyricsEditing() {
+  const context = setup();
+  context.database.put({
+    userId: 'owner', jobId: lyricsId, type: 'lyrics', parentJobId: parentId, status: 'completed', title: 'Lyrics',
+    key: `users/owner/lyrics/${parentId}/${lyricsId}.json`, generatedAt: new Date(Date.now() - 60000).toISOString(),
+  });
+  return context;
+}
+const editedLine = (text = 'hello', start = 0.5) => ({ start, end: start + 0.5, words: [{ start, end: start + 0.5, text }] });
+
+test('edited lyrics become the current version, keep the old one, and start no task', async () => {
+  const { call, database, storage, started } = lyricsEditing();
+  const made = await call(lyricsRoute, { lines: [editedLine()] });
+  assert.equal(made.status, 201);
+  const child = database.get('owner', made.body.lyrics.id);
+  assert.equal(child.edited, true);
+  assert.equal(child.status, 'completed');
+  assert.equal(child.key, `users/owner/lyrics/${parentId}/${child.jobId}.json`);
+  assert.equal('createdAt' in child, false, 'stays out of the library');
+  assert.equal('expiresAt' in child, false);
+  assert.deepEqual(JSON.parse(storage.objects.get(child.key)), { lines: [editedLine()] });
+  assert.ok(database.get('owner', lyricsId), 'the earlier version remains');
+  assert.equal((await call(parentId, undefined, 'GET')).body.job.lyrics.id, child.jobId);
+  assert.equal(started.length, 0);
+  assert.equal((await call(lyricsRoute, {})).status, 200, 'asking to find lyrics does not replace an edit');
+  assert.equal((await call(parentId, undefined, 'GET')).body.job.lyrics.id, child.jobId);
+  assert.equal((await call(lyricsRoute, { lines: [] })).status, 201, 'all lines may be removed');
+  assert.equal(storage.calls.filter(item => item.key?.includes('/stems/')).length, 0, 'originals are not touched');
+});
+
+test('lyrics are only edited once found, by their owner', async () => {
+  const fresh = setup();
+  assert.equal((await fresh.call(lyricsRoute, { lines: [editedLine()] })).status, 409);
+  assert.equal((await lyricsEditing().call(lyricsRoute, { lines: [editedLine()] }, 'POST', 'intruder')).status, 404);
+});
+
+test('edited lyrics must be real timed words in playing order', async () => {
+  const { call, storage } = lyricsEditing();
+  const word = (start, text = 'a') => ({ start, end: start, text });
+  for (const lines of ['text', null, [{}], [{ words: [] }], [editedLine('')], [editedLine('   ')], [editedLine('x'.repeat(201))],
+    [editedLine('late', 99)], [editedLine('a', -1)], [{ words: [{ start: 1, end: 0.5, text: 'a' }] }],
+    [{ words: [word(1), word(0.5)] }], [editedLine('a', 1), editedLine('b', 0.5)],
+    [{ words: Array.from({ length: 20001 }, () => word(0)) }]]) {
+    assert.equal((await call(lyricsRoute, { lines })).status, 400, JSON.stringify(lines)?.slice(0, 60));
+  }
+  assert.equal(storage.objects.size, 0);
+});
+
 const goodHarmony = { beats: [0, 0.5, 1, 1.5], firstBar: 0, stems: { guitar: { chords: [{ start: 0, name: 'Am' }], notes: [{ start: 0.5, end: 1, pitch: 69, unit: 4, length: 4 }] }, piano: { chords: [], notes: [] }, other: { chords: [], notes: [] }, bass: { chords: [], notes: [] } } };
 
 function harmonyCase(run) {
@@ -487,7 +535,7 @@ test('regenerating one stem needs a finished song result and a harmonic stem', a
   const { call, started } = setup();
   assert.equal((await call(`${parentId}/harmony`, { stem: 'bass' })).status, 409);
   const { call: callDone } = regeneration();
-  for (const stem of ['drums', 'vocals', 'kazoo', 1]) assert.equal((await callDone(`${parentId}/harmony`, { stem })).status, 400, String(stem));
+  for (const stem of ['vocals', 'kazoo', 1]) assert.equal((await callDone(`${parentId}/harmony`, { stem })).status, 400, String(stem));
   assert.equal(started.length, 0);
 });
 
@@ -542,7 +590,7 @@ test('regenerating from the cleaned version uses the newest finished cleanup of 
 });
 
 test('the worker for one stem reads its source and the song grid, and skips what it does not need', async () => {
-  for (const [stem, stemsRead] of [['guitar', ['guitar', 'piano', 'other']], ['bass', ['guitar', 'piano', 'other', 'bass']]]) {
+  for (const [stem, stemsRead] of [['guitar', ['guitar', 'piano', 'other']], ['bass', ['guitar', 'piano', 'other', 'bass']], ['drums', ['drums']]]) {
     let args;
     const { worker, input, database, storage, child } = harmonyCase(async (_python, given) => {
       args = given;
@@ -568,7 +616,7 @@ test('the worker for one stem reads its source and the song grid, and skips what
 
 const python3 = (body, ...args) => JSON.parse(execFileSync('python3', ['-c',
   `import json, sys; sys.path.insert(0, ${JSON.stringify(fileURLToPath(new URL('..', import.meta.url)))})
-from note_lines import clear_line, first_bar, note_values, struck_line
+from note_lines import clear_line, drum_units, first_bar, note_values, struck_line
 ${body}`, ...args.map(value => JSON.stringify(value))], { encoding: 'utf8' }));
 const noteLines = events => ({ line: python3('print(json.dumps(clear_line([tuple(e) for e in json.loads(sys.argv[1])])))', events) });
 const pitches = result => result.line.map(note => note.pitch);
@@ -637,17 +685,37 @@ test('bars start on the beat where the low notes most often begin', () => {
   assert.equal(firstBar([]), 0);
 });
 
+test('drum hits snap to sixteenths past a constant lean, and flams on one drum become one hit', () => {
+  const lean = 0.03;
+  const { hits, shift } = python3('hits, shift = drum_units(json.loads(sys.argv[1]), json.loads(sys.argv[2])); print(json.dumps({"hits": hits, "shift": shift}))',
+    { kick: [1 - lean, 2 - lean], snare: [1.5 - lean, 1.5 - lean + 0.01], hihat: [1 - lean, 1.25 - lean], tom: [3 - lean] }, everyHalfSecond);
+  assert.ok(shift < 0);
+  assert.deepEqual(hits.map(hit => [hit.unit, hit.drum]), [[8, 'hihat'], [8, 'kick'], [10, 'hihat'], [12, 'snare'], [16, 'kick'], [24, 'tom']]);
+});
+
+test('bars start from the backbeat, with low notes telling beat 1 from beat 3', () => {
+  const firstBar = (notes, hits) => python3('print(first_bar(json.loads(sys.argv[1]), json.loads(sys.argv[2])))', notes, hits);
+  const groove = Array.from({ length: 40 }, (_, beat) => ({ unit: (beat + 1) * 4, drum: beat % 2 ? 'kick' : 'snare' }));
+  assert.equal(firstBar([], groove), 0, 'kicks land on even beats, so bars start on 0 or 2');
+  assert.equal(firstBar([{ unit: 8, length: 8 }], groove), 2, 'low notes settle which');
+  assert.equal(firstBar([{ unit: 4, length: 8 }], groove), 0, 'low notes on a backbeat do not overrule the drums');
+  assert.equal(firstBar([{ unit: 4, length: 8 }], groove.slice(0, 4)), 1, 'too few hits leave it to the low notes');
+});
+
 test('harmony values must be real notes inside the song', () => {
   assert.equal(checkHarmony(goodHarmony, 2), goodHarmony);
   const withGuitar = part => ({ beats: [0, 1], firstBar: 0, stems: { guitar: { chords: [], notes: [], ...part } } });
   const good = { start: 0, end: 1, pitch: 60, unit: 0, length: 4 };
   assert.ok(checkHarmony(withGuitar({ notes: [good] }), 2));
+  assert.ok(checkHarmony(withGuitar({ hits: [{ unit: 4, drum: 'snare' }], patterns: [{ unit: 0, label: 'A' }] }), 2));
   for (const bad of [null, {}, { stems: {} }, { beats: [0, 1], firstBar: 0, stems: { guitar: {} } },
     { ...withGuitar({}), beats: [1, 0] }, { ...withGuitar({}), beats: [1] }, { ...withGuitar({}), beats: undefined }, { ...withGuitar({}), firstBar: 4 },
     withGuitar({ chords: [{ start: 99, name: 'C' }] }), withGuitar({ chords: [{ start: 0, name: '' }] }),
     withGuitar({ notes: [{ ...good, pitch: 200 }] }), withGuitar({ notes: [{ ...good, pitch: 60.5 }] }),
     withGuitar({ notes: [{ ...good, end: undefined }] }), withGuitar({ notes: [{ ...good, start: 1, end: 0.5 }] }),
-    withGuitar({ notes: [{ ...good, unit: 1.5 }] }), withGuitar({ notes: [{ ...good, length: 0 }] })]) {
+    withGuitar({ notes: [{ ...good, unit: 1.5 }] }), withGuitar({ notes: [{ ...good, length: 0 }] }),
+    withGuitar({ hits: [{ unit: 1, drum: 'cowbell' }] }), withGuitar({ hits: [{ unit: -1, drum: 'kick' }] }), withGuitar({ hits: 'kick' }),
+    withGuitar({ patterns: [{ unit: 1, label: '' }] })]) {
     assert.throws(() => checkHarmony(bad, 2), undefined, JSON.stringify(bad));
   }
 });
@@ -773,6 +841,7 @@ test('the template lets the task write lyrics and routes them', () => {
   const taskPolicy = template.slice(template.indexOf('StemTaskRole:'), template.indexOf('StemTask:\n'));
   assert.ok(taskPolicy.includes('users/*/lyrics/*'));
   assert.ok(taskPolicy.includes('users/*/harmony/*'));
+  assert.ok(template.includes("Action: s3:PutObject\n              Resource: !Sub '${AudioBucket.Arn}/users/*/lyrics/*'"), 'the API can save edited lyrics');
   assert.match(taskPolicy, /Action: s3:GetObject[\s\S]*?users\/\*\/restored\/\*[\s\S]*?users\/\*\/harmony\/\*[\s\S]*?Action: \[s3:PutObject/, 'can read cleaned stems and saved results');
   assert.ok(template.includes('/api/stems/jobs/{jobId}/lyrics'));
   assert.ok(template.includes('/api/stems/jobs/{jobId}/harmony'));

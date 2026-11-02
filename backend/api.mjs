@@ -5,7 +5,8 @@ import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { youtubeUrl, visibleJob, failureRetention, jobExpiry, failedHistoryExpired } from './shared.mjs';
-import { signedStemJob } from './stem-api.mjs';
+import { publicSong, signedStemJob } from './stem-api.mjs';
+import { canUseYoutube } from './youtube-access.mjs';
 
 const db = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const lambda = new LambdaClient({});
@@ -21,6 +22,9 @@ export function createHandler({ database = db, invoker = lambda, signer = getSig
     if (!userId) return reply(401, { message: 'Sign in to continue.' });
     try {
       if (event.requestContext.http.method === 'POST') {
+        if (!canUseYoutube(userId)) {
+          return reply(403, { message: 'YouTube downloads are not available for this account. Upload an audio file instead.' });
+        }
         let url;
         try {
           const rawBody = event.isBase64Encoded
@@ -87,7 +91,10 @@ export function createHandler({ database = db, invoker = lambda, signer = getSig
         ScanIndexForward: false, Limit: 20, ExclusiveStartKey: start,
       }));
       const now = Date.now();
-      const visible = (result.Items ?? []).map(item => visibleJob(item, now))
+      // Scenes never belong in the library, even a malformed one that carries createdAt.
+      const visible = (result.Items ?? []).filter(item => item.type !== 'scene')
+        .map(item => item.deleting ? publicSong(item) : visibleJob(item, now))
+        .filter(job => job.type === 'stems' || canUseYoutube(userId))
         .filter(job => !failedHistoryExpired(job, now));
       const jobs = await Promise.all(visible.map(async job => {
         if (job.type === 'stems') return signedStemJob(job, signer, s3);

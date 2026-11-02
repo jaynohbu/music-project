@@ -26,12 +26,21 @@ export function checkLyrics(value, duration) {
   return value;
 }
 
+const DRUM_NAMES = ['kick', 'snare', 'tom', 'hihat', 'cymbal'];
+
+function checkDrums(part) {
+  return (part.hits === undefined || (Array.isArray(part.hits) && part.hits.every(hit =>
+    Number.isInteger(hit.unit) && hit.unit >= 0 && DRUM_NAMES.includes(hit.drum)))) &&
+    (part.patterns === undefined || (Array.isArray(part.patterns) && part.patterns.every(pattern =>
+      Number.isInteger(pattern.unit) && pattern.unit >= 0 && typeof pattern.label === 'string' && pattern.label)));
+}
+
 export function checkHarmony(value, duration) {
   const parts = value?.stems && Object.values(value.stems);
   const beats = value?.beats;
   if (!Array.isArray(beats) || beats.length < 2 || !beats.every((beat, index) => Number.isFinite(beat) && (!index || beat > beats[index - 1])) ||
       ![0, 1, 2, 3].includes(value.firstBar) ||
-      !parts?.length || !parts.every(part => Array.isArray(part.chords) && Array.isArray(part.notes) &&
+      !parts?.length || !parts.every(part => Array.isArray(part.chords) && Array.isArray(part.notes) && checkDrums(part) &&
       part.chords.every(chord => typeof chord.name === 'string' && chord.name && validTime(chord.start, duration)) &&
       part.notes.every(note => Number.isInteger(note.pitch) && note.pitch >= 0 && note.pitch <= 127 &&
         validTime(note.start, duration) && validTime(note.end, duration) && note.end >= note.start &&
@@ -41,7 +50,6 @@ export function checkHarmony(value, duration) {
   return value;
 }
 
-// Drums only supply the beat.
 export const HARMONY_STEMS = ['guitar', 'piano', 'other', 'bass', 'drums'];
 
 const LYRICS = {
@@ -56,9 +64,10 @@ const LYRICS = {
   },
 };
 
-// One part keeps the song's grid, so no drums; other parts stay for chord context, and bass only for itself.
+// One part keeps the song's grid. Other parts stay as chord context, and bass and drums only for themselves.
 const harmonyStems = child => !child.stem ? HARMONY_STEMS
-  : HARMONY_STEMS.filter(name => name !== 'drums' && (name !== 'bass' || child.stem === 'bass'));
+  : child.stem === 'drums' ? ['drums']
+    : HARMONY_STEMS.filter(name => name !== 'drums' && (name !== 'bass' || child.stem === 'bass'));
 
 const HARMONY = {
   type: 'harmony', code: 'HARMONY', stems: harmonyStems, check: checkHarmony,

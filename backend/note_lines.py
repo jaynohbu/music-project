@@ -13,6 +13,8 @@ CONNECT_GAP = 1.0  # Same-pitch notes closer than this, with nothing between, be
 STROKE_REPEAT = 0.11  # The same pitch attacked again sooner than this is one pluck flickering.
 LEGATO_UNITS = 2  # A silence up to an eighth before the next note is playing style, not a written rest.
 BEATS_PER_BAR = 4
+BEAT_DRUMS = ('kick', 'snare', 'hihat')  # These keep time; toms and cymbals mostly mark changes.
+LEAST_BACKBEAT = 16  # Fewer hits than this say little about where bars start.
 
 
 def connected(line):
@@ -95,10 +97,36 @@ def note_values(line, beats, every=False):
     return written
 
 
-def first_bar(notes):
-    """Which beat bars start on, from where low notes most often begin. Assumes four beats to a bar."""
+def drum_units(times, beats):
+    """Snaps each drum's hit times to sixteenths, returning the hits and how far hits sit from the grid."""
+    shift = grid_shift([{'start': time} for drum in BEAT_DRUMS for time in times.get(drum, [])], beats)
+    hits = {(max(0, round(grid_position(time, beats) - shift)), drum) for drum, found in times.items() for time in found}
+    return [{'unit': unit, 'drum': drum} for unit, drum in sorted(hits)], shift
+
+
+def backbeat_scores(hits):
+    """How well each first beat fits a kick on 1 and 3 and a snare on 2 and 4."""
+    scores = [0] * BEATS_PER_BAR
+    for hit in hits:
+        if hit['unit'] % 4 == 0 and hit['drum'] in ('kick', 'snare'):
+            beat = hit['unit'] // 4
+            for first in range(BEATS_PER_BAR):
+                strong = (beat - first) % 2 == 0
+                scores[first] += 1 if strong == (hit['drum'] == 'kick') else -1
+    return scores
+
+
+def first_bar(notes, hits=()):
+    """Which beat bars start on. Assumes four beats to a bar.
+
+    Drums tell beats 1 and 3 from 2 and 4; low notes, which most often begin on 1, tell the rest.
+    """
     weights = [0] * BEATS_PER_BAR
     for note in notes:
         if note['unit'] % 4 == 0:
             weights[note['unit'] // 4 % BEATS_PER_BAR] += note['length']
+    scores = backbeat_scores(hits)
+    if max(scores) - min(scores) >= LEAST_BACKBEAT:
+        fitting = [first for first, score in enumerate(scores) if score * 2 > max(scores) + min(scores)]
+        return max(fitting, key=lambda first: (weights[first], -first))
     return weights.index(max(weights))

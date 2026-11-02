@@ -13,7 +13,7 @@ import {
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, DeleteCommand } from '@aws-sdk/lib-dynamodb';
 import { S3Client, DeleteObjectCommand } from '@aws-sdk/client-s3';
-import { STEM_NAMES } from '../stem-shared.mjs';
+import { STEM_NAMES, STEM_MAX_DURATION } from '../stem-shared.mjs';
 
 // Explicit integration runner: creates only synthetic audio and a temporary account.
 process.env.AWS_REGION = 'us-west-2';
@@ -29,7 +29,7 @@ const output = name => {
 };
 const base = process.env.SMOKE_API_URL ?? 'http://127.0.0.1:3001/api';
 const duration = Number(process.env.SMOKE_DURATION_SECONDS ?? 3);
-assert.ok(Number.isFinite(duration) && duration > 0 && duration <= 420);
+assert.ok(Number.isFinite(duration) && duration > 0 && duration <= STEM_MAX_DURATION);
 const email = `stem-smoke-${randomUUID()}@example.com`;
 const password = `Aa1!${randomUUID()}${randomUUID()}`;
 let created = false;

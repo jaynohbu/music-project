@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 import { GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
-import { GetObjectCommand } from '@aws-sdk/client-s3';
+import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { StartExecutionCommand } from '@aws-sdk/client-sfn';
 import { failedHistoryExpired, failureRetention, visibleJob } from './shared.mjs';
 import { childRecords } from './restoration-api.mjs';
+import { checkLyrics } from './stem-analysis.mjs';
 import { STEM_WINDOW_MS } from './stem-shared.mjs';
 
 export const ANALYSES = {
@@ -13,8 +15,22 @@ export const ANALYSES = {
 };
 
 const RUNNING = ['queued', 'processing'];
-const REGENERATED_STEMS = ['guitar', 'piano', 'other', 'bass'];
-const NOT_REGENERABLE = 'Choose guitar, piano, other or bass to regenerate.';
+const INVALID_LYRICS = 'These lyrics could not be saved. Check that each line has words, then try again.';
+const MOST_LYRIC_WORDS = 20000;
+const LONGEST_LYRIC_WORD = 200;
+
+// Playback finds the current word by searching start times, so they must never go backward.
+function checkEditedLyrics(lines, duration) {
+  checkLyrics({ lines }, duration);
+  const words = lines.flatMap(line => line.words);
+  if (words.length > MOST_LYRIC_WORDS || !words.every((word, index) =>
+    word.text.trim() && word.text.length <= LONGEST_LYRIC_WORD && (!index || word.start >= words[index - 1].start))) {
+    throw new Error(INVALID_LYRICS);
+  }
+}
+
+const REGENERATED_STEMS = ['guitar', 'piano', 'other', 'bass', 'drums'];
+const NOT_REGENERABLE = 'Choose guitar, piano, other, bass or drums to regenerate.';
 
 async function visibleRecords(type, parent, database) {
   const now = Date.now();
@@ -62,6 +78,33 @@ async function publicAnalysis(item, signer, storage) {
 export function createAnalysisRoutes({ database, storage, orchestrator, signer }) {
   const table = () => process.env.TABLE_NAME;
 
+  // An edit is a new finished result, which becomes the song's current one; earlier versions stay stored.
+  async function saveEdit({ userId, parent, lines, reply }) {
+    const records = await visibleRecords('lyrics', parent, database);
+    if (newestWorking(records)?.status !== 'completed') return reply(409, { message: 'Find lyrics before editing them.' });
+    try {
+      checkEditedLyrics(lines, parent.duration);
+    } catch {
+      return reply(400, { message: INVALID_LYRICS });
+    }
+    const id = randomUUID();
+    const key = `users/${userId}/${ANALYSES.lyrics.folder}/${parent.jobId}/${id}.json`;
+    const body = Buffer.from(JSON.stringify({ lines }));
+    await storage.send(new PutObjectCommand({
+      Bucket: process.env.BUCKET_NAME, Key: key, ContentType: 'application/json',
+      Body: Readable.from([body]), ContentLength: body.length,
+    }));
+    const now = new Date().toISOString();
+    const child = {
+      userId, jobId: id, type: 'lyrics', parentJobId: parent.jobId, status: 'completed', edited: true,
+      title: ANALYSES.lyrics.label, key, generatedAt: now, startedAt: now, completedAt: now,
+    };
+    await database.send(new PutCommand({
+      TableName: table(), Item: child, ConditionExpression: 'attribute_not_exists(jobId)',
+    }));
+    return reply(201, { lyrics: await publicAnalysis(child, signer, storage) });
+  }
+
   async function create({ type, userId, parentJobId, reply, body }) {
     const analysis = ANALYSES[type];
     const parent = (await database.send(new GetCommand({
@@ -71,15 +114,14 @@ export function createAnalysisRoutes({ database, storage, orchestrator, signer }
     if (visibleJob(parent).status !== 'completed' || typeof parent.stems?.vocals?.key !== 'string') {
       return reply(409, { message: analysis.notReady });
     }
-    let input = {};
-    if (type === 'harmony') {
-      try {
-        input = body() ?? {};
-      } catch {
-        return reply(400, { message: NOT_REGENERABLE });
-      }
+    let input;
+    try {
+      input = body() ?? {};
+    } catch {
+      return reply(400, { message: type === 'harmony' ? NOT_REGENERABLE : INVALID_LYRICS });
     }
-    const { stem, cleaned } = input;
+    if (type === 'lyrics' && input.lines !== undefined) return saveEdit({ userId, parent, lines: input.lines, reply });
+    const { stem, cleaned } = type === 'harmony' ? input : {};
     if (stem !== undefined && !REGENERATED_STEMS.includes(stem)) return reply(400, { message: NOT_REGENERABLE });
     const records = await visibleRecords(type, parent, database);
     const whole = newestWorking(records.filter(record => !record.stem));

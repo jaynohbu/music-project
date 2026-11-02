@@ -1,12 +1,14 @@
 import { Injectable, InjectionToken, inject, signal } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
+import { EffectSettings } from './stem-effects';
 
 export interface Config {
   region: string;
   userPoolId: string;
   clientId: string;
   apiBaseUrl: string;
+  youtubeOwnerSubject?: string;
 }
 export const CONFIG = new InjectionToken<Config>('runtime configuration');
 
@@ -46,6 +48,7 @@ export class AuthService {
   private readonly http = inject(HttpClient);
   private readonly config = inject(CONFIG);
   readonly signedIn = signal(false);
+  readonly youtubeAllowed = signal(false);
   readonly notice = signal('');
   private session: Session | null = null;
   private refreshing?: Promise<string>;
@@ -68,6 +71,7 @@ export class AuthService {
           refreshToken: value.refreshToken, expiresAt: value.expiresAt,
         };
         this.signedIn.set(true);
+        this.updateYoutubeAccess(value.idToken);
       } catch (error) {
         console.warn('Discarding invalid saved session', error);
         sessionStorage.removeItem('youtube-session');
@@ -83,6 +87,18 @@ export class AuthService {
         'X-Amz-Target': `AWSCognitoIdentityProviderService.${action}`,
       } },
     ));
+  }
+
+  private updateYoutubeAccess(token: string): void {
+    try {
+      const payload: unknown = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+      this.youtubeAllowed.set(!!this.config.youtubeOwnerSubject && this.config.youtubeOwnerSubject !== 'disabled' &&
+        typeof payload === 'object' && payload !== null && 'sub' in payload &&
+        payload.sub === this.config.youtubeOwnerSubject);
+    } catch (error) {
+      console.warn('Unable to read account display permissions', error);
+      this.youtubeAllowed.set(false);
+    }
   }
 
   async login(username: string, password: string): Promise<boolean> {
@@ -127,6 +143,7 @@ export class AuthService {
     sessionStorage.setItem('youtube-session', JSON.stringify(this.session));
     this.notice.set('');
     this.signedIn.set(true);
+    this.updateYoutubeAccess(tokens.IdToken);
   }
 
   async token(): Promise<string> {
@@ -171,6 +188,7 @@ export class AuthService {
     sessionStorage.removeItem('youtube-session');
     this.notice.set('');
     this.signedIn.set(false);
+    this.youtubeAllowed.set(false);
   }
 }
 
@@ -179,8 +197,9 @@ export interface Job {
   createdAt: string;
   type?: 'youtube' | 'stems';
   sourceUrl?: string;
-  status: 'uploading' | 'queued' | 'processing' | 'completed' | 'failed';
+  status: 'uploading' | 'queued' | 'processing' | 'completed' | 'failed' | 'deleting';
   title?: string;
+  author?: string;
   duration?: number;
   stems?: Partial<Record<StemName, StemFile>>;
   restorations?: Restoration[];
@@ -191,6 +210,59 @@ export interface Job {
   failureStage?: string;
   playUrl?: string;
   downloadUrl?: string;
+}
+
+export interface SceneTrackSettings extends EffectSettings {
+  muted: boolean;
+  solo: boolean;
+  bypassed: boolean;
+  useCleaned: boolean;
+}
+export interface SceneSettings {
+  masterVolume: number;
+  sectionStart: number;
+  sectionEnd: number;
+  loop: boolean;
+  tracks: Record<string, SceneTrackSettings>;
+}
+export interface SceneEntry {
+  id: string;
+  jobId: string;
+  title?: string;
+  settings?: SceneSettings;
+}
+export interface Scene {
+  id: string;
+  name: string;
+  entries: SceneEntry[];
+  revision: number;
+  createdAt: string;
+}
+
+@Injectable({ providedIn: 'root' })
+export class ScenesService {
+  private readonly http = inject(HttpClient);
+  private readonly auth = inject(AuthService);
+  private readonly config = inject(CONFIG);
+  private async headers(): Promise<{ Authorization: string }> {
+    return { Authorization: `Bearer ${await this.auth.token()}` };
+  }
+  async list(): Promise<{ scenes: Scene[] }> {
+    return firstValueFrom(this.http.get<{ scenes: Scene[] }>(`${this.config.apiBaseUrl}/scenes`, { headers: await this.headers() }));
+  }
+  async get(id: string): Promise<{ scene: Scene }> {
+    return firstValueFrom(this.http.get<{ scene: Scene }>(`${this.config.apiBaseUrl}/scenes/${encodeURIComponent(id)}`, { headers: await this.headers() }));
+  }
+  async create(name: string): Promise<{ scene: Scene }> {
+    return firstValueFrom(this.http.post<{ scene: Scene }>(`${this.config.apiBaseUrl}/scenes`, { name }, { headers: await this.headers() }));
+  }
+  async update(id: string, revision: number, patch: { name?: string; entries?: SceneEntry[] }): Promise<{ scene: Scene }> {
+    return firstValueFrom(this.http.patch<{ scene: Scene }>(`${this.config.apiBaseUrl}/scenes/${encodeURIComponent(id)}`,
+      { ...patch, revision }, { headers: await this.headers() }));
+  }
+  async remove(id: string): Promise<void> {
+    await firstValueFrom(this.http.delete(`${this.config.apiBaseUrl}/scenes/${encodeURIComponent(id)}`, { headers: await this.headers() }));
+  }
 }
 
 export const STEM_NAMES = ['vocals', 'guitar', 'bass', 'piano', 'drums', 'other'] as const;
@@ -216,10 +288,18 @@ export interface RegeneratedPart extends Lyrics { resultId?: string }
 export interface Harmony extends Lyrics { stems?: Record<string, RegeneratedPart | undefined> }
 export interface LyricWord { start: number; end: number; text: string }
 export interface LyricLine { start: number; end: number; words: LyricWord[] }
-export interface HarmonyPart { chords: { start: number; name: string }[]; notes: HarmonyNote[] }
+export type DrumName = 'kick' | 'snare' | 'tom' | 'hihat' | 'cymbal';
+export interface DrumHit { unit: number; drum: DrumName }
+export interface BarPattern { unit: number; label: string }
+export interface HarmonyPart {
+  chords: { start: number; name: string }[];
+  notes: HarmonyNote[];
+  hits?: DrumHit[];
+  patterns?: BarPattern[];
+}
 export interface HarmonyNote { start: number; end: number; pitch: number; unit: number; length: number }
 export interface HarmonyGrid { beats: number[]; firstBar: number }
-export const HARMONY_STEMS: readonly string[] = ['guitar', 'piano', 'other', 'bass'];
+export const HARMONY_STEMS: readonly string[] = ['guitar', 'piano', 'other', 'bass', 'drums'];
 export interface StemUploadRequest {
   job: Job;
   upload: { url: string; fields: Record<string, string> };
@@ -254,6 +334,24 @@ export class StemsService {
   private readonly http = inject(HttpClient);
   private readonly auth = inject(AuthService);
   private readonly config = inject(CONFIG);
+
+  async remove(jobId: string): Promise<void> {
+    const token = await this.auth.token();
+    try {
+      await firstValueFrom(this.http.delete(`${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}`,
+      { headers: { Authorization: `Bearer ${token}` } }));
+    } catch (error) {
+      if (!(error instanceof HttpErrorResponse) || error.status !== 404) throw error;
+    }
+  }
+
+  async updateMetadata(jobId: string, title: string, author: string): Promise<{ metadata: { title: string; author: string } }> {
+    const token = await this.auth.token();
+    return firstValueFrom(this.http.patch<{ metadata: { title: string; author: string } }>(
+      `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}`,
+      { title, author }, { headers: { Authorization: `Bearer ${token}` } },
+    ));
+  }
 
   async createUpload(fileName: string, bytes: number, title: string): Promise<StemUploadRequest> {
     const token = await this.auth.token();
@@ -296,6 +394,15 @@ export class StemsService {
     return firstValueFrom(this.http.post<{ harmony: Lyrics }>(
       `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/harmony`,
       part ?? {},
+      { headers: { Authorization: `Bearer ${token}` } },
+    ));
+  }
+
+  async saveLyrics(jobId: string, lines: LyricLine[]): Promise<{ lyrics: Lyrics }> {
+    const token = await this.auth.token();
+    return firstValueFrom(this.http.post<{ lyrics: Lyrics }>(
+      `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/lyrics`,
+      { lines },
       { headers: { Authorization: `Bearer ${token}` } },
     ));
   }

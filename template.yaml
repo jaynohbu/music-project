@@ -1,8 +1,12 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Private YouTube audio library - Angular, Cognito, API and on-demand CPU container
+Description: Sorituh private music library - Angular, Cognito, API and on-demand CPU processing
 
 Parameters:
+  YoutubeOwnerSubject:
+    Type: String
+    Default: disabled
+    Description: Immutable Cognito subject for nohjiyoung@hotmail.com; disabled denies all YouTube access
   StemImageUri:
     Type: String
     Description: ECR URI of the separately built CPU Demucs image
@@ -86,6 +90,14 @@ Resources:
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
+          - Sid: BlockRestrictedYoutubeAudio
+            Effect: Deny
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub '${AudioBucket.Arn}/users/*'
+            Condition:
+              StringEquals:
+                s3:ExistingObjectTag/sorituh-youtube-access: blocked
           - Effect: Deny
             Principal: '*'
             Action: 's3:*'
@@ -171,6 +183,7 @@ Resources:
           TABLE_NAME: !Ref Jobs
           BUCKET_NAME: !Ref AudioBucket
           WORKER_NAME: !Ref Worker
+          YOUTUBE_OWNER_SUB: !Ref YoutubeOwnerSubject
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -227,10 +240,17 @@ Resources:
             - Effect: Allow
               Action: s3:GetObject
               Resource: !Sub '${AudioBucket.Arn}/users/*'
+            # Edited lyrics are saved here; original stems stay out of reach.
+            - Effect: Allow
+              Action: s3:PutObject
+              Resource: !Sub '${AudioBucket.Arn}/users/*/lyrics/*'
             # Deliberately excludes users/*/stems/*: original stems cannot be deleted here.
+            # Lyrics: an edit saved while its song is being deleted is removed again.
             - Effect: Allow
               Action: s3:DeleteObject
-              Resource: !Sub '${AudioBucket.Arn}/users/*/restored/*'
+              Resource:
+                - !Sub '${AudioBucket.Arn}/users/*/restored/*'
+                - !Sub '${AudioBucket.Arn}/users/*/lyrics/*'
             # Lets HEAD on a missing upload return 404 instead of 403.
             - Effect: Allow
               Action: s3:ListBucket
@@ -254,6 +274,12 @@ Resources:
             ApiId: !Ref HttpApi
             Path: /api/stems/jobs/{jobId}
             Method: GET
+        UpdateMetadata:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/stems/jobs/{jobId}
+            Method: PATCH
         CreateRestoration:
           Type: HttpApi
           Properties:
@@ -278,6 +304,101 @@ Resources:
             ApiId: !Ref HttpApi
             Path: /api/stems/jobs/{jobId}/harmony
             Method: POST
+  # Only this function may delete original stems; it serves only DELETE /api/stems/jobs/{jobId}.
+  SongDeletion:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend
+      Handler: stem-api.songDeletionHandler
+      Runtime: nodejs22.x
+      MemorySize: 256
+      Timeout: 60
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Jobs
+          BUCKET_NAME: !Ref AudioBucket
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:UpdateItem, dynamodb:DeleteItem, dynamodb:Query]
+              Resource: !GetAtt Jobs.Arn
+            - Effect: Allow
+              Action: s3:DeleteObject
+              Resource:
+                - !Sub '${AudioBucket.Arn}/stem-inputs/*'
+                - !Sub '${AudioBucket.Arn}/users/*/stems/*'
+                - !Sub '${AudioBucket.Arn}/users/*/restored/*'
+                - !Sub '${AudioBucket.Arn}/users/*/lyrics/*'
+                - !Sub '${AudioBucket.Arn}/users/*/harmony/*'
+            - Effect: Allow
+              Action: s3:ListBucket
+              Resource: !GetAtt AudioBucket.Arn
+              Condition:
+                StringLike:
+                  s3:prefix:
+                    - stem-inputs/*
+                    - users/*/stems/*
+                    - users/*/restored/*
+                    - users/*/lyrics/*
+                    - users/*/harmony/*
+      Events:
+        DeleteSong:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/stems/jobs/{jobId}
+            Method: DELETE
+  SceneApi:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend
+      Handler: scene-api.handler
+      Runtime: nodejs22.x
+      MemorySize: 256
+      Timeout: 20
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Jobs
+          BUCKET_NAME: !Ref AudioBucket
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              # Scene saves re-check songs in a transaction (UpdateItem + ConditionCheckItem).
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem, dynamodb:Query, dynamodb:ConditionCheckItem]
+              Resource: !GetAtt Jobs.Arn
+      Events:
+        ListScenes:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/scenes
+            Method: GET
+        CreateScene:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/scenes
+            Method: POST
+        GetScene:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/scenes/{sceneId}
+            Method: GET
+        UpdateScene:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/scenes/{sceneId}
+            Method: PATCH
+        DeleteScene:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/scenes/{sceneId}
+            Method: DELETE
   StemVpc:
     Type: AWS::EC2::VPC
     Properties:
@@ -595,7 +716,7 @@ Resources:
       CorsConfiguration:
         AllowOrigins: ['http://localhost:4200']
         AllowHeaders: [Authorization, Content-Type, X-Account-Session]
-        AllowMethods: [GET, POST, OPTIONS]
+        AllowMethods: [GET, POST, PATCH, DELETE, OPTIONS]
   WebsiteBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -699,6 +820,8 @@ Resources:
                 aws:SecureTransport: false
 
 Outputs:
+  YoutubeOwnerSubject:
+    Value: !Ref YoutubeOwnerSubject
   StemStateMachineArn:
     Value: !Ref StemWorkflow
   WebsiteUrl:

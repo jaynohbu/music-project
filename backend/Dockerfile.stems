@@ -15,6 +15,9 @@ ENV STEM_DEVICE=cpu
 RUN /opt/stems/bin/python -c "from demucs.pretrained import get_model; get_model('htdemucs_6s')"
 RUN HF_HUB_DISABLE_XET=1 /opt/stems/bin/python -c "from faster_whisper.utils import download_model; download_model('large-v3')"
 ENV HF_HUB_OFFLINE=1
+# ADTOF Frame_RNN (Zehren, Alunno, Bientinesi), CC BY-NC-SA 4.0: non-commercial use only.
+RUN mkdir -p /opt/models && /opt/stems/bin/python -c "import hashlib, urllib.request; url = 'https://huggingface.co/thebluescreen/adtof-drums-onnx/resolve/d0e809bb1c1b6fe8a4a00c576852117a0636ab5a/adtof_frame_rnn.onnx'; data = urllib.request.urlopen(url).read(); assert hashlib.sha256(data).hexdigest() == '189ca3c2bc7339a5f0fdc0bb11069d4bcc4fafabd142e945228c368c379b6227'; open('/opt/models/adtof_frame_rnn.onnx', 'wb').write(data)"
+ENV DRUM_MODEL=/opt/models/adtof_frame_rnn.onnx
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY stem-*.mjs shared.mjs separate.py restore_stem.py transcribe_vocals.py analyze_harmony.py note_lines.py ./

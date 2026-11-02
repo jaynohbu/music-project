@@ -13,6 +13,7 @@ import { createStemHandler } from './stem-api.mjs';
 import { createStemWorker } from './stem-worker.mjs';
 import { createRestoreWorker, runStemTask } from './stem-restore.mjs';
 import { createHarmonyWorker, createLyricsWorker } from './stem-analysis.mjs';
+import { createSceneHandler, MAX_SCENE_BODY_BYTES } from './scene-api.mjs';
 
 const execute = promisify(execFile);
 
@@ -34,7 +35,7 @@ export function localQueue(worker, capacity = 2) {
   };
 }
 
-export function createLocalServer({ api, accounts, stems, verify }) {
+export function createLocalServer({ api, accounts, stems, scenes, verify }) {
   return createServer(async (request, response) => {
     const reply = (status, message) => {
       response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -53,18 +54,26 @@ export function createLocalServer({ api, accounts, stems, verify }) {
       const isRestorations = /^\/api\/stems\/jobs\/[0-9a-f-]{36}\/restorations$/.test(url.pathname);
       const isRestoration = /^\/api\/stems\/jobs\/[0-9a-f-]{36}\/restorations\/[0-9a-f-]{36}$/.test(url.pathname);
       const isAnalysis = /^\/api\/stems\/jobs\/[0-9a-f-]{36}\/(lyrics|harmony)$/.test(url.pathname);
+      const isSong = /^\/api\/stems\/jobs\/[0-9a-f-]{36}$/.test(url.pathname);
+      const isMetadata = isSong && request.method === 'PATCH';
+      const isSongDelete = isSong && request.method === 'DELETE';
+      const isSceneList = url.pathname === '/api/scenes';
+      const isScene = /^\/api\/scenes\/[0-9a-f-]{36}$/.test(url.pathname);
+      const isScenes = isSceneList || isScene;
       const isStems = url.pathname === '/api/stems/uploads' || isRestorations || isRestoration || isAnalysis ||
         /^\/api\/stems\/jobs\/[0-9a-f-]{36}(\/complete)?$/.test(url.pathname);
-      if (!isAccount && !isJobs && !isStems) { reply(404, 'Endpoint not found.'); return; }
+      if (!isAccount && !isJobs && !isStems && !isScenes) { reply(404, 'Endpoint not found.'); return; }
       if ((isAccount && request.method !== 'POST') ||
+          (isSceneList && !['GET', 'POST'].includes(request.method)) ||
+          (isScene && !['GET', 'PATCH', 'DELETE'].includes(request.method)) ||
           (isRestoration ? request.method !== 'DELETE'
             : isRestorations || isAnalysis ? request.method !== 'POST'
-              : (isJobs || isStems) && !['GET', 'POST'].includes(request.method))) {
+              : (isJobs || isStems) && !isMetadata && !isSongDelete && !['GET', 'POST'].includes(request.method))) {
         reply(405, 'Method not allowed.');
         return;
       }
       let claims;
-      if (isJobs || isStems) {
+      if (isJobs || isStems || isScenes) {
         const authorization = request.headers.authorization;
         if (!authorization?.startsWith('Bearer ')) { reply(401, 'Sign in to continue.'); return; }
         try {
@@ -77,9 +86,10 @@ export function createLocalServer({ api, accounts, stems, verify }) {
       }
       const chunks = [];
       let length = 0;
+      const limit = isScenes ? MAX_SCENE_BODY_BYTES : 4096;
       for await (const chunk of request) {
         length += chunk.length;
-        if (length > 4096) { reply(413, 'Request body is too large.'); return; }
+        if (length > limit) { reply(413, 'Request body is too large.'); return; }
         chunks.push(chunk);
       }
       const event = {
@@ -90,7 +100,7 @@ export function createLocalServer({ api, accounts, stems, verify }) {
           ...(claims ? { authorizer: { jwt: { claims } } } : {}),
         },
       };
-      const result = await (isAccount ? accounts : isStems ? stems : api)(event);
+      const result = await (isAccount ? accounts : isScenes ? scenes : isStems ? stems : api)(event);
       response.writeHead(result.statusCode, result.headers);
       response.end(result.body);
     } catch (error) {
@@ -115,6 +125,7 @@ async function main() {
   process.env.BUCKET_NAME = output('AudioBucketName');
   process.env.USER_POOL_ID = output('UserPoolId');
   process.env.USER_POOL_CLIENT_ID = output('UserPoolClientId');
+  process.env.YOUTUBE_OWNER_SUB = output('YoutubeOwnerSubject');
   process.env.INITIAL_PASSWORD_SECRET ??= 'youtube-audio-library/registration-password';
   const sessions = await cloudformation.send(new DescribeStackResourceCommand({
     StackName: stackName, LogicalResourceId: 'AccountSessions',
@@ -155,7 +166,7 @@ async function main() {
   };
   const server = createLocalServer({
     api: createHandler({ invoker: queue }), accounts: createAccountHandler(),
-    stems: createStemHandler({ orchestrator: stemOrchestrator }),
+    stems: createStemHandler({ orchestrator: stemOrchestrator }), scenes: createSceneHandler(),
     verify: token => verifier.verify(token),
   });
   server.requestTimeout = 30000;

@@ -8,6 +8,53 @@ const request = (method, extra = {}) => ({
   ...extra,
 });
 const body = response => JSON.parse(response.body);
+process.env.YOUTUBE_OWNER_SUB = 'alice';
+
+test('YouTube creation rejects other subjects even when their claimed email matches the owner', async () => {
+  const handler = createHandler({
+    database: { send: () => assert.fail('Database must not be touched') },
+    invoker: { send: () => assert.fail('Worker must not run') },
+  });
+  const result = await handler({
+    requestContext: { http: { method: 'POST' }, authorizer: { jwt: { claims: {
+      sub: 'bob', email: 'nohjiyoung@hotmail.com',
+    } } } }, body: JSON.stringify({ url: 'https://youtu.be/abcdefghijk', userId: 'alice' }),
+  });
+  assert.equal(result.statusCode, 403);
+});
+
+test('YouTube access fails closed when no account has been configured', async () => {
+  delete process.env.YOUTUBE_OWNER_SUB;
+  try {
+    const handler = createHandler({ database: { send: () => assert.fail('Database must not be touched') } });
+    assert.equal((await handler(request('POST'))).statusCode, 403);
+  } finally { process.env.YOUTUBE_OWNER_SUB = 'alice'; }
+});
+
+test('other accounts see only their direct-upload jobs and never receive YouTube media links', async () => {
+  const stems = Object.fromEntries(['drums', 'bass', 'vocals', 'guitar', 'piano', 'other']
+    .map(name => [name, { key: `users/bob/stems/id/${name}.wav` }]));
+  const signed = [];
+  const handler = createHandler({
+    database: { send: async command => {
+      assert.equal(command.input.ExpressionAttributeValues[':userId'], 'bob');
+      return { Items: [
+        { userId: 'bob', jobId: 'old', status: 'completed', key: 'users/bob/old.wav' },
+        { userId: 'bob', jobId: 'youtube', type: 'youtube', status: 'completed', key: 'users/bob/youtube.wav' },
+        { userId: 'bob', jobId: 'upload', type: 'stems', status: 'completed', stems },
+      ], LastEvaluatedKey: { userId: 'bob', jobId: 'upload', createdAt: 'now' } };
+    } },
+    signer: async (_, command) => { signed.push(command.input.Key); return 'https://signed'; },
+  });
+  const result = await handler({ requestContext: {
+    http: { method: 'GET' }, authorizer: { jwt: { claims: { sub: 'bob' } } },
+  } });
+  assert.equal(result.statusCode, 200);
+  assert.deepEqual(body(result).jobs.map(job => job.jobId), ['upload']);
+  assert.equal(signed.length, 12);
+  assert.ok(signed.every(key => key.includes('/stems/')));
+  assert.ok(body(result).cursor);
+});
 
 test('accepts single video URLs and strips playlist/extra query parameters', () => {
   for (const url of [

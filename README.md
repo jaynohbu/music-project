@@ -1,4 +1,9 @@
-# YouTube Audio Library
+# Sorituh
+
+**The foundation of sound** — a private music library and stem mixer.
+The original blue waveform-on-a-foundation mark is bundled as
+`web/public/sorituh-mark.svg` (header and favicon), with a reusable wordmark in
+`web/public/sorituh-logo.svg`.
 
 An isolated Angular application and CPU-only conversion service. The existing
 TunesBasis API and frontend are unchanged. As requested, this app creates its
@@ -9,12 +14,47 @@ TunesBasis API and frontend are unchanged. As requested, this app creates its
 - Login: email/password; supports administrator-issued temporary passwords.
 - Register: request an account, disabled until manually enabled in Cognito.
 - Forgot password: email reset code, then code/new-password confirmation.
-- Upload: submit a single YouTube video URL to queue a conversion.
-- Split audio: upload an audio file directly for six-stem separation (up to
-  30 MB / 30,000,000 bytes and seven minutes), with upload progress.
-- List: per-user jobs, status/errors, pagination, YouTube playback/download, and
-  links to completed stem mixers.
+- YouTube: only `nohjiyoung@hotmail.com` can submit videos or see YouTube jobs.
+  Authorization is pinned to that account's immutable Cognito subject, resolved
+  by the deployment tooling, not a browser-supplied email. Other users cannot
+  use the YouTube route or API, even for older jobs. The YouTube page links to
+  the owner's separate conversion library.
+- Music: the default page after login, with the user's split songs, status/errors,
+  pagination, **Open stem mixer**, **Add to scene**, and **Delete song**.
+- Upload & split: a dedicated full-screen flow hides the normal navigation,
+  uploads audio directly for six-stem separation (up to 30 MB / 30,000,000 bytes
+  and twelve minutes), then returns to Music once separation is queued.
+  Separation continues in the background. Leaving an active upload asks first.
+- Scenes: private, named sets of up to 99 song entries, referencing completed
+  split songs without copying their audio. Create a scene, add songs from Music
+  or its song picker, edit scene-only song titles, remove songs, and reorder by
+  dragging with edge scrolling or the Up/Down buttons. Titles always carry the
+  current order number. Duplicate songs have independent entry settings.
+  Loading a scene opens the first song without autoplay. Play starts the mixer;
+  natural completion advances and plays the next song, stopping after the last.
+  Loop repeats the current selection until switched off. Previous/Next song
+  buttons live inside each mixer. Pause and Stop do not advance. Loading failures
+  show Retry/Skip. Only the current song is decoded; transitions are not gapless.
+  Each entry autosaves all nine stem faders, mute/solo/bypass, Original/Cleaned
+  preference, master volume, Loop and S/E markers, separately from the original
+  Music mixer and every other scene. Titles are aliases, not source metadata
+  edits. Playback position, playing state and expanded panels are not persisted.
+  Source audio, cleaned versions, lyrics and analysis are shared song resources.
+  **Reset song settings** at the top confirms before restoring all faders and
+  flags, original audio, master 80%, full-song interval and Loop off. It stops
+  playback, but keeps title, order, original audio and analysis.
+  Wait for **Saved** before closing the browser. Saves are debounced and serialized;
+  internal navigation flushes pending edits. Failures show Retry/Reload saved,
+  and revision checks prevent another tab's changes from being overwritten.
+  Confirmations use Sorituh-styled modal dialogs, never window alert/confirm.
+  Deleting a scene keeps the source music. Deleting a Music song permanently
+  removes its audio/derived records and every scene reference; the confirmation
+  names affected scenes. Running songs/analysis cannot be deleted. Failed
+  deletion stays visible as **deleting** and can be retried.
 - Stem mixer: synchronized playback and seeking, waveforms and master volume.
+  Use **Edit title and author** above the mixers to save the music's title and
+  optional artist/composer. Changes persist in the owner's job, appear in the
+  library, and do not modify audio, analysis, playback or storage paths.
   Each compact brushed-metal mixer contains its stem's waveform, transport and
   master volume, with an expandable effects panel beneath them containing
   nine vertical faders: Volume, Pre-gain, Compression, Distortion, Bass, Mid,
@@ -46,7 +86,8 @@ TunesBasis API and frontend are unchanged. As requested, this app creates its
   Pre-gain can intentionally drive the clipper. The curve is never replaced while
   adjusting the fader, including transitions to/from zero. Stop/pause silence effect
   tails. Panels scroll horizontally on narrow screens; native faders support
-  pointer, touch and keyboard input. Controls are not saved between mixer visits.
+  pointer, touch and keyboard input. Standalone Music mixers start fresh;
+  scene mixer controls are autosaved per entry.
   Two downward arrows (S/E) above every waveform mark the shared start/end,
   defaulting to the full track. Drag either arrow on any stem to change the
   interval for all stems. Dragging auditions short synchronized audio previews
@@ -56,7 +97,7 @@ TunesBasis API and frontend are unchanged. As requested, this app creates its
   Play/Pause/Stop controls operate on that interval; Loop repeats it with native
   Web Audio buffer looping. Stop returns to the start arrow. Markers also support
   arrow keys (Shift for larger steps), Home and End. Selections are local to
-  the open mixer, not saved to the job. Reset, beside the start time, returns the interval
+  the open mixer, not saved to the source job (scene entries do save them). Reset, beside the start time, returns the interval
   to the whole song without stopping playback or changing Loop. All Mute, beside Mute,
   turns every stem's Mute on, or all off if they are all on.
 - Clean: each stem has a Clean button. `backend/restore_stem.py` runs on the same on-demand
@@ -76,7 +117,9 @@ TunesBasis API and frontend are unchanged. As requested, this app creates its
   (`large-v3`, `int8`) on the same Fargate task and saves timed words under
   `users/<id>/lyrics/`. Words then flow past a strip above the vocal waveform, following
   playback and scrubbing. Regions come from the stem's loudness because Silero VAD
-  discards singing. Recognized words can be wrong or missing, and there is no editing.
+  discards singing. Recognized words can be wrong or missing. **Edit lyrics** pauses playback and opens a
+  window to change, remove or add lines, saved as a new version; the cursor then waits one second
+  before the first change. Lines keep their timing, and there is no way to adjust timing by hand.
 - Chords & melody: guitar, piano, other and bass share one button that analyzes them together
   with `backend/analyze_harmony.py` on the same Fargate task. Chords come from chroma matched
   to major and minor triads, favoring the song's estimated key. Bass chords combine the bass
@@ -85,7 +128,7 @@ TunesBasis API and frontend are unchanged. As requested, this app creates its
   voice and connects same-pitch notes with nothing between them. Bass instead writes one note per
   pluck, repeats included: Basic Pitch's onset signal gives the time and the lowest strong pitch
   just after gives the note, and plucks sharing a sixteenth move to the next free one.
-  Beats come from the drums, or from all stems if the drums barely play, and parts before the
+  Beats come from drum hits, or from all stems if the drums barely play, and parts before the
   drums enter continue the nearest tempo. Notes snap to sixteenths on those beats and are written
   as note values with stems, flags, dots, ties, rests and bar lines. Bars assume four beats and
   start where bass notes most often begin. Other has chords only. Guitar and bass are written an
@@ -93,7 +136,12 @@ TunesBasis API and frontend are unchanged. As requested, this app creates its
   below the loudest of guitar, piano and other counts as bleed. Results are approximate.
 - Mixer focus: stems list vocals, guitar, bass, piano, drums, other. Scrolling opens the mixer
   of the stem at the middle of the screen and closes the rest; Show/Hide controls still work.
-- Regenerate: once a song has chords, each of those stems has a button that redoes only that
+- Drum score: the drums stem is written on a percussion staff from the ADTOF Frame_RNN model
+  (kick, snare, tom, hi-hat, cymbals together), hands with stems up and kick with stems down.
+  Beats on new songs come from these hits. Bars that repeat are compared as beat-aligned vectors
+  and carry a letter (A, B, ...), which labels repeats but changes no notes. The model is by
+  Zehren, Alunno and Bientinesi and licensed CC BY-NC-SA 4.0, so **non-commercial use only**.
+- Regenerate: once a song has chords, each of those stems and the drums have a button that redoes only that
   stem, keeping the song's beats and bars and the other stems' results, from the Original or
   Cleaned version being heard. Unchanged audio and analysis code give the same result. A failed
   run keeps the previous result on screen.
@@ -118,7 +166,7 @@ passed through ECS environment variables, which require NFC-normalized values.
 The UI uses hash routes so refreshing either page needs no S3 error-page rewrite.
 
 Conversion is limited to non-live videos up to 10 minutes and files up to 250 MiB.
-Direct audio uploads have separate seven-minute and 30 MB limits;
+Direct audio uploads have separate twelve-minute and 30 MB limits;
 the browser checks duration before upload and the service validates the actual media.
 YouTube workers have 2 GiB memory, 1 GiB scratch space, a 15-minute timeout and concurrency
 of two. Pending invocations expire after 60 seconds; asynchronous retries are
@@ -127,11 +175,11 @@ This is a small private tool, not an unlimited public download service.
 Stem tasks use 4 vCPU and 16 GiB memory with a two-hour job deadline. They have
 outbound-only networking and a public IP for ECR/AWS access; no inbound ports.
 The six PCM16 stereo 44.1 kHz WAV outputs must have identical frame counts.
-WAV avoids MP3 encoder-delay alignment differences. At seven minutes, decoded
-six-stem playback uses roughly 848 MiB at 44.1 kHz before browser/audio processing
+WAV avoids MP3 encoder-delay alignment differences. At twelve minutes, decoded
+six-stem playback uses roughly 1.42 GiB at 44.1 kHz before browser/audio processing
 overhead (more if the browser resamples to 48 kHz). Low-memory devices may not
 handle the longest files. The 30 MB limit applies to the uploaded source, not
-the expanded WAV stems; a seven-minute PCM WAV source exceeds it, so use a
+the expanded WAV stems; a twelve-minute PCM WAV source exceeds it, so use a
 compressed input such as MP3, M4A or FLAC for long recordings.
 An upload expires after 15 minutes; queued/processing stem jobs use a separate
 two-hour deadline rather than the YouTube timeout. Failed stem history also
@@ -157,6 +205,13 @@ The API returns 202 when queued, **not when conversion finishes**. List polls
 every five seconds. Links expire after one hour and are renewed while the page
 is open. Links are bearer URLs: do not share them unless you intend to share
 the file. Cognito tokens stay in session storage for this browser tab.
+YouTube is an exception to library visibility: non-owner accounts receive no
+YouTube records or new signed links. The API release also runs
+`node backend/youtube-admin.mjs revoke youtube-audio-library`, which tags only
+their legacy YouTube output files. An S3 bucket-policy deny on that tag revokes
+already-issued playback/download URLs without deleting the audio or touching
+direct uploads, original stems, cleaned versions or analysis results.
+Downloaded or browser-cached copies cannot be recalled.
 Cognito/API Gateway may continue to accept already-issued JWTs until their
 one-hour expiration after logout; global sign-out revokes refresh sessions.
 
@@ -225,6 +280,16 @@ For API/infrastructure-only changes without rebuilding either audio worker image
 `bash publish-api.sh youtube-audio-library` uses AWS CloudFormation packaging for the current backend and
 preserves the deployed YouTube and Demucs image URIs. Review template changes
 before running it; it deploys the stack without an interactive changeset prompt.
+The designated YouTube account must already exist and be enabled. Deployment
+resolves its subject and fails rather than enabling access by email alone.
+`YoutubeOwnerSubject=disabled` denies YouTube submissions for all accounts.
+After the API release, run `bash publish-web.sh youtube-audio-library` to publish
+the matching account-display permissions and branded frontend.
+The explicit live runner `SMOKE_API_URL=https://d324d1xuqjbi6.cloudfront.net/api
+node backend/test/live-sorituh-smoke.mjs` verifies restrictions, title/author
+persistence, cross-user rejection and revocation of a previously signed URL.
+It creates and cleans up only a temporary account and synthetic fixtures;
+it never invokes conversion or separation.
 The final output gives the HTTPS website URL and Cognito pool ID. The Register
 page creates the account using the backend, marks its email verified without
 checking ownership, suppresses automatic email, disables it, and sets the secret
@@ -358,7 +423,7 @@ Cognito account, synthetic audio, S3 objects and job record):
 ```bash
 node backend/test/live-stem-smoke.mjs
 SMOKE_API_URL=https://YOUR_SITE/api node backend/test/live-stem-smoke.mjs
-SMOKE_DURATION_SECONDS=420 node backend/test/live-stem-smoke.mjs
+SMOKE_DURATION_SECONDS=720 node backend/test/live-stem-smoke.mjs
 ```
 
 This requires administrative Cognito permissions in addition to job/storage

@@ -21,8 +21,8 @@ const job = () => ({
 
 test('stem input validates exact bounds and never accepts client paths', () => {
   assert.equal(STEM_MAX_BYTES, 30_000_000);
-  assert.equal(STEM_MAX_DURATION, 420);
-  assert.ok(STEM_MAX_OUTPUT_BYTES >= 420 * 44100 * 4 + 44);
+  assert.equal(STEM_MAX_DURATION, 720);
+  assert.ok(STEM_MAX_OUTPUT_BYTES >= 720 * 44100 * 4 + 44);
   for (const bytes of [0, -1, STEM_MAX_BYTES + 1, 1.5]) {
     assert.throws(() => stemInput({ fileName: 'song.wav', bytes }));
   }
@@ -164,7 +164,7 @@ function wav() {
   return data;
 }
 
-async function workerFixture(missing) {
+async function workerFixture(missing, duration = 1) {
   const updates = [];
   const stored = [];
   const value = { ...job(), status: 'queued' };
@@ -189,7 +189,7 @@ async function workerFixture(missing) {
         stems[name] = path.join(directory, `${name}.wav`);
         await writeFile(stems[name], wav());
       }
-      return { stdout: JSON.stringify({ duration: 1, stems }) };
+      return { stdout: JSON.stringify({ duration, stems }) };
     },
   });
   await worker(value);
@@ -205,6 +205,15 @@ test('worker saves six WAVs before completing and aliases reserved removals', as
   assert.ok(Object.values(completion.ExpressionAttributeNames).includes('error'));
   assert.ok(completion.UpdateExpression.includes('REMOVE #r'));
   assert.equal(Object.keys(completion.ExpressionAttributeValues[':v1']).length, 6);
+});
+
+test('worker accepts exactly twelve minutes and rejects any longer output before uploading', async () => {
+  const accepted = await workerFixture(undefined, 720);
+  assert.equal(accepted.stored.length, 6);
+  assert.equal(accepted.updates.at(-1).ExpressionAttributeValues[':v0'], 'completed');
+  const rejected = await workerFixture(undefined, 720 + 1 / 44100);
+  assert.equal(rejected.stored.length, 0);
+  assert.equal(rejected.updates.at(-1).ExpressionAttributeValues[':v0'], 'failed');
 });
 
 test('missing one stem fails the whole job with no partial uploads', async () => {

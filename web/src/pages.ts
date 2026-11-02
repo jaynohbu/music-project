@@ -1,8 +1,9 @@
 import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Router, RouterLink } from '@angular/router';
-import { AuthService, Job, LibraryService, errorMessage } from './services';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { AuthService, Job, LibraryService, ScenesService, StemsService, errorMessage } from './services';
+import { ConfirmationService } from './confirmation';
 
 @Component({
   standalone: true,
@@ -57,7 +58,7 @@ export class LoginPage {
         return;
       }
       this.password = '';
-      await this.router.navigateByUrl('/upload');
+      await this.router.navigateByUrl('/list');
     } catch (error) {
       this.error.set(errorMessage(error));
     } finally {
@@ -73,6 +74,7 @@ export class LoginPage {
     <section class="card">
       <span class="eyebrow">YOUR AUDIO LIBRARY</span>
       <h1>Turn a video into audio</h1>
+      <a routerLink="/youtube-files">Your YouTube files</a>
       <p>Paste a YouTube video URL. We will extract a WAV file and save it privately.</p>
       <form (ngSubmit)="submit()">
         <label for="url">YouTube video URL</label>
@@ -83,7 +85,7 @@ export class LoginPage {
         @if (error()) { <p role="alert" class="error">{{ error() }}</p> }
         @if (accepted()) {
           <p role="status" class="success">Conversion queued. Open the list to follow progress.</p>
-          <a routerLink="/list">View your audio files</a>
+          <a routerLink="/youtube-files">View your YouTube files</a>
         }
         <button type="submit" [disabled]="busy() || !url.trim()">
           {{ busy() ? 'Submitting...' : 'Convert and save' }}
@@ -121,8 +123,9 @@ export class UploadPage {
   template: `
     <section class="card">
       <div class="section-heading">
-        <div><span class="eyebrow">SAVED FOR YOU</span><h1>Your audio files</h1></div>
-        <button class="secondary" (click)="refresh()" [disabled]="busy()">Refresh</button>
+        <div><span class="eyebrow">{{ youtubeView ? 'YOUR CONVERSIONS' : 'YOUR SPLIT SONGS' }}</span><h1>{{ youtubeView ? 'YouTube files' : 'Music' }}</h1></div>
+        <div class="scene-actions"><a routerLink="/split">Upload &amp; split</a>
+          <button class="secondary" (click)="refresh()" [disabled]="busy()">Refresh</button></div>
       </div>
       <p class="hint">Jobs refresh every 5 seconds while this page is open.
         Failed jobs disappear 10 minutes after failure.
@@ -130,8 +133,8 @@ export class UploadPage {
       @if (error()) { <p role="alert" class="error">{{ error() }}</p> }
       @if (busy() && !jobs().length) { <p role="status">Loading your library...</p> }
       @if (!busy() && !jobs().length && !error()) {
-        <div class="empty"><h2>No files yet</h2><p>Your converted audio will appear here.</p>
-          <a routerLink="/upload">Convert a video</a> ·
+        <div class="empty"><h2>No files yet</h2><p>Your music will appear here.</p>
+          @if (auth.youtubeAllowed()) { <a routerLink="/upload">Convert a video</a> · }
           <a routerLink="/split">Upload audio to split</a></div>
       }
       <ul class="library">
@@ -142,10 +145,15 @@ export class UploadPage {
               <span class="badge" [class.failed]="job.status === 'failed'">{{ job.status }}</span>
             </div>
             <p class="hint">{{ job.createdAt | date:'medium' }}</p>
+            @if (job.author) { <p class="hint">By {{ job.author }}</p> }
             @if (job.type === 'stems') {
               <p class="hint">Six-stem audio separation</p>
               @if (job.status === 'completed') {
                 <a class="download" [routerLink]="['/mixer', job.jobId]">Open stem mixer</a>
+                <a class="download" routerLink="/scenes" [queryParams]="{song: job.jobId}">Add to scene</a>
+              }
+              @if (job.status === 'completed' || job.status === 'failed' || job.status === 'deleting') {
+                <button type="button" class="secondary" (click)="deleteSong(job)" [disabled]="busy()">Delete song</button>
               }
             } @else {
               @if (job.sourceUrl) {
@@ -170,7 +178,12 @@ export class UploadPage {
   `,
 })
 export class ListPage implements OnInit, OnDestroy {
+  readonly youtubeView = inject(ActivatedRoute).snapshot.data['youtube'] === true;
+  readonly auth = inject(AuthService);
   private readonly library = inject(LibraryService);
+  private readonly stems = inject(StemsService);
+  private readonly scenes = inject(ScenesService);
+  private readonly confirm = inject(ConfirmationService);
   private timer?: ReturnType<typeof setInterval>;
   private destroyed = false;
   private loadedPages = 1;
@@ -178,6 +191,21 @@ export class ListPage implements OnInit, OnDestroy {
   readonly cursor = signal<string | null>(null);
   readonly busy = signal(false);
   readonly error = signal('');
+
+  async deleteSong(job: Job): Promise<void> {
+    if (this.busy()) return;
+    this.busy.set(true);
+    try {
+      const { scenes } = await this.scenes.list();
+      const used = scenes.filter(scene => scene.entries.some(entry => entry.jobId === job.jobId));
+      const detail = used.length ? ` It will also be removed from these scenes: ${used.map(scene => scene.name).join(', ')}.` : '';
+      if (!await this.confirm.confirm('Permanently delete song?',
+        `Delete "${job.title}" and all its stems, cleaned audio, lyrics and analysis?${detail} This cannot be undone.`, 'Delete song')) return;
+      await this.stems.remove(job.jobId);
+      this.jobs.update(items => items.filter(item => item.jobId !== job.jobId));
+    } catch (error) { this.error.set(errorMessage(error)); }
+    finally { this.busy.set(false); }
+  }
 
   ngOnInit(): void {
     void this.refresh(false);
@@ -196,7 +224,7 @@ export class ListPage implements OnInit, OnDestroy {
       let cursor: string | null = null;
       for (let i = 0; i < this.loadedPages; i++) {
         const page = await this.library.list(cursor ?? undefined);
-        jobs.push(...page.jobs);
+        jobs.push(...page.jobs.filter(job => this.youtubeView ? job.type !== 'stems' : job.type === 'stems'));
         cursor = page.cursor;
         if (!cursor || this.destroyed) break;
       }
@@ -229,7 +257,8 @@ export class ListPage implements OnInit, OnDestroy {
       const page = await this.library.list(cursor);
       if (!this.destroyed) {
         const existing = new Set(this.jobs().map(job => job.jobId));
-        this.jobs.update(jobs => [...jobs, ...page.jobs.filter(job => !existing.has(job.jobId))]);
+        this.jobs.update(jobs => [...jobs, ...page.jobs.filter(job =>
+          !existing.has(job.jobId) && (this.youtubeView ? job.type !== 'stems' : job.type === 'stems'))]);
         this.cursor.set(page.cursor);
         this.loadedPages++;
         this.error.set('');

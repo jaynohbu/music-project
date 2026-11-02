@@ -2,13 +2,14 @@
 """Finds chords, and clear melody lines with lengths, of stems, written as JSON. Output is approximate."""
 import argparse
 import json
+import os
 
 import librosa
 import numpy as np
 
 from scipy.signal import find_peaks
 
-from note_lines import clear_line, first_bar, note_values, struck_line
+from note_lines import BEAT_DRUMS, clear_line, drum_units, first_bar, note_values, struck_line
 
 RATE = 22050
 HOP = 2048
@@ -38,6 +39,14 @@ MAJOR_PROFILE = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 
 MINOR_PROFILE = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
 MAJOR_FAMILY = ((0, ''), (2, 'm'), (4, 'm'), (5, ''), (7, ''), (9, 'm'))
 MINOR_FAMILY = ((0, 'm'), (3, ''), (5, 'm'), (7, 'm'), (7, ''), (8, ''), (10, ''))
+# ADTOF model output, in its order, with the authors' peak thresholds.
+DRUMS = ('kick', 'snare', 'tom', 'hihat', 'cymbal')
+DRUM_THRESHOLDS = (0.22, 0.24, 0.32, 0.22, 0.30)
+DRUM_RATE = 44100
+DRUM_FRAMES = 100  # Output frames per second.
+SHORTEST_HIT_GAP = 3  # Frames.
+SAME_PATTERN = 0.25  # Cosine distance under which two bars count as one pattern; found by measuring a known fill.
+QUIET_BAR = 0.2
 
 
 def chord_templates():
@@ -134,20 +143,37 @@ def chord_changes(names, audible):
     return changes
 
 
-def beat_times(stems):
-    """Beats from the drums when they play enough, else from everything, extended to cover the song."""
-    def onsets(path):
-        audio, _ = librosa.load(path, sr=RATE, mono=True)
-        return librosa.onset.onset_strength(y=audio, sr=RATE, hop_length=BEAT_HOP), len(audio) / RATE
+def drum_activity(path):
+    """Per-frame strength of each drum, from a model trained on real recordings."""
+    import onnxruntime
+    session = onnxruntime.InferenceSession(os.environ['DRUM_MODEL'], providers=['CPUExecutionProvider'])
+    audio, _ = librosa.load(path, sr=DRUM_RATE, mono=True)
+    return session.run(None, {'waveform': audio[None].astype(np.float32)})[0][0]
 
-    envelope, duration = onsets(stems['drums'])
-    hits = librosa.onset.onset_detect(onset_envelope=envelope, sr=RATE, hop_length=BEAT_HOP, units='time')
-    if len(hits) < duration / 4:
-        envelopes = [onsets(path)[0] for path in stems.values()]
+
+def drum_times(activity):
+    return {drum: (find_peaks(activity[:, column], height=DRUM_THRESHOLDS[column], distance=SHORTEST_HIT_GAP)[0] / DRUM_FRAMES).tolist()
+            for column, drum in enumerate(DRUMS)}
+
+
+def beat_times(stems, activity):
+    """Beats from what the drums play when they play enough, else from everything, extended to cover the song."""
+    duration = len(activity) / DRUM_FRAMES
+    times = drum_times(activity)
+    if sum(len(times[drum]) for drum in BEAT_DRUMS) >= duration / 4:
+        envelope = activity[:, [DRUMS.index(drum) for drum in BEAT_DRUMS]].sum(axis=1)
+        _, frames = librosa.beat.beat_track(onset_envelope=envelope, sr=DRUM_FRAMES, hop_length=1, tightness=100, trim=False)
+        beats = (frames / DRUM_FRAMES).tolist()
+    else:
+        def onsets(path):
+            audio, _ = librosa.load(path, sr=RATE, mono=True)
+            return librosa.onset.onset_strength(y=audio, sr=RATE, hop_length=BEAT_HOP)
+
+        envelopes = [onsets(path) for path in stems.values()]
         shortest = min(map(len, envelopes))
         envelope = sum(item[:shortest] / max(np.percentile(item, 99), 1e-6) for item in envelopes)
-    _, frames = librosa.beat.beat_track(onset_envelope=envelope, sr=RATE, hop_length=BEAT_HOP, tightness=100, trim=False)
-    beats = librosa.frames_to_time(frames, sr=RATE, hop_length=BEAT_HOP).tolist()
+        _, frames = librosa.beat.beat_track(onset_envelope=envelope, sr=RATE, hop_length=BEAT_HOP, tightness=100, trim=False)
+        beats = librosa.frames_to_time(frames, sr=RATE, hop_length=BEAT_HOP).tolist()
     if len(beats) < 8:
         beats = [index * 0.5 for index in range(int(duration * 2) + 2)]
     # Parts before the drums enter have no beats of their own, so continue the nearest tempo.
@@ -160,15 +186,46 @@ def beat_times(stems):
     return beats
 
 
+def bar_patterns(activity, beats, shift, bar):
+    """Labels bars that repeat, by comparing one beat-aligned vector per bar; tempo changes do not matter here."""
+    from sklearn.cluster import AgglomerativeClustering
+    count = (len(beats) - 1) * 4
+    times = np.interp((np.arange(count) + shift) / 4, np.arange(len(beats)), beats)
+    frames = np.clip((times * DRUM_FRAMES).astype(int), 0, len(activity) - 1)
+    steps = np.stack([activity[max(frame - 3, 0):frame + 4].max(axis=0) for frame in frames])
+    first = bar * 4
+    total = (len(steps) - first) // 16
+    bars = steps[first:first + total * 16].reshape(total, -1)
+    playing = np.nonzero(bars.max(axis=1) > QUIET_BAR)[0]
+    if len(playing) < 2:
+        return []
+    groups = AgglomerativeClustering(n_clusters=None, distance_threshold=SAME_PATTERN, metric='cosine',
+                                     linkage='average').fit_predict(bars[playing])
+    sizes = np.bincount(groups)
+    repeated = [group for group in np.argsort(-sizes, kind='stable') if sizes[group] > 1][:26]
+    letters = {group: chr(65 + index) for index, group in enumerate(repeated)}
+    return [{'unit': int(first + index * 16), 'label': letters[group]}
+            for index, group in zip(playing, groups) if group in letters]
+
+
+def drum_part(activity, beats, bar):
+    hits, shift = drum_units(drum_times(activity), beats)
+    return {'chords': [], 'notes': [], 'hits': hits, 'patterns': bar_patterns(activity, beats, shift, bar)}
+
+
 def normalized(chroma):
     return chroma / np.maximum(np.linalg.norm(chroma, axis=0, keepdims=True), 1e-6)
 
 
 def analyze(stems, only=None, grid=None):
     """Every part, or with only and the song's grid, just that part; other stems are context for its chords."""
+    if only == 'drums':
+        part = drum_part(drum_activity(stems['drums']), grid['beats'], grid['firstBar'])
+        return {'beats': grid['beats'], 'firstBar': grid['firstBar'], 'stems': {'drums': part}}
     chromas, levels = {}, {}
     harmonic_stems = [name for name in stems if name not in ('bass', 'drums')]
-    beats = grid['beats'] if grid else beat_times(stems)
+    activity = None if grid else drum_activity(stems['drums'])
+    beats = grid['beats'] if grid else beat_times(stems, activity)
     for name in [name for name in stems if name != 'drums']:
         audio, _ = librosa.load(stems[name], sr=RATE, mono=True)
         harmonic = librosa.effects.harmonic(audio, margin=2)
@@ -195,7 +252,11 @@ def analyze(stems, only=None, grid=None):
         bass_chroma = normalized(chromas['bass'][:, :frames]) + normalized(together)
         audible = levels['bass'][:frames] > np.percentile(levels['bass'][:frames], 95) * 0.03
         result['bass'] = {'chords': chord_changes(chord_path(bass_chroma, bonus), audible), 'notes': bass_notes(stems['bass'], beats)}
-    bar = grid['firstBar'] if grid else first_bar(result['bass']['notes'])
+    if grid:
+        bar = grid['firstBar']
+    else:
+        bar = first_bar(result['bass']['notes'], drum_units(drum_times(activity), beats)[0])
+        result['drums'] = drum_part(activity, beats, bar)
     return {'beats': [round(beat, 3) for beat in beats], 'firstBar': bar, 'stems': result}
 
 

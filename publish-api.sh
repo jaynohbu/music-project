@@ -3,6 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 STACK="${1:-youtube-audio-library}"
 REGION=us-west-2
+YOUTUBE_OWNER_SUB="$(node backend/youtube-admin.mjs owner "$STACK")"
 ARTIFACT_BUCKET="$(aws cloudformation describe-stacks --stack-name "$STACK-artifacts" --region "$REGION" \
   --query "Stacks[0].Outputs[?OutputKey=='ArtifactBucketName'].OutputValue | [0]" --output text)"
 WORKER="$(aws cloudformation describe-stack-resource --stack-name "$STACK" --logical-resource-id Worker \
@@ -32,4 +33,6 @@ aws cloudformation package --template-file .aws-sam/api-release/template.yaml --
   --region "$REGION" --output-template-file .aws-sam/api-release/packaged.yaml
 aws cloudformation deploy --template-file .aws-sam/api-release/packaged.yaml --stack-name "$STACK" --region "$REGION" \
   --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset \
-  --parameter-overrides "InitialPasswordSecretName=youtube-audio-library/registration-password" "StemImageUri=$STEM_IMAGE"
+  --parameter-overrides "InitialPasswordSecretName=youtube-audio-library/registration-password" "StemImageUri=$STEM_IMAGE" \
+    "YoutubeOwnerSubject=$YOUTUBE_OWNER_SUB"
+node backend/youtube-admin.mjs revoke "$STACK"

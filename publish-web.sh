@@ -18,18 +18,24 @@ DISTRIBUTION="$(output DistributionId)"
 SITE="$(output WebsiteUrl)"
 POOL="$(output UserPoolId)"
 CLIENT="$(output UserPoolClientId)"
-export POOL CLIENT
+YOUTUBE_OWNER_SUB="$(output YoutubeOwnerSubject)"
+export POOL CLIENT YOUTUBE_OWNER_SUB
 node --input-type=module -e '
   import { writeFileSync } from "node:fs";
   writeFileSync("web/public/config.json", JSON.stringify({
     region: "us-west-2", userPoolId: process.env.POOL,
-    clientId: process.env.CLIENT, apiBaseUrl: "/api"
+    clientId: process.env.CLIENT, apiBaseUrl: "/api", youtubeOwnerSubject: process.env.YOUTUBE_OWNER_SUB
   }, null, 2));
 '
 npm run build --prefix web
 aws s3 sync web/dist/youtube-library/browser/ "s3://$BUCKET/" --region "$REGION" \
   --exclude index.html --exclude config.json --exclude config.example.json \
+  --exclude sorituh-mark.svg --exclude sorituh-logo.svg \
   --cache-control 'public,max-age=31536000,immutable'
+for asset in sorituh-mark.svg sorituh-logo.svg; do
+  aws s3 cp "web/dist/youtube-library/browser/$asset" "s3://$BUCKET/$asset" \
+    --region "$REGION" --content-type image/svg+xml --cache-control no-cache
+done
 aws s3 cp web/dist/youtube-library/browser/index.html "s3://$BUCKET/index.html" \
   --region "$REGION" --content-type text/html --cache-control no-cache
 aws s3 cp web/dist/youtube-library/browser/config.json "s3://$BUCKET/config.json" \

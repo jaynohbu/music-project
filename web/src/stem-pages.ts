@@ -1,17 +1,20 @@
-import { Component, ElementRef, Injector, OnDestroy, OnInit, afterNextRender, inject, signal } from '@angular/core';
+import { Component, ElementRef, EventEmitter, Injector, Input, OnChanges, OnDestroy, OnInit, Output, afterNextRender, effect, inject, signal, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { ActivatedRoute, RouterLink } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
-import { HARMONY_STEMS, HarmonyGrid, HarmonyPart, Job, LyricLine, STEM_NAMES, StemName, StemsService, errorMessage } from './services';
+import { HARMONY_STEMS, HarmonyGrid, HarmonyPart, Job, LyricLine, SceneEntry, SceneSettings, STEM_NAMES, StemName, StemsService, errorMessage } from './services';
+import { ConfirmationService } from './confirmation';
+import { captureSceneSettings, restoredSceneInterval } from './scene-settings';
 import { HarmonyStrip } from './harmony-strip';
 import { LyricsStrip } from './lyrics-strip';
+import { LyricsEditor, firstChange } from './lyrics-editor';
 import {
   EffectControl, EffectSettings, FaderControl, FADER_CONTROLS,
   StemEffects, applyStemEffects, createStemEffects, defaultEffects,
 } from './stem-effects';
 
 const MAX_UPLOAD_BYTES = 30_000_000;
-const MAX_AUDIO_SECONDS = 420;
+const MAX_AUDIO_SECONDS = 720;
 const STEM_POLL_MS = 4000;
 const STEM_DOWNLOAD_POOL = 4;
 
@@ -22,6 +25,7 @@ const STEM_DOWNLOAD_POOL = 4;
     <section class="card narrow">
       <span class="eyebrow">SIX-STEM SEPARATION</span>
       <h1>Upload audio to split</h1>
+      <button type="button" class="secondary" (click)="back()">Back to Music</button>
       <p>Separate an audio file into drums, bass, vocals, guitar, piano and other.</p>
       <form (ngSubmit)="submit()">
         <label for="audio-file">Audio file</label>
@@ -30,7 +34,7 @@ const STEM_DOWNLOAD_POOL = 4;
         <label for="audio-title">Title</label>
         <input id="audio-title" name="audio-title" type="text" maxlength="160"
           [(ngModel)]="title" [disabled]="busy()">
-        <p class="hint">Maximum 30 MB (30,000,000 bytes) and 7 minutes. Your browser checks duration before upload;
+        <p class="hint">Maximum 30 MB (30,000,000 bytes) and 12 minutes. Your browser checks duration before upload;
           the service also validates the actual media.</p>
         @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
         @if (notice()) { <p class="success" role="status">{{ notice() }}</p> }
@@ -58,6 +62,9 @@ const STEM_DOWNLOAD_POOL = 4;
 })
 export class SplitPage implements OnDestroy {
   private readonly stems = inject(StemsService);
+  private readonly router = inject(Router);
+  private readonly confirm = inject(ConfirmationService);
+  private returning = false;
   private controller?: AbortController;
   private destroyed = false;
   readonly file = signal<File | null>(null);
@@ -92,8 +99,21 @@ export class SplitPage implements OnDestroy {
     this.controller?.abort();
   }
 
-  cancelUpload(): void {
+  async cancelUpload(): Promise<void> {
+    if (await this.confirm.confirm('Cancel upload?', 'Cancel this upload? It will not be submitted for separation.', 'Cancel upload')) {
+      this.controller?.abort();
+    }
+  }
+
+  async canLeave(): Promise<boolean> {
+    if (!this.busy() || this.returning) return true;
+    if (!await this.confirm.confirm('Leave upload?', 'The upload is still active. Leaving cancels it; separation that was already queued continues.', 'Leave upload')) return false;
     this.controller?.abort();
+    return true;
+  }
+
+  async back(): Promise<void> {
+    await this.router.navigateByUrl('/list');
   }
 
   async submit(): Promise<void> {
@@ -115,7 +135,7 @@ export class SplitPage implements OnDestroy {
     try {
       const duration = await readAudioDuration(file);
       if (duration > MAX_AUDIO_SECONDS) {
-        throw new Error('Audio must be 7 minutes or shorter.');
+        throw new Error('Audio must be 12 minutes or shorter.');
       }
       if (this.destroyed || this.controller.signal.aborted) return;
 
@@ -144,6 +164,8 @@ export class SplitPage implements OnDestroy {
         this.notice.set('Upload complete. Stem separation is queued; follow its progress in your jobs.');
         this.retryJobId.set('');
         this.file.set(null);
+        this.returning = true;
+        await this.router.navigateByUrl('/list');
       }
     } catch (error) {
       if (!this.destroyed) {
@@ -172,6 +194,8 @@ export class SplitPage implements OnDestroy {
         this.retryJobId.set('');
         this.notice.set('Separation queued. Follow its progress in your jobs.');
         this.file.set(null);
+        this.returning = true;
+        await this.router.navigateByUrl('/list');
       }
     } catch (error) {
       if (!this.destroyed) this.error.set(`Could not queue the uploaded job: ${errorMessage(error)}`);
@@ -296,17 +320,21 @@ function newTrack(name: string): StemTrack {
   };
 }
 
+const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
+
 @Component({
+  selector: 'app-stem-mixer',
   standalone: true,
-  imports: [RouterLink, FormsModule, LyricsStrip, HarmonyStrip],
+  imports: [RouterLink, FormsModule, LyricsStrip, LyricsEditor, HarmonyStrip],
   template: `
     <section class="card">
       <div class="section-heading">
         <div>
           <span class="eyebrow">SIX-STEM MIXER</span>
-          <h1>{{ job()?.title || 'Stem mixer' }}</h1>
+          <h1>{{ sceneTitle || job()?.title || 'Stem mixer' }}</h1>
+          @if (job()?.author) { <p class="music-byline">By {{ job()!.author }}</p> }
         </div>
-        <a routerLink="/list">Back to jobs</a>
+        @if (!sceneEntry) { <a routerLink="/list">Back to music</a> }
       </div>
       @if (error()) { <p role="alert" class="error">{{ error() }}</p> }
       @if (job() && job()!.status !== 'completed' && job()!.status !== 'failed') {
@@ -316,6 +344,32 @@ function newTrack(name: string): StemTrack {
         <p role="alert" class="error">{{ job()?.error || 'Stem separation failed.' }}</p>
       }
       @if (job()?.status === 'completed') {
+        @if (sceneEntry) {
+          <button type="button" class="secondary" (click)="resetSong()" [disabled]="!canPlay()">Reset song settings</button>
+        }
+        @if (editingMetadata()) {
+          <form class="metadata-form" (ngSubmit)="saveMetadata()">
+            <label for="music-title">Music title</label>
+            <input id="music-title" name="musicTitle" [(ngModel)]="musicTitle" required maxlength="200"
+              [disabled]="savingMetadata()">
+            @if (!sceneEntry) {
+              <label for="music-author">Author</label>
+              <input id="music-author" name="musicAuthor" [(ngModel)]="musicAuthor" maxlength="200"
+                placeholder="Artist or composer (optional)" [disabled]="savingMetadata()">
+            }
+            @if (metadataError()) { <p class="error" role="alert">{{ metadataError() }}</p> }
+            <div class="metadata-buttons">
+              <button type="submit" [disabled]="savingMetadata() || !musicTitle.trim()">
+                {{ savingMetadata() ? 'Saving...' : sceneEntry ? 'Save scene song title' : 'Save title and author' }}
+              </button>
+              <button type="button" class="secondary" (click)="editingMetadata.set(false)"
+                [disabled]="savingMetadata()">Cancel</button>
+            </div>
+          </form>
+        } @else {
+          <button type="button" class="secondary" (click)="editMetadata()">{{ sceneEntry ? 'Edit scene song title' : 'Edit title and author' }}</button>
+        }
+        @if (metadataSaved()) { <p class="success" role="status">Title and author saved.</p> }
         <div class="section-heading mixer-actions">
           <p class="hint">Refreshes signed playback and download links automatically every 45 minutes.</p>
           <button type="button" class="secondary" (click)="retryLoadAndRenew()"
@@ -341,12 +395,15 @@ function newTrack(name: string): StemTrack {
                       <button type="button" class="secondary" (click)="findLyrics()" [disabled]="!canPlay()">Lyrics</button>
                     }
                   }
+                  @if (track.name === 'vocals' && lyricLines()) {
+                    <button type="button" class="secondary" (click)="editLyrics()">Edit lyrics</button>
+                  }
                   @if (isHarmonic(track.name) && !harmonyParts()) {
                     @if (findingChords()) {
                       <button type="button" class="secondary" disabled>Finding notes...</button>
                     } @else {
                       <button type="button" class="secondary" (click)="findChords()" [disabled]="!canPlay()"
-                        aria-label="Find chords and melody for guitar, piano, other and bass">Chords &amp; melody</button>
+                        aria-label="Find chords and melody for guitar, piano, other and bass, and the drum score">{{ track.name === 'drums' ? 'Drum score' : 'Chords & melody' }}</button>
                     }
                   }
                   @if (isHarmonic(track.name) && harmonyParts()) {
@@ -390,9 +447,11 @@ function newTrack(name: string): StemTrack {
                 <div class="task-note" role="status"><span>{{ chordsNote }}</span></div>
               }
               @if (isHarmonic(track.name) && harmonyParts(); as parts) {
-                @if (hasMusic(parts[track.name])) {
+                @if (track.name === 'drums' && !parts['drums'] && !regenerating('drums')) {
+                  <p class="hint">Press Regenerate drum score to write this song's drums.</p>
+                } @else if (hasMusic(parts[track.name])) {
                   <app-harmony-strip [part]="parts[track.name]" [stem]="track.name" [grid]="harmonyGrid()!" [time]="position()"></app-harmony-strip>
-                } @else {
+                } @else if (parts[track.name]) {
                   <p class="hint">No clear chords or notes were found in this stem.</p>
                 }
               }
@@ -500,6 +559,10 @@ function newTrack(name: string): StemTrack {
                   [hidden]="expandedStem() !== track.name">
                 <div class="console-transport" role="group" [attr.aria-label]="track.label + ' transport, mute and solo'">
                 <div class="transport-buttons">
+                  @if (sceneEntry) {
+                    <button type="button" class="secondary" (click)="previousSong.emit()" [disabled]="!hasPrevious">Previous song</button>
+                    <button type="button" class="secondary" (click)="nextSong.emit()" [disabled]="!hasNext">Next song</button>
+                  }
                   <button type="button" (click)="play()" [disabled]="!canPlay() || playing()"
                     [attr.aria-label]="track.label + ' play all stems'">
                     {{ position() > sectionStart() && position() < sectionEndTime() ? 'Resume' : 'Play' }}
@@ -591,10 +654,30 @@ function newTrack(name: string): StemTrack {
           }
         </div>
       }
+      @if (editingLyrics() && lyricLines(); as lines) {
+        <app-lyrics-editor [lines]="lines" [duration]="duration()" [saving]="savingLyrics()" [error]="lyricsSaveError()"
+          (saved)="saveLyrics($event)" (cancelled)="editingLyrics.set(false)"></app-lyrics-editor>
+      }
     </section>
   `,
 })
-export class MixerPage implements OnInit, OnDestroy {
+export class MixerPage implements OnInit, OnChanges, OnDestroy {
+  @Input() sceneEntry?: SceneEntry;
+  @Input() sceneTitle = '';
+  @Input() hasPrevious = false;
+  @Input() hasNext = false;
+  @Output() settingsChanged = new EventEmitter<SceneSettings>();
+  @Output() sceneTitleChanged = new EventEmitter<string>();
+  @Output() songEnded = new EventEmitter<void>();
+  @Output() audioReady = new EventEmitter<void>();
+  @Output() audioFailed = new EventEmitter<string>();
+  @Output() previousSong = new EventEmitter<void>();
+  @Output() nextSong = new EventEmitter<void>();
+  private readonly confirm = inject(ConfirmationService);
+  private readonly hydrated = signal(false);
+  private initialized = false;
+  private entryId = '';
+  private lastSettings = '';
   private readonly route = inject(ActivatedRoute);
   private readonly stems = inject(StemsService);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
@@ -643,8 +726,11 @@ export class MixerPage implements OnInit, OnDestroy {
   private readonly loadedParts = new Map<string, string>();
 
   readonly lyricsNote = 'Converting voice to text takes time. The timing may not match well at first but improves when reloaded. You can edit the text later.';
-  readonly chordsNote = 'Converting to chords and melody takes time, and the result is not the same as the original. You can edit the chords and melody later.';
+  readonly chordsNote = 'Converting to chords and melody takes time, and the result is not the same as the original.';
   readonly lyricLines = signal<LyricLine[] | null>(null);
+  readonly editingLyrics = signal(false);
+  readonly savingLyrics = signal(false);
+  readonly lyricsSaveError = signal('');
   readonly harmonyParts = signal<Record<string, HarmonyPart> | null>(null);
   readonly harmonyGrid = signal<HarmonyGrid | null>(null);
   readonly Math = Math;
@@ -662,6 +748,73 @@ export class MixerPage implements OnInit, OnDestroy {
   readonly sectionEnd = signal<number | null>(null);
   readonly loopSection = signal(false);
   readonly expandedStem = signal<string | null>(STEM_NAMES[0]);
+  readonly editingMetadata = signal(false);
+  readonly savingMetadata = signal(false);
+  readonly metadataError = signal('');
+  readonly metadataSaved = signal(false);
+  musicTitle = '';
+  musicAuthor = '';
+
+  constructor() {
+    effect(() => {
+      if (!this.hydrated()) return;
+      const settings = this.snapshotSettings();
+      const serialized = JSON.stringify(settings);
+      if (this.sceneEntry && serialized !== this.lastSettings) {
+        this.lastSettings = serialized;
+        untracked(() => this.settingsChanged.emit(settings));
+      }
+    });
+  }
+
+  private snapshotSettings(): SceneSettings {
+    return captureSceneSettings(this.masterVolume(), this.sectionStart(), this.sectionEndTime(),
+      this.loopSection(), this.tracks(), this.job()?.duration);
+  }
+
+  async resetSong(): Promise<void> {
+    if (!await this.confirm.confirm('Reset song settings?', 'Restore every stem, master volume, original audio, full-song interval and Loop off for this scene entry? Its title and position in the scene will not change.', 'Reset song')) return;
+    this.stop();
+    for (const track of this.tracks()) {
+      this.resetTrack(track.name);
+      this.showVersion(track.name, false);
+    }
+    this.masterVolume.set(80);
+    if (this.master && this.context) this.master.gain.setTargetAtTime(0.8, this.context.currentTime, 0.015);
+    this.sectionStart.set(0); this.sectionEnd.set(null); this.loopSection.set(false); this.position.set(0);
+  }
+
+  editMetadata(): void {
+    this.musicTitle = this.sceneEntry?.title || this.job()?.title || '';
+    this.musicAuthor = this.job()?.author ?? '';
+    this.metadataError.set('');
+    this.metadataSaved.set(false);
+    this.editingMetadata.set(true);
+  }
+
+  async saveMetadata(): Promise<void> {
+    if (this.savingMetadata()) return;
+    const generation = this.generation;
+    this.savingMetadata.set(true);
+    this.metadataError.set('');
+    try {
+      if (this.sceneEntry) {
+        if (!this.musicTitle.trim() || this.musicTitle.trim().length > 200) throw new Error('Enter a title of 1–200 characters.');
+        this.sceneTitleChanged.emit(this.musicTitle.trim());
+        this.editingMetadata.set(false);
+        return;
+      }
+      const { metadata } = await this.stems.updateMetadata(this.jobId, this.musicTitle, this.musicAuthor);
+      if (this.destroyed || generation !== this.generation) return;
+      this.job.update(job => job ? { ...job, ...metadata } : job);
+      this.editingMetadata.set(false);
+      this.metadataSaved.set(true);
+    } catch (error) {
+      if (!this.destroyed && generation === this.generation) this.metadataError.set(errorMessage(error));
+    } finally {
+      if (!this.destroyed && generation === this.generation) this.savingMetadata.set(false);
+    }
+  }
 
   toggleMixer(name: string): void {
     this.showMixer(this.expandedStem() === name ? null : name, name);
@@ -767,6 +920,38 @@ export class MixerPage implements OnInit, OnDestroy {
     }
   }
 
+  editLyrics(): void {
+    this.pause();
+    this.lyricsSaveError.set('');
+    this.editingLyrics.set(true);
+  }
+
+  // Leaves the cursor just before the first change, ready to replay it.
+  async saveLyrics(lines: LyricLine[]): Promise<void> {
+    const generation = this.generation;
+    const changed = firstChange(this.lyricLines() ?? [], lines);
+    if (changed === null) {
+      this.editingLyrics.set(false);
+      return;
+    }
+    this.savingLyrics.set(true);
+    this.lyricsSaveError.set('');
+    try {
+      await this.stems.saveLyrics(this.jobId, lines);
+      if (this.destroyed || generation !== this.generation) return;
+      this.lyricLines.set(lines);
+      this.editingLyrics.set(false);
+      this.moveTo(changed - LYRICS_REPLAY_LEAD);
+      await this.refreshJob(generation);
+    } catch (error) {
+      if (!this.destroyed && generation === this.generation) {
+        this.lyricsSaveError.set(`Could not save the lyrics: ${errorMessage(error)}`);
+      }
+    } finally {
+      this.savingLyrics.set(false);
+    }
+  }
+
   private async loadLyrics(job: Job, generation: number): Promise<void> {
     const url = job.lyrics?.url;
     if (!url || this.lyricLines() || this.lyricsLoading || this.lyricsLoadError()) return;
@@ -787,7 +972,7 @@ export class MixerPage implements OnInit, OnDestroy {
 
   isHarmonic(name: string): boolean { return HARMONY_STEMS.includes(name); }
 
-  hasMusic(part?: HarmonyPart): boolean { return !!part && (part.chords.length > 0 || part.notes.length > 0); }
+  hasMusic(part?: HarmonyPart): boolean { return !!part && (part.chords.length > 0 || part.notes.length > 0 || !!part.hits?.length); }
 
   findingChords(): boolean {
     const harmony = this.job()?.harmony;
@@ -841,7 +1026,9 @@ export class MixerPage implements OnInit, OnDestroy {
     }
   }
 
-  regenerateLabel(name: string): string { return name === 'other' ? 'Regenerate chords' : 'Regenerate chords & melody'; }
+  regenerateLabel(name: string): string {
+    return name === 'other' ? 'Regenerate chords' : name === 'drums' ? 'Regenerate drum score' : 'Regenerate chords & melody';
+  }
 
   regenerating(name: string): boolean {
     const status = this.job()?.harmony?.stems?.[name]?.status;
@@ -919,8 +1106,9 @@ export class MixerPage implements OnInit, OnDestroy {
   }
 
   private applyVersion(runtime: StemRuntime, cleaned: boolean, time: number): void {
-    runtime.originalLevel.gain.setTargetAtTime(cleaned ? 0 : 1, time, 0.005);
-    runtime.cleanedLevel.gain.setTargetAtTime(cleaned ? 1 : 0, time, 0.005);
+    const available = cleaned && !!runtime.cleanedBuffer;
+    runtime.originalLevel.gain.setTargetAtTime(available ? 0 : 1, time, 0.005);
+    runtime.cleanedLevel.gain.setTargetAtTime(available ? 1 : 0, time, 0.005);
   }
 
   sectionEndTime(): number { return this.sectionEnd() ?? this.duration(); }
@@ -1088,14 +1276,28 @@ export class MixerPage implements OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
+    this.initialized = true;
     window.addEventListener('scroll', this.followScroll, { passive: true });
+    if (this.sceneEntry) { this.loadJob(this.sceneEntry.jobId); return; }
     this.routeSubscription = this.route.paramMap.subscribe(params => {
       const jobId = params.get('jobId');
       if (!jobId) {
         this.error.set('The mixer job ID is missing.');
         return;
       }
-      if (jobId === this.jobId) return;
+      this.loadJob(jobId);
+    });
+  }
+
+  ngOnChanges(): void {
+    if (!this.initialized || !this.sceneEntry || this.sceneEntry.id === this.entryId) return;
+    this.loadJob(this.sceneEntry.jobId);
+  }
+
+  private loadJob(jobId: string): void {
+      if (jobId === this.jobId && (!this.sceneEntry || this.entryId === this.sceneEntry.id)) return;
+      this.entryId = this.sceneEntry?.id ?? '';
+      this.hydrated.set(false);
       this.resetMixer();
       this.jobId = jobId;
       const generation = ++this.generation;
@@ -1107,16 +1309,17 @@ export class MixerPage implements OnInit, OnDestroy {
       this.sectionStart.set(0);
       this.sectionEnd.set(null);
       this.loopSection.set(false);
+      this.masterVolume.set(80);
       this.playing.set(false);
       this.renewingLinks.set(false);
       this.loadingStems = false;
       void this.refreshJob(generation);
       this.pollTimer = setInterval(() => { void this.refreshJob(generation); }, STEM_POLL_MS);
-    });
   }
 
   ngOnDestroy(): void {
     this.destroyed = true;
+    this.hydrated.set(false);
     window.removeEventListener('scroll', this.followScroll);
     cancelAnimationFrame(this.scrollFrame);
     this.routeSubscription?.unsubscribe();
@@ -1124,6 +1327,10 @@ export class MixerPage implements OnInit, OnDestroy {
   }
 
   private resetMixer(): void {
+    this.editingMetadata.set(false);
+    this.savingMetadata.set(false);
+    this.metadataError.set('');
+    this.metadataSaved.set(false);
     this.expandedStem.set(STEM_NAMES[0]);
     this.centered = null;
     this.stopScrub();
@@ -1143,6 +1350,9 @@ export class MixerPage implements OnInit, OnDestroy {
     this.startingLyrics.set(false);
     this.lyricsLoadError.set('');
     this.lyricLines.set(null);
+    this.editingLyrics.set(false);
+    this.savingLyrics.set(false);
+    this.lyricsSaveError.set('');
     this.lyricsLoading = false;
     this.startingChords.set(false);
     this.chordsLoadError.set('');
@@ -1175,9 +1385,15 @@ export class MixerPage implements OnInit, OnDestroy {
         if (!this.loadingStems) await this.loadStems(job, generation);
       } else if (job.status === 'failed') {
         clearInterval(this.pollTimer);
+        this.audioFailed.emit(job.error || 'This song could not be separated.');
+      } else if (job.status === 'deleting') {
+        this.audioFailed.emit('This song is being deleted and is unavailable for playback.');
       }
     } catch (error) {
-      if (!this.destroyed && generation === this.generation) this.error.set(errorMessage(error));
+      if (!this.destroyed && generation === this.generation) {
+        this.error.set(errorMessage(error));
+        this.audioFailed.emit(this.error());
+      }
     } finally {
       if (generation === this.generation) this.polling = false;
     }
@@ -1251,6 +1467,7 @@ export class MixerPage implements OnInit, OnDestroy {
       }
     } catch (error) {
       this.error.set(`Audio playback is unavailable: ${errorMessage(error)}`);
+      this.audioFailed.emit(this.error());
       for (const name of STEM_NAMES.filter(name => !failedNames.includes(name))) {
         this.updateTrack(name, { status: 'error', error: 'Audio playback is unavailable.' });
       }
@@ -1261,6 +1478,7 @@ export class MixerPage implements OnInit, OnDestroy {
     const master = this.master;
     if (!context || !master) {
       this.error.set('Audio playback is unavailable: the audio engine did not initialize.');
+      this.audioFailed.emit(this.error());
       this.loadingStems = false;
       return;
     }
@@ -1300,9 +1518,11 @@ export class MixerPage implements OnInit, OnDestroy {
           const original = this.runtimes.get(name);
           if (!original) continue;
           original.cleanedBuffer = buffer;
-          this.applyVersion(original, true, context.currentTime);
+          const useCleaned = this.sceneEntry
+            ? this.sceneEntry.settings?.tracks[name]?.useCleaned ?? false : true;
+          this.applyVersion(original, useCleaned, context.currentTime);
           this.updateTrack(name, {
-            hasCleaned: true, useCleaned: true, cleanedPeaks: waveformPeaks(buffer), cleanError: undefined,
+            hasCleaned: true, useCleaned, cleanedPeaks: waveformPeaks(buffer), cleanError: undefined,
           });
           continue;
         }
@@ -1337,6 +1557,33 @@ export class MixerPage implements OnInit, OnDestroy {
     }
     if (!this.canPlay()) {
       this.error.set('One or more stems could not be loaded or are not time-aligned. Failed stems are identified above.');
+      this.audioFailed.emit(this.error());
+    } else if (!this.hydrated()) {
+      const saved = this.sceneEntry?.settings;
+      if (saved && this.context) {
+        this.masterVolume.set(saved.masterVolume);
+        if (this.master) this.master.gain.value = saved.masterVolume / 100;
+        const { start, end } = restoredSceneInterval(saved, this.duration());
+        this.sectionStart.set(start);
+        this.sectionEnd.set(end);
+        this.loopSection.set(saved.loop);
+        this.position.set(start);
+        for (const [name, settings] of Object.entries(saved.tracks)) {
+          this.updateTrack(name, settings);
+          const runtime = this.runtimes.get(name);
+          const track = this.tracks().find(item => item.name === name);
+          if (runtime && track) {
+            this.applyTrackSettings(track, runtime);
+            if (settings.useCleaned && !runtime.cleanedBuffer) {
+              this.updateTrack(name, { cleanError: 'Saved Cleaned audio is unavailable. Original audio is playing; retry loading stems to restore the saved version.' });
+            }
+            this.applyVersion(runtime, settings.useCleaned, this.context.currentTime);
+          }
+        }
+      }
+      this.lastSettings = JSON.stringify(this.snapshotSettings());
+      this.hydrated.set(true);
+      this.audioReady.emit();
     }
   }
 
@@ -1487,6 +1734,7 @@ export class MixerPage implements OnInit, OnDestroy {
           this.playing.set(false);
           clearInterval(this.clockTimer);
           this.stopSources();
+          this.songEnded.emit();
         };
         source.connect(runtime.originalLevel);
         this.sources.set(name, source);
@@ -1516,6 +1764,7 @@ export class MixerPage implements OnInit, OnDestroy {
         this.playing.set(false);
         clearInterval(this.clockTimer);
         this.error.set(`Could not start playback: ${errorMessage(error)}`);
+        this.audioFailed.emit(this.error());
       }
     } finally {
       if (token === this.playbackToken) this.starting = false;
@@ -1548,6 +1797,10 @@ export class MixerPage implements OnInit, OnDestroy {
     if (!(target instanceof HTMLInputElement)) return;
     const value = Number(target.value);
     if (!Number.isFinite(value)) return;
+    this.moveTo(value);
+  }
+
+  private moveTo(value: number): void {
     const wasPlaying = this.playing();
     ++this.playbackToken;
     this.starting = false;
@@ -1573,6 +1826,7 @@ export class MixerPage implements OnInit, OnDestroy {
       this.playing.set(false);
       this.position.set(end);
       clearInterval(this.clockTimer);
+      this.songEnded.emit();
     }
   }
 
