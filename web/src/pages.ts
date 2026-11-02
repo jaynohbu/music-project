@@ -78,7 +78,7 @@ export class LoginPage {
         Start the local service first and allow local-network access if your browser asks.
         Your library and converted audio are still saved in AWS.</p>
       <a routerLink="/youtube-files">Your YouTube files</a>
-      <p>Paste a YouTube video URL. We will extract an MP3 file and save it privately.</p>
+      <p>Paste a YouTube video URL. We will extract a WAV file and save it privately.</p>
       <form (ngSubmit)="submit()">
         <label for="url">YouTube video URL</label>
         <input id="url" name="url" type="url" placeholder="https://www.youtube.com/watch?v=..."
@@ -164,7 +164,7 @@ export class UploadPage {
               }
               @if (job.status === 'completed' && job.playUrl && job.downloadUrl) {
                 <audio controls preload="none" [src]="job.playUrl" (error)="playbackError()"></audio>
-                <a class="download" [href]="job.downloadUrl">Download audio</a>
+                <a class="download" [href]="job.downloadUrl">Download WAV</a>
               }
             }
             @if (job.error) { <p class="error">{{ job.error }}</p> }

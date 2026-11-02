@@ -8,8 +8,7 @@ ARTIFACT_BUCKET="$(aws cloudformation describe-stacks --stack-name "$STACK-artif
   --query "Stacks[0].Outputs[?OutputKey=='ArtifactBucketName'].OutputValue | [0]" --output text)"
 WORKER="$(aws cloudformation describe-stack-resource --stack-name "$STACK" --logical-resource-id Worker \
   --region "$REGION" --query StackResourceDetail.PhysicalResourceId --output text)"
-# Pass WORKER_IMAGE to release YouTube worker changes; otherwise the deployed image stays.
-WORKER_IMAGE="${WORKER_IMAGE:-$(aws lambda get-function --function-name "$WORKER" --region "$REGION" --query Code.ImageUri --output text)}"
+WORKER_IMAGE="$(aws lambda get-function --function-name "$WORKER" --region "$REGION" --query Code.ImageUri --output text)"
 # Pass STEM_IMAGE (from build-stem-image.sh) to release worker changes; otherwise the deployed image stays.
 STEM_IMAGE="${STEM_IMAGE:-$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
   --query "Stacks[0].Parameters[?ParameterKey=='StemImageUri'].ParameterValue | [0]" --output text)}"

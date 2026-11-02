@@ -39,10 +39,11 @@ try {
     storage: { send: async command => {
       const chunks = [];
       for await (const chunk of command.input.Body) chunks.push(chunk);
-      const mp3 = Buffer.concat(chunks);
-      assert.ok(mp3.subarray(0, 3).toString() === 'ID3' || (mp3[0] === 0xff && (mp3[1] & 0xe0) === 0xe0));
-      assert.ok(mp3.length > 1000);
-      assert.equal(command.input.Key, 'users/smoke/test.mp3');
+      const wav = Buffer.concat(chunks);
+      assert.equal(wav.subarray(0, 4).toString(), 'RIFF');
+      assert.equal(wav.subarray(8, 12).toString(), 'WAVE');
+      assert.ok(wav.length > 44100);
+      assert.equal(command.input.Key, 'users/smoke/test.wav');
       uploaded = true;
       return {};
     } },
@@ -62,7 +63,7 @@ try {
   await worker({ userId: 'smoke', jobId: 'test', sourceUrl: 'https://youtu.be/abcdefghijk' });
   assert.ok(uploaded, JSON.stringify(changes));
   assert.equal(changes.at(-1).status, 'completed');
-  console.log('Conversion smoke passed: synthetic MP4 -> yt-dlp -> FFmpeg MP3 -> upload stream.');
+  console.log('Conversion smoke passed: synthetic MP4 -> yt-dlp -> FFmpeg WAV -> upload stream.');
 } finally {
   if (server) await new Promise(resolve => server.close(resolve));
   await rm(directory, { recursive: true, force: true });

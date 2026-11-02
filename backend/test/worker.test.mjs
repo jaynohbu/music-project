@@ -10,7 +10,7 @@ const fields = command => Object.fromEntries(
     [key, command.input.ExpressionAttributeValues[name.replace('#f', ':v')]]),
 );
 
-test('uses shell-free arguments, creates private MP3 and removes scratch files', async () => {
+test('uses shell-free arguments, creates private WAV and removes scratch files', async () => {
   const changes = [];
   const uploads = [];
   let directory;
@@ -40,11 +40,9 @@ test('uses shell-free arguments, creates private MP3 and removes scratch files',
       assert.ok(args.includes('--no-playlist'));
       assert.equal(args[args.indexOf('--match-filter') + 1], 'duration <= 600 & !is_live');
       assert.equal(args[args.indexOf('--max-filesize') + 1], String(250 * 1024 * 1024));
-      assert.equal(args[args.indexOf('--audio-format') + 1], 'mp3');
-      assert.equal(args[args.indexOf('--audio-quality') + 1], '192K');
       assert.equal(options.timeout, 855000);
       directory = path.dirname(args[args.indexOf('--output') + 1]);
-      await writeFile(path.join(directory, 'audio.mp3'), 'audio');
+      await writeFile(path.join(directory, 'audio.wav'), 'audio');
       await writeFile(path.join(directory, 'audio.info.json'), '{"title":"Test video"}');
     },
   });
@@ -52,8 +50,8 @@ test('uses shell-free arguments, creates private MP3 and removes scratch files',
   assert.equal(changes[0].status, 'processing');
   assert.equal(changes[1].status, 'completed');
   assert.equal(changes[1].title, 'Test video');
-  assert.equal(uploads[0].Key, 'users/alice/test-job.mp3');
-  assert.equal(uploads[0].ContentType, 'audio/mpeg');
+  assert.equal(uploads[0].Key, 'users/alice/test-job.wav');
+  assert.equal(uploads[0].ContentType, 'audio/wav');
   await assert.rejects(access(directory));
 });
 
@@ -88,7 +86,7 @@ test('missing output and S3 errors cannot report success', async () => {
       run: async (_, args) => {
         if (createOutput) {
           const directory = path.dirname(args[args.indexOf('--output') + 1]);
-          await writeFile(path.join(directory, 'audio.mp3'), 'audio');
+          await writeFile(path.join(directory, 'audio.wav'), 'audio');
           await writeFile(path.join(directory, 'audio.info.json'), '{"title":"Video"}');
         }
       },
@@ -118,7 +116,7 @@ test('enforces the exact 250 MiB converted-file threshold', async () => {
         assert.equal(options.timeout, 15000);
         assert.equal(options.env.LD_LIBRARY_PATH, '');
         const directory = path.dirname(args[args.indexOf('--output') + 1]);
-        const file = path.join(directory, 'audio.mp3');
+        const file = path.join(directory, 'audio.wav');
         await writeFile(file, '');
         await truncate(file, size);
         await writeFile(path.join(directory, 'audio.info.json'), '{"title":"Boundary test"}');

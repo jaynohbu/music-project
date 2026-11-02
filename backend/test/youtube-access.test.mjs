@@ -28,20 +28,6 @@ test('legacy link revocation paginates only non-owner YouTube jobs and preserves
   ]);
 });
 
-test('revocation also blocks MP3 YouTube files', async () => {
-  const tagged = [];
-  const counts = await restrictLegacyYoutube({
-    owner: 'owner', bucket: 'audio', table: 'jobs',
-    database: { send: async () => ({ Items: [{ userId: 'other', jobId: 'new', key: 'users/other/new.mp3' }] }) },
-    storage: { send: async command => {
-      if (command.constructor.name === 'GetObjectTaggingCommand') return { TagSet: [] };
-      tagged.push(command.input); return {};
-    } },
-  });
-  assert.deepEqual(counts, { blocked: 1, missing: 0 });
-  assert.equal(tagged[0].Key, 'users/other/new.mp3');
-});
-
 test('revocation refuses unexpected keys instead of tagging original stems', async () => {
   await assert.rejects(restrictLegacyYoutube({
     owner: 'owner', bucket: 'audio', table: 'jobs',

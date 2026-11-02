@@ -170,8 +170,7 @@ to API Gateway. JWT-authenticated requests create/list per-user DynamoDB jobs.
 The stack creates its own zero-TTL cache policy for API requests and runtime
 configuration, so authenticated responses and configuration are never cached.
 The API asynchronously invokes a **Lambda Docker image**, which runs `yt-dlp`
-and FFmpeg, uploads a 192 kbps MP3 (older files are WAV) to a separate private S3 bucket,
-and records its status.
+and FFmpeg, uploads a WAV to a separate private S3 bucket, and records its status.
 The YouTube worker remains independent of stem separation.
 Direct uploads use signed S3 POST policies restricted to the server-generated
 key and exact file size. A separate **Demucs CPU Fargate task** runs for each
