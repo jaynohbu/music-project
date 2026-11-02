@@ -90,7 +90,7 @@ export function createStemHandler({
           input = stemInput(body());
         } catch (error) {
           console.warn('Invalid stem upload request', { name: error.name });
-          return reply(400, { message: 'Choose a WAV, MP3, M4A, FLAC, OGG or AAC file up to 30 MB (30,000,000 bytes), with a title under 200 characters.' });
+          return reply(400, { message: 'Choose a WAV, MP3, M4A, FLAC, OGG or AAC file up to 55 MB (55,000,000 bytes), with a title under 200 characters.' });
         }
         const jobId = randomUUID();
         const job = {

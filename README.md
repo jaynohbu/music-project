@@ -33,8 +33,8 @@ readable form width. Mixer faders retain their hardware-style controls.
 - Music: the default page after login, with the user's split songs, status/errors,
   pagination, **Open stem mixer**, **Add to scene**, and **Delete song**.
 - Upload & split: a dedicated full-screen flow hides the normal navigation,
-  uploads audio directly for six-stem separation (up to 30 MB / 30,000,000 bytes
-  and twelve minutes), then returns to Music once separation is queued.
+  uploads audio directly for six-stem separation (up to 55 MB / 55,000,000 bytes
+  and fifteen minutes), then returns to Music once separation is queued.
   Separation continues in the background. Leaving an active upload asks first.
 - Scenes: private, named sets of up to 99 song entries, referencing completed
   split songs without copying their audio. Create a scene, add songs from Music
@@ -182,7 +182,7 @@ passed through ECS environment variables, which require NFC-normalized values.
 The UI uses hash routes so refreshing either page needs no S3 error-page rewrite.
 
 Conversion is limited to non-live videos up to 10 minutes and files up to 250 MiB.
-Direct audio uploads have separate twelve-minute and 30 MB limits;
+Direct audio uploads have separate fifteen-minute and 55 MB limits;
 the browser checks duration before upload and the service validates the actual media.
 YouTube workers have 2 GiB memory, 1 GiB scratch space, a 15-minute timeout and concurrency
 of two. Pending invocations expire after 60 seconds; asynchronous retries are
@@ -191,11 +191,11 @@ This is a small private tool, not an unlimited public download service.
 Stem tasks use 4 vCPU and 16 GiB memory with a two-hour job deadline. They have
 outbound-only networking and a public IP for ECR/AWS access; no inbound ports.
 The six PCM16 stereo 44.1 kHz WAV outputs must have identical frame counts.
-WAV avoids MP3 encoder-delay alignment differences. At twelve minutes, decoded
-six-stem playback uses roughly 1.42 GiB at 44.1 kHz before browser/audio processing
+WAV avoids MP3 encoder-delay alignment differences. At fifteen minutes, decoded
+six-stem playback uses roughly 1.77 GiB at 44.1 kHz before browser/audio processing
 overhead (more if the browser resamples to 48 kHz). Low-memory devices may not
-handle the longest files. The 30 MB limit applies to the uploaded source, not
-the expanded WAV stems; a twelve-minute PCM WAV source exceeds it, so use a
+handle the longest files. The 55 MB limit applies to the uploaded source, not
+the expanded WAV stems; a PCM WAV source reaches it at about five minutes, so use a
 compressed input such as MP3, M4A or FLAC for long recordings.
 An upload expires after 15 minutes; queued/processing stem jobs use a separate
 two-hour deadline rather than the YouTube timeout. Failed stem history also
@@ -439,7 +439,7 @@ Cognito account, synthetic audio, S3 objects and job record):
 ```bash
 node backend/test/live-stem-smoke.mjs
 SMOKE_API_URL=https://YOUR_SITE/api node backend/test/live-stem-smoke.mjs
-SMOKE_DURATION_SECONDS=720 node backend/test/live-stem-smoke.mjs
+SMOKE_DURATION_SECONDS=900 node backend/test/live-stem-smoke.mjs
 ```
 
 This requires administrative Cognito permissions in addition to job/storage

@@ -20,9 +20,9 @@ const job = () => ({
 });
 
 test('stem input validates exact bounds and never accepts client paths', () => {
-  assert.equal(STEM_MAX_BYTES, 30_000_000);
-  assert.equal(STEM_MAX_DURATION, 720);
-  assert.ok(STEM_MAX_OUTPUT_BYTES >= 720 * 44100 * 4 + 44);
+  assert.equal(STEM_MAX_BYTES, 55_000_000);
+  assert.equal(STEM_MAX_DURATION, 900);
+  assert.ok(STEM_MAX_OUTPUT_BYTES >= 900 * 44100 * 4 + 44);
   for (const bytes of [0, -1, STEM_MAX_BYTES + 1, 1.5]) {
     assert.throws(() => stemInput({ fileName: 'song.wav', bytes }));
   }
@@ -30,7 +30,7 @@ test('stem input validates exact bounds and never accepts client paths', () => {
   assert.equal(stemInput({ fileName: 'song.WAV', bytes: STEM_MAX_BYTES }).extension, 'wav');
 });
 
-test('upload policy accepts exactly 30 MB and rejects one additional byte', async () => {
+test('upload policy accepts exactly 55 MB and rejects one additional byte', async () => {
   let conditions;
   let writes = 0;
   const handler = createStemHandler({
@@ -41,11 +41,11 @@ test('upload policy accepts exactly 30 MB and rejects one additional byte', asyn
     },
   });
   assert.equal((await handler(event('uploads', 'POST', {
-    fileName: 'song.flac', bytes: 30_000_000,
+    fileName: 'song.flac', bytes: 55_000_000,
   }))).statusCode, 201);
-  assert.deepEqual(conditions[0], ['content-length-range', 30_000_000, 30_000_000]);
+  assert.deepEqual(conditions[0], ['content-length-range', 55_000_000, 55_000_000]);
   assert.equal((await handler(event('uploads', 'POST', {
-    fileName: 'song.flac', bytes: 30_000_001,
+    fileName: 'song.flac', bytes: 55_000_001,
   }))).statusCode, 400);
   assert.equal(writes, 1);
 });
@@ -207,11 +207,11 @@ test('worker saves six WAVs before completing and aliases reserved removals', as
   assert.equal(Object.keys(completion.ExpressionAttributeValues[':v1']).length, 6);
 });
 
-test('worker accepts exactly twelve minutes and rejects any longer output before uploading', async () => {
-  const accepted = await workerFixture(undefined, 720);
+test('worker accepts exactly fifteen minutes and rejects any longer output before uploading', async () => {
+  const accepted = await workerFixture(undefined, 900);
   assert.equal(accepted.stored.length, 6);
   assert.equal(accepted.updates.at(-1).ExpressionAttributeValues[':v0'], 'completed');
-  const rejected = await workerFixture(undefined, 720 + 1 / 44100);
+  const rejected = await workerFixture(undefined, 900 + 1 / 44100);
   assert.equal(rejected.stored.length, 0);
   assert.equal(rejected.updates.at(-1).ExpressionAttributeValues[':v0'], 'failed');
 });

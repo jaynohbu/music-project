@@ -27,17 +27,17 @@ class SeparationDurationTests(unittest.TestCase):
                     )
                     return result, run.call_args_list
 
-    def test_exactly_twelve_minutes_is_accepted(self):
-        self.assertEqual(separation.MAX_SECONDS, 720)
-        result, calls = self.separate_frames(720 * 44100)
-        self.assertEqual(result["duration"], 720)
+    def test_exactly_fifteen_minutes_is_accepted(self):
+        self.assertEqual(separation.MAX_SECONDS, 900)
+        result, calls = self.separate_frames(900 * 44100)
+        self.assertEqual(result["duration"], 900)
         self.assertEqual(len(result["stems"]), 6)
         normalization = calls[0].args[0]
-        self.assertEqual(normalization[normalization.index("-t") + 1], "721")
+        self.assertEqual(normalization[normalization.index("-t") + 1], "901")
 
-    def test_one_sample_over_twelve_minutes_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, "720 seconds"):
-            self.separate_frames(720 * 44100 + 1)
+    def test_one_sample_over_fifteen_minutes_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "900 seconds"):
+            self.separate_frames(900 * 44100 + 1)
 
     def test_empty_audio_is_rejected(self):
         with self.assertRaises(ValueError):

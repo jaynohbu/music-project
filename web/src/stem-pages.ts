@@ -13,8 +13,8 @@ import {
   StemEffects, applyStemEffects, createStemEffects, defaultEffects,
 } from './stem-effects';
 
-const MAX_UPLOAD_BYTES = 30_000_000;
-const MAX_AUDIO_SECONDS = 720;
+const MAX_UPLOAD_BYTES = 55_000_000;
+const MAX_AUDIO_SECONDS = 900;
 const STEM_POLL_MS = 4000;
 const STEM_DOWNLOAD_POOL = 4;
 
@@ -34,7 +34,7 @@ const STEM_DOWNLOAD_POOL = 4;
         <label for="audio-title">Title</label>
         <input id="audio-title" name="audio-title" type="text" maxlength="160"
           [(ngModel)]="title" [disabled]="busy()">
-        <p class="hint">Maximum 30 MB (30,000,000 bytes) and 12 minutes. Your browser checks duration before upload;
+        <p class="hint">Maximum 55 MB (55,000,000 bytes) and 15 minutes. Your browser checks duration before upload;
           the service also validates the actual media.</p>
         @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
         @if (notice()) { <p class="success" role="status">{{ notice() }}</p> }
@@ -123,7 +123,7 @@ export class SplitPage implements OnDestroy {
     this.notice.set('');
     if (this.retryJobId()) return;
     if (file.size > MAX_UPLOAD_BYTES) {
-      this.error.set('The file is larger than the 30 MB (30,000,000 bytes) upload limit.');
+      this.error.set('The file is larger than the 55 MB (55,000,000 bytes) upload limit.');
       return;
     }
 
@@ -135,7 +135,7 @@ export class SplitPage implements OnDestroy {
     try {
       const duration = await readAudioDuration(file);
       if (duration > MAX_AUDIO_SECONDS) {
-        throw new Error('Audio must be 12 minutes or shorter.');
+        throw new Error('Audio must be 15 minutes or shorter.');
       }
       if (this.destroyed || this.controller.signal.aborted) return;
 
