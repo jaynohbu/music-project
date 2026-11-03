@@ -166,7 +166,8 @@ progress { width: 100%; height: 12px; accent-color: #3459c9; }
 .lyrics-flow { position: relative; display: inline-flex; white-space: nowrap; transition: transform 40ms linear; will-change: transform; }
 .lyrics-line { display: inline-flex; gap: 7px; margin-right: 34px; }
 .lyrics-word { color: #697b92; font-size: 1rem; line-height: 1.5; }
-.lyrics-word.active { color: #3459c9; font-weight: 700; }
+.lyrics-word.near { color: #5f7fd6; }
+.lyrics-word.active { color: #2447b8; font-weight: 700; }
 .harmony-strip { position: relative; height: 128px; margin-top: 10px; border-radius: 6px; background: #f1f4f9; overflow: hidden; }
 .harmony-strip.chords-only { height: 30px; }
 .staff-lines { position: absolute; inset: 0; width: 100%; height: 100%; }

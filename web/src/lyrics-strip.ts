@@ -37,7 +37,7 @@ export class LyricsStrip {
   private readonly strip = viewChild.required<ElementRef<HTMLElement>>('strip');
   private readonly flow = viewChild.required<ElementRef<HTMLElement>>('flow');
   private readonly words = computed(() => this.lines().flatMap(line => line.words));
-  private highlighted?: Element;
+  private highlighted = -1;
 
   constructor() {
     // Written directly, because this runs on every playback tick over every word.
@@ -59,11 +59,19 @@ export class LyricsStrip {
     const position = from + (center(elements[next]) - from) * progress;
     this.flow().nativeElement.style.transform = `translateX(${middle - position}px)`;
 
-    const active = index >= 0 && time < words[index].end + HELD_AFTER_WORD ? elements[index] : undefined;
+    // Word timings are sometimes a word early or late, so the words either side are lit too, more faintly.
+    const active = index >= 0 && time < words[index].end + HELD_AFTER_WORD ? index : -1;
     if (active !== this.highlighted) {
-      this.highlighted?.classList.remove('active');
-      active?.classList.add('active');
+      this.light(elements, this.highlighted, false);
+      this.light(elements, active, true);
       this.highlighted = active;
     }
+  }
+
+  private light(elements: HTMLCollectionOf<HTMLElement>, index: number, on: boolean): void {
+    if (index < 0) return;
+    elements[index].classList.toggle('active', on);
+    elements[index - 1]?.classList.toggle('near', on);
+    elements[index + 1]?.classList.toggle('near', on);
   }
 }
