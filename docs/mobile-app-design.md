@@ -14,14 +14,14 @@ Replace the WebView wrapper with a native Expo app that plays stems from its own
 |---|---|---|
 | WebView app | Works on the Android emulator; to be replaced except for sign-in | `mobile/App.tsx` |
 | Sign-in logic | Keep | `mobile/src/auth.ts` |
-| Device account API | Written and unit tested, **not deployed**; live route returns 404 | `backend/accounts.mjs`, `template.yaml` |
-| AAC generation | Written and unit tested (2026-11-03), **not deployed**; needs a new worker image | `backend/stem-playback.mjs`, `backend/stem-worker.mjs`, `backend/stem-restore.mjs` |
-| AAC for existing songs | Script written; dry run lists 4 songs and 7 cleaned stems; not applied | `backend/convert-playback.mjs` |
-| Usage limits | Written and unit tested (2026-11-03), **not deployed** | `backend/stem-usage.mjs`, `backend/stem-api.mjs`, `backend/accounts.mjs` |
+| Device account API | Deployed 2026-11-03 with the `ByDevice` index; session route answers 201; not yet used from a phone | `backend/accounts.mjs`, `template.yaml` |
+| AAC generation | Deployed 2026-11-03 (worker image `cpu-20261103210959`); not yet seen on a real split | `backend/stem-playback.mjs`, `backend/stem-worker.mjs`, `backend/stem-restore.mjs` |
+| AAC for existing songs | Script written; dry run lists 4 songs and 7 cleaned stems; not applied yet | `backend/convert-playback.mjs` |
+| Usage limits | Deployed 2026-11-03; `GET /api/stems/usage` answers 401 signed out | `backend/stem-usage.mjs`, `backend/stem-api.mjs`, `backend/accounts.mjs` |
 | Audio engine | Not started; biggest risk | none yet |
 | Local cache | Not started | none yet |
 
-All device API and mobile work is uncommitted on top of `358ae38`, as is the YouTube removal, which is already deployed. Commit, push or deploy only when the user asks.
+Step 1 and step 2 work is committed and pushed (`9b01351` on `main`). Commit, push or deploy only when the user asks.
 
 Nothing has run end to end against real AWS or on a physical phone.
 
@@ -288,5 +288,5 @@ The ADTOF licence is handled by a plan to train an in-house model before product
 - **CocoaPods** needs `LANG=en_US.UTF-8` and `LC_ALL=en_US.UTF-8`.
 - **Expo APIs:** `mobile/AGENTS.md` says to check the versioned docs, because SDK 58 differs from older knowledge. `ios/` and `android/` are generated and gitignored; never edit them by hand.
 - **Checks:** `node --test test/*.test.mjs` in `backend/`; `npx tsc --noEmit`, `npx expo lint` and `npx expo-doctor` in `mobile/`; `sam validate --lint` in the repo root.
-- **API deploy:** `STEM_IMAGE=<image> bash publish-api.sh youtube-audio-library`. The current image is `086723604095.dkr.ecr.us-west-2.amazonaws.com/youtube-audio-library-artifacts-stemrepository-8kjzuftyhvbg:cpu-20261102204228`. Worker code changes need a new image first (`build-stem-image.sh`). The publish scripts ship the working folder as it stands.
+- **API deploy:** `STEM_IMAGE=<image> bash publish-api.sh youtube-audio-library`. The current image is `086723604095.dkr.ecr.us-west-2.amazonaws.com/youtube-audio-library-artifacts-stemrepository-8kjzuftyhvbg:cpu-20261103210959`. Worker code changes need a new image first (`build-stem-image.sh`). The publish scripts ship the working folder as it stands.
 - **Names:** "youtube" in the stack name, the `youtube-session` key and similar is only a label; YouTube downloading has been removed.
