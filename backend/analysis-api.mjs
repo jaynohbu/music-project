@@ -140,6 +140,11 @@ export function createAnalysisRoutes({ database, storage, orchestrator, signer }
         if (!restored) return reply(409, { message: 'This stem has no cleaned version yet.' });
         sources.sourceKey = restored.key;
       }
+      // Usage limit: each stem is regenerated once from each source; a failed run can be retried.
+      if (records.some(record => record.stem === stem && record.status === 'completed' &&
+          (record.sourceKey ?? null) === (sources.sourceKey ?? null))) {
+        return reply(200, { [type]: (await regeneratedParts(records, signer, storage)).stems[stem] });
+      }
     } else if (whole && whole.status !== 'failed') {
       return reply(200, { [type]: await currentAnalysis(type, parent, { database, signer, storage }) });
     }

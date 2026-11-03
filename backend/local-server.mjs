@@ -64,7 +64,7 @@ export function createLocalServer({ api, accounts, stems, scenes, verify }) {
       const isSceneList = url.pathname === '/api/scenes';
       const isScene = /^\/api\/scenes\/[0-9a-f-]{36}$/.test(url.pathname);
       const isScenes = isSceneList || isScene;
-      const isStems = url.pathname === '/api/stems/uploads' || isRestorations || isRestoration || isAnalysis ||
+      const isStems = url.pathname === '/api/stems/uploads' || url.pathname === '/api/stems/usage' || isRestorations || isRestoration || isAnalysis ||
         /^\/api\/stems\/jobs\/[0-9a-f-]{36}(\/complete)?$/.test(url.pathname);
       if (!isAccount && !isJobs && !isStems && !isScenes) { reply(404, 'Endpoint not found.'); return; }
       if ((isAccount && request.method !== 'POST') ||

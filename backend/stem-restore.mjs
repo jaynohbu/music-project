@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { PLAY_VERSION, playbackEncoder, savePlayCopies } from './stem-playback.mjs';
 import { failureRetention } from './shared.mjs';
 import { stemDeadline } from './stem-shared.mjs';
 
@@ -62,6 +63,7 @@ export const runStemTask = ({ separate, restore, recognize, harmonize }) => job 
 export function createRestoreWorker({
   database = db, storage = s3, run = execute,
   pythonPath = process.env.STEM_PYTHON_PATH ?? 'python3',
+  encode = playbackEncoder(process.env.LOCAL_FFMPEG_PATH ?? 'ffmpeg'),
 } = {}) {
   return async input => {
     const read = async jobId => (await database.send(new GetCommand({
@@ -94,6 +96,7 @@ export function createRestoreWorker({
     let directory;
     let stage = 'download';
     let uploaded = false;
+    let copy;
     try {
       if (Date.now() >= stemDeadline(child)) throw new Error('Restoration deadline expired.');
       const parent = await read(child.parentJobId);
@@ -125,9 +128,13 @@ export function createRestoreWorker({
         Body: createReadStream(output), ContentLength: result.size,
       }));
       uploaded = true;
+      copy = (await savePlayCopies({
+        storage, encode, jobId: child.jobId, files: [{ file: output, key: child.key }],
+      }))?.[child.key];
       stage = 'record';
       await update('processing', {
         status: 'completed', bytes: result.size, completedAt: new Date().toISOString(),
+        ...(copy ? { ...copy, playVersion: PLAY_VERSION } : {}),
       }, ['expiresAt']);
     } catch (error) {
       console.error('Stem cleanup failed', { jobId: child.jobId, stage, name: error.name });
@@ -135,7 +142,9 @@ export function createRestoreWorker({
         status: 'failed', ...failureRetention(), error: MESSAGES[stage],
         errorCode: `RESTORE_${stage.toUpperCase()}_FAILED`, failureStage: stage,
       });
-      if (uploaded) await storage.send(new DeleteObjectCommand({ Bucket: process.env.BUCKET_NAME, Key: child.key }));
+      for (const objectKey of uploaded ? [child.key, copy?.playKey].filter(Boolean) : []) {
+        await storage.send(new DeleteObjectCommand({ Bucket: process.env.BUCKET_NAME, Key: objectKey }));
+      }
     } finally {
       if (directory) await rm(directory, { recursive: true, force: true });
     }

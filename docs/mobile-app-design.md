@@ -1,6 +1,6 @@
 # Sorituh mobile app design
 
-Status: agreed direction, not yet built. Last updated 2026-11-02.
+Status: step 1 (engine trial) passed on the iPhone; step 2 (server) is next. Last updated 2026-11-03.
 
 This is the source of truth for the native app work. Read it before changing `mobile/`, the stem pipeline, or account limits. A Korean summary for people is in `sorituh-mobile-app-design.docx`; if the two differ, this file wins.
 
@@ -15,8 +15,9 @@ Replace the WebView wrapper with a native Expo app that plays stems from its own
 | WebView app | Works on the Android emulator; to be replaced except for sign-in | `mobile/App.tsx` |
 | Sign-in logic | Keep | `mobile/src/auth.ts` |
 | Device account API | Written and unit tested, **not deployed**; live route returns 404 | `backend/accounts.mjs`, `template.yaml` |
-| AAC generation | Not started | `backend/stem-worker.mjs`, `backend/stem-restore.mjs` |
-| Usage limits | Not started | `backend/stem-api.mjs` |
+| AAC generation | Written and unit tested (2026-11-03), **not deployed**; needs a new worker image | `backend/stem-playback.mjs`, `backend/stem-worker.mjs`, `backend/stem-restore.mjs` |
+| AAC for existing songs | Script written; dry run lists 4 songs and 7 cleaned stems; not applied | `backend/convert-playback.mjs` |
+| Usage limits | Written and unit tested (2026-11-03), **not deployed** | `backend/stem-usage.mjs`, `backend/stem-api.mjs`, `backend/accounts.mjs` |
 | Audio engine | Not started; biggest risk | none yet |
 | Local cache | Not started | none yet |
 
@@ -66,7 +67,9 @@ Server (existing AWS stack)
 - **Compression failure does not fail the song.** Log it and play the WAV.
 - **Do not compress on the phone or re-encode AAC.** The app saves the bytes it downloaded. Phone compression would mean downloading 254 MB instead of 46 MB on every first load.
 - **Restored stems** get the same step in `stem-restore.mjs`.
-- **Existing songs** get a one-off conversion script; until then they play WAV.
+- **Existing songs** get a one-off conversion script; until then they play WAV. `backend/convert-playback.mjs` lists what it would convert, and converts with `--apply` (needs `TABLE_NAME`, `BUCKET_NAME`, `AWS_REGION=us-west-2` and ffmpeg). Run it after the deploy, with the user's approval.
+- **As built (2026-11-03):** each stem record gets `playKey` and `playBytes` next to `key`, and the song gets `playVersion: 'aac-256k'`; cleaned stems get the same three fields. The `.m4a` sits beside its WAV (`vocals.wav` → `vocals.m4a`), so song deletion removes it with the folder; deleting one cleaned stem removes both files. A song gets AAC for all six stems or none, so it never mixes formats. The API returns `playVersion` (`'wav'` when there is no copy) on songs and cleaned stems. `stem-playback.mjs` keeps the `stem-` prefix because `Dockerfile.stems` copies only `stem-*.mjs`.
+- **Timing:** ffmpeg writes an edit list for the AAC start delay. Decoding with ffmpeg, a click lands on the same sample as in the WAV, so the app (whose engine decodes with FFmpeg) stays aligned with lyrics, chords and WAV cleaned stems. Browser decoders were not checked; check the website's mixer against lyrics after the deploy.
 - **Deletion must remove AAC files.** `restoration-api.mjs:142` deletes by exact key and needs changing. Check `createSongDeletion` in `scene-api.mjs` too.
 
 | 6 stems | WAV | AAC 256 kbps |
@@ -112,13 +115,31 @@ Enforce on the server only.
 - **Restoration and analysis** use the same paid Fargate task. Default: one restoration per stem and one run of each analysis per split song.
 - **Plan:** a `plan` value in the database, changed by hand at first. In-app subscriptions must use Apple and Google billing, added later.
 
+**As built (2026-11-03; the user confirmed the assumptions above):**
+
+- Records in the jobs table, beside the user's songs: `{ userId, jobId: 'plan', plan: 'premium' }` (no record means free) and `{ userId, jobId: 'usage:YYYY-MM', splits }`. They have no `type` or `createdAt`, so song lists and child queries never show them. To make someone premium, put the plan record by hand.
+- `GET /api/stems/usage` returns `{ plan, month, splits: { used, limit }, songs: { used, limit } }` for the app to show.
+- `POST /api/stems/uploads` refuses with 403 and `code: 'SONG_LIMIT'` or `'SPLIT_LIMIT'`. Stored songs are counted from the song records (failed and expired ones excluded), so nothing needs initialising.
+- `POST /complete` takes the split with a conditional `ADD`, so two requests cannot both take the last one, and stores `usageMonth` on the song. The worker's failure path and the state machine's finalize step refund it once. A start that never reaches the worker (the song stays `queued` until it expires) is not refunded.
+- **Cleanups:** one per stem; a failed one can be retried. Deleting a cleaned stem frees that stem again, the same way deleting a song frees a song slot.
+- **Lyrics and chords:** one run per song, as before; a failed run can be retried. Regenerating one stem's chords: once per stem and source (original or cleaned stem).
+- **One new account per device:** `AccountDevices` has a `ByDevice` index. A device request that would create a new account for a device already linked to another email deletes the account it just made and returns 409 `DEVICE_HAS_ACCOUNT`. The user pool hides whether an email exists, so the check runs after the create. Signing in to other existing accounts from that device still works.
+
 ### Website
 
 No new features. It gets AAC playback automatically through `playUrl`.
 
 ## App deployment
 
-Follow the user's existing Yanji app: `~/Documents/GitHub/yanji/yanji-mobile-app` (`eas.json`, `deploy-ios.sh`, `.easignore`, `README.md`). Read it before setting this up. Sorituh has none of these files yet.
+Follow the user's existing Yanji app: `~/Documents/GitHub/yanji/yanji-mobile-app` (`eas.json`, `deploy-ios.sh`, `.easignore`, `README.md`). Read it before setting this up.
+
+**Accounts (same as Yanji, set up 2026-11-02):**
+
+- Expo account `nohjiyoung` (logged in on this Mac). EAS project `@nohjiyoung/sorituh`, ID `621ec342-3002-4e90-994e-d789aa50e02e`, in `mobile/app.json`.
+- Apple ID `nohjiyoung@hotmail.com`, in `submit.production.ios.appleId` of `mobile/eas.json`. Yanji's iOS production builds succeeded on EAS through 2026-10-06, so the paid developer team works; the old "no team" `build.log` predates that.
+- `mobile/eas.json` has `development`, `staging`, `engine-trial` (staging plus `EXPO_PUBLIC_ENGINE_TRIAL=1`) and `production`. The API URLs are fixed in `mobile/src/auth.ts`, so the profiles carry no `API_BASE` yet.
+- `.easignore` is at the repo root (`youtube-app/.easignore`), because EAS reads it from the git root and ignores one in `mobile/`. It repeats the `.gitignore` rules plus `.env*` and logs, leaves out `web/`, `backend/` and `music-files/`, and uploads `mobile/engine-trial-audio/`. Remove that folder after step 1.
+- Not done yet: App Store Connect app and `ascAppId`, `deploy-ios.sh`, Google Play. An iPhone needs registering (`eas device:create`) before an internal build installs on it.
 
 **Copy from Yanji:**
 
@@ -140,11 +161,11 @@ Follow the user's existing Yanji app: `~/Documents/GitHub/yanji/yanji-mobile-app
 
 **Backend does not change.** Yanji's backend scripts (EC2/PM2 in `yanji-service`) are not used here. The Sorituh backend stays on AWS SAM with `publish-api.sh` and `publish-web.sh`.
 
-Creating the EAS project, App Store Connect app and store submissions all act on external accounts, so do them only when the user asks.
+Creating the App Store Connect app, EAS builds and store submissions act on external accounts, so do them only when the user asks.
 
 ## Assumptions to confirm
 
-These came from the user's short description and are easy to change:
+These came from the user's short description. The user confirmed 1, 2 and 4 on 2026-11-03:
 
 1. "프리미엄이면 100개까지" means 100 splits per month for premium.
 2. "평생 최대 100개" means songs currently stored, not a lifetime total that deletion cannot free.
@@ -161,7 +182,7 @@ These came from the user's short description and are easy to change:
 
 ## Step 1 plan: engine trial
 
-**Status: emulator pass done; physical phones are next (see Next session: physical phones).** The user approved starting on 2026-11-02.
+**Status: passed on the iPhone; the user accepted the library on 2026-11-03 and moved on to step 2 (server).** A low-end Android phone is still to be tested when one is available (see Next session: physical phones). The user approved starting on 2026-11-02.
 
 Answer one question: can `react-native-audio-api` carry the mixer on real phones? Build the least code that answers it. Do not start on app screens, the server or sign-in.
 
@@ -183,7 +204,7 @@ Answer one question: can `react-native-audio-api` carry the mixer on real phones
 | CPU and battery | Record CPU use and whether the phone heats up over 15 minutes |
 | Background | Audio continues with the screen locked, and lock-screen controls work |
 
-**Devices:** the Android emulator is only for a first pass, because its timing and memory do not represent phones. The result counts only on a low-end Android phone and an iPhone. An iPhone needs the EAS `staging` profile (see App deployment), and creating the EAS project needs the user's go-ahead. Ask the user which physical phones are available.
+**Devices:** the Android emulator is only for a first pass, because its timing and memory do not represent phones. The result counts only on a low-end Android phone and an iPhone. An iPhone needs an EAS build with the `engine-trial` profile (see App deployment). Ask the user which physical phones are available.
 
 **Result:** record measurements per device under this section, then recommend one of: use the library, use custom native modules, or reopen the design. Stop there for the user's decision.
 
@@ -206,10 +227,13 @@ Answer one question: can `react-native-audio-api` carry the mixer on real phones
 | Compressor (now out of scope) | JS worklet on all 6: 12 dB input change gave 3 dB output at ratio 4, CPU about 69%, peaks to 77% | Pass |
 | EQ only, current scope (G) | -120 dB over 20 seeks; CPU about 4%, peaks to 8%; peak memory 84 MB on the 4-minute file | Pass |
 | 15 minutes with EQ only | Not rerun; the 230 MB run above included reverb | Open, low risk |
-| Mixer clicks | Not tested; needs listening | Open |
-| Background and lock screen | Not tested | Open |
-| Battery and heat | Not measurable on an emulator | Open |
-| iPhone and physical Android | Not tested | Open |
+| Mixer clicks | iPhone (2026-11-03), by ear on tones: no click with 30 ms ramps, and none with instant gain changes either, so the library or the level may hide clicks; the ramp stays in the real mixer | Pass on iPhone |
+| Background and lock screen | iPhone (2026-11-03): Listen 15 min kept playing in the background to the end of the file (900 s), and an Auto 15 min run stayed in sync through about 2 minutes in the background. Lock-screen play and pause stopped and started the sound | Pass on iPhone |
+| Battery and heat | iPhone (2026-11-03): no heat after 15 minutes, by feel. Battery not measured | Heat pass on iPhone; battery open |
+| iPhone, 4 minutes with EQ (G, 2026-11-03) | -120 dB median over 20 seeks; audible check -33 dB; worst single windows -93 to -96 dB (still about 60 dB below audible); `getCurrentTime()` spread 0 or 2.9 ms (one 128-frame render quantum, not drift) | Pass |
+| iPhone, 15 minutes with EQ (H, 2026-11-03, second build) | 5 seeks at -120 dB; continuous play from 0 s at -120 dB median, stall within ±3 ms, until 738 s, where position and context clock froze and the final audible check read silence while JS ran on to DONE. The build had no state or interruption logging, and the user noticed nothing | Stop at 738 s unexplained; did not reproduce |
+| iPhone, 15 minutes with EQ (H, 2026-11-03, third build with logging) | 5 seeks at -120 dB; continuous play from 0 s to 848 s, every 60 s window median -120 dB, worst -90 dB, stall within ±3 ms, `state=running` throughout. The app went to the background for about 2 minutes mid-run with no effect; final audible check -33 dB. No interruption or route change logged | Pass |
+| Physical Android | No phone available | Open |
 
 Trial runs stopped reporting a position once a file ended, which shows up as a large `stall` value at 240 s. That is expected and is not a dropout.
 
@@ -222,20 +246,27 @@ Trial runs stopped reporting a position once a file ended, which shows up as a l
 - If reverb comes back: use one shared reverb rather than one per stem, because six convolvers were the main CPU cost.
 - Pushing files with `adb` creates folders the app cannot read until `chmod -R 777`; a closed file reports duration 0 and silence, with no error.
 
-**Recommendation so far:** keep the library and test on physical phones. Do not treat step 1 as complete until they pass. Without compressor and reverb, CPU is a much smaller risk on low-end phones.
+**Recommendation (2026-11-03, after the iPhone trial):** use `react-native-audio-api`. On the iPhone, sync held at -120 dB through seeks and 15 minutes with EQ, background and lock-screen playback worked, and mixer changes had no clicks. Still open: one unexplained stop at 738 s in an earlier build without logging (did not reproduce), and a low-end Android phone for memory, CPU and battery. iPhone memory and CPU cannot be measured on this Mac. The user chose this on 2026-11-03 and moved on to step 2; Android is tested later.
 
 ### Next session: physical phones
 
-Start here. Ask the user first which phones are available, and whether to create the EAS project (needed for the iPhone).
+For the Android phone only, when one is available; step 2 comes first. The user has an **iPhone** (2026-11-02); no Android phone yet.
 
-1. **Android phone over USB** (developer mode and USB debugging on; `adb devices` lists it):
+**Trial app (updated 2026-11-02):** the screen now has buttons instead of running on launch. "Auto 4 min" runs scenario G (20 seeks), "Auto 15 min" runs scenario H (5 seeks and 800 s of listening). "Listen 15 min" is a mixer the user hears: play, pause, ±30 s, mute and volume per stem, a ramp switch (30 ms ramps; off sets gains at once and should click), and lock-screen controls through `PlaybackNotificationManager` with the `playback` audio session. The b stems start muted, so plain tones are heard. On return to the app it logs wall time against how far the audio moved, which shows whether audio kept going while locked. "Share log" sends the full log, so the user can paste it here.
+
+**Test audio:** `bash src/engine-trial/push-test-audio.sh` writes 12 files (217 MB) to `mobile/engine-trial-audio/` as AAC in `.mp4`, because expo-asset embeds `.mp4` but not `.m4a`. It pushes them to Android only when a device is attached. `mobile/app.config.js` embeds the folder only when `EXPO_PUBLIC_ENGINE_TRIAL=1`, and iOS reads them from `Paths.bundle` (`expo-file-system`). The folder is gitignored but not in the root `.easignore`, so EAS uploads it with every build; delete it after the trial.
+
+1. **iPhone:**
+   1. The user registers the iPhone: `eas device:create` in `mobile/` (interactive; opens a link or QR code on the iPhone to install a profile).
+   2. With the user's approval: `eas build --platform ios --profile engine-trial`. EAS asks for Apple sign-in and creates the certificate and ad hoc profile on the first build, so run it interactively.
+   3. Install from the build link on the iPhone (Developer Mode must be on: Settings > Privacy & Security).
+   4. Run "Auto 4 min", then "Auto 15 min", and share each log. Then "Listen 15 min" by ear: mute and volume with ramp on and off, seeks, screen lock for a few minutes, lock-screen play and pause, and heat after 15 minutes.
+   5. iOS memory and CPU cannot be read from an internal build without Xcode (this Mac's Xcode 16.2 is too old). Record "no crash or audio loss over 15 minutes" and heat by feel; Android supplies the numbers.
+2. **Android phone over USB** (when one is available; developer mode and USB debugging on; `adb devices` lists it):
    1. From `mobile/`, build and install with `EXPO_PUBLIC_ENGINE_TRIAL=1` and the environment in "Working in this repo": `npx expo prebuild --platform android --no-install`, then `npx expo run:android --variant release --no-bundler`.
-   2. Run `bash src/engine-trial/push-test-audio.sh`, then restart the app.
+   2. Run `bash src/engine-trial/push-test-audio.sh`, then restart the app and tap a test.
    3. The trial logs lines starting with `TRIAL` (`adb logcat -s ReactNativeJS:I`) and ends with `DONE` or `FAILED`. Sample memory with `adb shell dumpsys meminfo com.tunesbasis.sorituh` and CPU with `adb shell top -b -n 1 -p <pid>` every 10 s.
-   4. Change the last line of the trial to `scenario('H EQ 15 min', 900, true, 800, 5)` to cover the 15-minute check.
-2. **By ear on the phone** (the user listens): mute and volume changes without clicks, screen lock and lock-screen controls, heat after 15 minutes. The trial has no mixer controls or lock-screen session yet; add the least code needed.
-3. **iPhone:** the trial reads files from a fixed Android path. Bundle the files or copy them to the app's document folder, set up the EAS `staging` profile, and build with EAS (see App deployment).
-4. Record results per device in the table above, then make the recommendation in "Result" and stop for the user's decision.
+3. Record results per device in the table above, then make the recommendation in "Result" and stop for the user's decision.
 
 After step 1, `mobile/App.tsx` is still the WebView app; step 3 replaces it.
 

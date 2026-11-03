@@ -1,10 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { Readable } from 'node:stream';
 import path from 'node:path';
 import { createStemHandler } from '../stem-api.mjs';
 import { createStemWorker } from '../stem-worker.mjs';
+import { playbackEncoder } from '../stem-playback.mjs';
 import { STEM_NAMES, STEM_MAX_BYTES, STEM_MAX_DURATION, STEM_MAX_OUTPUT_BYTES, stemInput } from '../stem-shared.mjs';
 import { visibleJob, jobExpiry } from '../shared.mjs';
 import { createLocalServer } from '../local-server.mjs';
@@ -34,7 +37,7 @@ test('upload policy accepts exactly 55 MB and rejects one additional byte', asyn
   let conditions;
   let writes = 0;
   const handler = createStemHandler({
-    database: { send: async () => { writes++; return {}; } },
+    database: { send: async c => { if (c.constructor.name === 'PutCommand') writes++; return {}; } },
     uploadSigner: async (_storage, options) => {
       conditions = options.Conditions;
       return { url: 'signed', fields: {} };
@@ -145,6 +148,21 @@ test('completed stem jobs return all six signed play/download pairs', async () =
   assert.equal(Object.keys(result.job.stems).length, 6);
   assert.equal(signed, 12);
   assert.ok(result.job.stems.vocals.downloadUrl);
+  assert.equal(result.job.playVersion, 'wav');
+});
+
+test('songs with AAC copies play AAC, still download WAV, and report the play version', async () => {
+  const value = { ...job(), status: 'completed', playVersion: 'aac-256k',
+    stems: Object.fromEntries(STEM_NAMES.map(name => [name, { key: `${name}.wav`, playKey: `${name}.m4a` }])) };
+  const handler = createStemHandler({
+    database: { send: async () => ({ Item: value }) },
+    signer: async (_storage, command) => `https://signed/${command.input.Key}`,
+  });
+  const result = JSON.parse((await handler(event(`jobs/${id}`, 'GET'))).body);
+  assert.equal(result.job.playVersion, 'aac-256k');
+  assert.equal(result.job.stems.vocals.playUrl, 'https://signed/vocals.m4a');
+  assert.equal(result.job.stems.vocals.downloadUrl, 'https://signed/vocals.wav');
+  assert.equal('playKey' in result.job.stems.vocals, false);
 });
 
 function wav() {
@@ -164,7 +182,10 @@ function wav() {
   return data;
 }
 
-async function workerFixture(missing, duration = 1) {
+// Stands in for ffmpeg; the real encoder is covered by its own test.
+const fakeEncode = async (_input, output) => writeFile(output, 'aac');
+
+async function workerFixture(missing, duration = 1, { encode = fakeEncode, failPut } = {}) {
   const updates = [];
   const stored = [];
   const value = { ...job(), status: 'queued' };
@@ -176,7 +197,8 @@ async function workerFixture(missing, duration = 1) {
     } },
     storage: { send: async c => {
       if (c.constructor.name === 'GetObjectCommand') return { ContentLength: 100, Body: Readable.from(Buffer.alloc(100)) };
-      stored.push(c.input);
+      if (c.constructor.name === 'PutObjectCommand' && failPut?.(c.input.Key)) throw new Error('S3 unavailable');
+      stored.push({ ...c.input, kind: c.constructor.name });
       // Consume upload streams just as the SDK would.
       if (c.input.Body) for await (const _chunk of c.input.Body) { /* drain */ }
       return {};
@@ -191,25 +213,77 @@ async function workerFixture(missing, duration = 1) {
       }
       return { stdout: JSON.stringify({ duration, stems }) };
     },
+    encode,
   });
   await worker(value);
   return { updates, stored };
 }
 
-test('worker saves six WAVs before completing and aliases reserved removals', async () => {
+const completionFields = update => Object.fromEntries(Object.entries(update.ExpressionAttributeNames)
+  .filter(([alias]) => alias.startsWith('#f'))
+  .map(([alias, name]) => [name, update.ExpressionAttributeValues[`:v${alias.slice(2)}`]]));
+
+test('worker saves six WAVs and their AAC copies before completing and aliases reserved removals', async () => {
   const { updates, stored } = await workerFixture();
-  assert.equal(stored.length, 6);
-  assert.ok(stored.every(item => item.ContentType === 'audio/wav' && item.Key.endsWith('.wav')));
+  assert.equal(stored.length, 12);
+  const wavs = stored.slice(0, 6), copies = stored.slice(6);
+  assert.ok(wavs.every(item => item.ContentType === 'audio/wav' && item.Key.endsWith('.wav')));
+  assert.deepEqual(copies.map(item => item.Key), wavs.map(item => item.Key.replace(/\.wav$/, '.m4a')));
+  assert.ok(copies.every(item => item.ContentType === 'audio/mp4'));
   const completion = updates.at(-1);
   assert.equal(completion.ExpressionAttributeValues[':v0'], 'completed');
   assert.ok(Object.values(completion.ExpressionAttributeNames).includes('error'));
   assert.ok(completion.UpdateExpression.includes('REMOVE #r'));
-  assert.equal(Object.keys(completion.ExpressionAttributeValues[':v1']).length, 6);
+  const fields = completionFields(completion);
+  assert.equal(fields.playVersion, 'aac-256k');
+  assert.equal(Object.keys(fields.stems).length, 6);
+  assert.deepEqual(fields.stems.vocals, {
+    key: `users/owner/stems/${id}/vocals.wav`, bytes: 444, playKey: `users/owner/stems/${id}/vocals.m4a`, playBytes: 3,
+  });
+});
+
+test('a failed AAC copy still completes the song with WAV playback', async () => {
+  const { updates, stored } = await workerFixture(undefined, 1, {
+    encode: async (input, output) => {
+      if (input.endsWith('piano.wav')) throw new Error('encoder crashed');
+      await writeFile(output, 'aac');
+    },
+  });
+  assert.equal(stored.length, 6, 'no copy is uploaded when one stem fails to encode');
+  const fields = completionFields(updates.at(-1));
+  assert.equal(fields.status, 'completed');
+  assert.equal('playVersion' in fields, false);
+  assert.ok(Object.values(fields.stems).every(stem => !('playKey' in stem)));
+});
+
+test('a failed AAC upload removes the copies already uploaded and keeps the WAVs', async () => {
+  const { updates, stored } = await workerFixture(undefined, 1, { failPut: key => key.endsWith('piano.m4a') });
+  const puts = stored.filter(item => item.kind === 'PutObjectCommand');
+  const deletes = stored.filter(item => item.kind === 'DeleteObjectCommand').map(item => item.Key);
+  assert.equal(puts.filter(item => item.Key.endsWith('.wav')).length, 6);
+  assert.deepEqual(deletes, puts.filter(item => item.Key.endsWith('.m4a')).map(item => item.Key));
+  const fields = completionFields(updates.at(-1));
+  assert.equal(fields.status, 'completed');
+  assert.ok(Object.values(fields.stems).every(stem => !('playKey' in stem)));
+});
+
+let hasFfmpeg = false;
+try { execFileSync('ffmpeg', ['-version']); hasFfmpeg = true; } catch { /* Skipped below. */ }
+
+test('the real encoder writes a fast-start AAC file', { skip: !hasFfmpeg }, async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'play-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const input = path.join(directory, 'vocals.wav'), output = path.join(directory, 'vocals.m4a');
+  await writeFile(input, wav());
+  await playbackEncoder('ffmpeg')(input, output);
+  const file = await readFile(output);
+  assert.equal(file.toString('ascii', 4, 8), 'ftyp');
+  assert.ok(file.indexOf('moov') < file.indexOf('mdat'), 'moov comes first, so playback can start while downloading');
 });
 
 test('worker accepts exactly fifteen minutes and rejects any longer output before uploading', async () => {
   const accepted = await workerFixture(undefined, 900);
-  assert.equal(accepted.stored.length, 6);
+  assert.equal(accepted.stored.length, 12);
   assert.equal(accepted.updates.at(-1).ExpressionAttributeValues[':v0'], 'completed');
   const rejected = await workerFixture(undefined, 900 + 1 / 44100);
   assert.equal(rejected.stored.length, 0);

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { createStemHandler } from '../stem-api.mjs';
@@ -149,7 +150,10 @@ test('create stores a separate record, starts the task with its kind, and repeat
   assert.equal(again.status, 200);
   assert.equal(again.body.restoration.id, id);
   assert.equal(started.length, 1);
-  assert.equal((await call(route, { ...good, strength: 0.6 })).status, 202);
+  assert.equal((await call(route, { ...good, strength: 0.6 })).status, 409, 'one cleanup per stem');
+  assert.equal((await call(route, { ...good, stem: 'piano' })).status, 202, 'other stems have their own');
+  database.put({ ...database.get('owner', id), status: 'failed', error: 'x', failedAt: new Date().toISOString() });
+  assert.equal((await call(route, { ...good, strength: 0.6 })).status, 202, 'a failed cleanup can be retried');
   assert.deepEqual(database.get('owner', parentId).stems, parent().stems);
 });
 
@@ -181,7 +185,14 @@ test('parent GET lists progress and signs only completed stems; failed history e
   database.put({ ...database.get('owner', id), status: 'completed' });
   list = (await call(parentId, undefined, 'GET')).body.job.restorations;
   assert.equal(list[0].playUrl, `https://signed/users/owner/restored/${parentId}/${id}.wav`);
+  assert.equal(list[0].playVersion, 'wav');
   assert.equal('key' in list[0], false);
+  database.put({ ...database.get('owner', id), playKey: `users/owner/restored/${parentId}/${id}.m4a`, playVersion: 'aac-256k' });
+  list = (await call(parentId, undefined, 'GET')).body.job.restorations;
+  assert.equal(list[0].playUrl, `https://signed/users/owner/restored/${parentId}/${id}.m4a`);
+  assert.equal(list[0].downloadUrl, `https://signed/users/owner/restored/${parentId}/${id}.wav`);
+  assert.equal(list[0].playVersion, 'aac-256k');
+  assert.equal('playKey' in list[0], false);
   database.put({ ...database.get('owner', id), status: 'failed', error: 'x', failedAt: '2020-01-01T00:00:00.000Z', expiresAt: 1 });
   assert.deepEqual((await call(parentId, undefined, 'GET')).body.job.restorations, []);
 });
@@ -202,8 +213,10 @@ test('delete removes only the cleaned stem and never an original', async () => {
   const key = `users/owner/restored/${parentId}/${id}.wav`;
   const path = `${route}/${id}`;
   assert.equal((await call(path, undefined, 'DELETE')).status, 409, 'not while running');
-  database.put({ ...database.get('owner', id), status: 'completed' });
+  const playKey = key.replace(/\.wav$/, '.m4a');
+  database.put({ ...database.get('owner', id), status: 'completed', playKey });
   storage.objects.set(key, Buffer.from('cleaned'));
+  storage.objects.set(playKey, Buffer.from('cleaned aac'));
   const before = database.get('owner', parentId);
   assert.equal((await call(`22222222-2222-4222-8222-222222222222/restorations/${id}`, undefined, 'DELETE')).status, 404);
   assert.equal((await call(`${route}/${parentId}`, undefined, 'DELETE')).status, 404, 'a parent job id is refused');
@@ -211,6 +224,7 @@ test('delete removes only the cleaned stem and never an original', async () => {
   assert.ok(storage.objects.has(key));
   assert.equal((await call(path, undefined, 'DELETE')).status, 200);
   assert.equal(storage.objects.has(key), false);
+  assert.equal(storage.objects.has(playKey), false);
   assert.equal(database.get('owner', id), undefined);
   for (const name of STEM_NAMES) assert.ok(storage.objects.has(stemKey(name)));
   assert.deepEqual(database.get('owner', parentId), before);
@@ -218,6 +232,8 @@ test('delete removes only the cleaned stem and never an original', async () => {
   database.put({ ...parent({ jobId: id }), type: 'restoration', parentJobId: parentId, status: 'completed', key: stemKey('vocals') });
   assert.equal((await call(path, undefined, 'DELETE')).status, 500, 'an unexpected key is refused');
   assert.ok(storage.objects.has(stemKey('vocals')));
+  database.put({ ...database.get('owner', id), key, playKey: stemKey('vocals').replace(/\.wav$/, '.m4a') });
+  assert.equal((await call(path, undefined, 'DELETE')).status, 500, 'an unexpected play key is refused');
 });
 
 test('cleaned stems are not library jobs', async () => {
@@ -337,7 +353,7 @@ test('real script produces an aligned stem through the worker, writing only the 
   const { input, database, storage, child } = workerCase();
   // Same layout as real stems, whose extra chunk makes the file larger than the output.
   storage.objects.set(stemKey('guitar'), wavWithList());
-  const real = createRestoreWorker({ database, storage, pythonPath: python });
+  const real = createRestoreWorker({ database, storage, pythonPath: python, encode: async (_input, output) => writeFile(output, 'aac') });
   const before = new Map([...storage.objects].map(([key, value]) => [key, createHash('md5').update(value).digest('hex')]));
   await real(input);
   const saved = database.get('owner', child.jobId);
@@ -348,7 +364,10 @@ test('real script produces an aligned stem through the worker, writing only the 
   assert.equal(saved.bytes, output.length);
   assert.equal(output.toString('ascii', 0, 4), 'RIFF');
   for (const [key, hash] of before) assert.equal(createHash('md5').update(storage.objects.get(key)).digest('hex'), hash);
-  assert.deepEqual(storage.calls.filter(call => call.kind === 'PutObjectCommand').map(call => call.key), [child.key]);
+  const playKey = child.key.replace(/\.wav$/, '.m4a');
+  assert.deepEqual(storage.calls.filter(call => call.kind === 'PutObjectCommand').map(call => call.key), [child.key, playKey]);
+  assert.equal(saved.playKey, playKey);
+  assert.equal(saved.playVersion, 'aac-256k');
 });
 
 test('local server routes cleanup with verified identity', async t => {
@@ -571,7 +590,11 @@ test('a failed regeneration reports its error and keeps the last good result of 
   assert.equal(part.error, 'Chord analysis failed. Please try again.');
   assert.equal(part.resultId, otherId);
   assert.ok(part.url.endsWith(`${otherId}.json`));
-  assert.equal((await call(`${parentId}/harmony`, { stem: 'bass' })).status, 202, 'can be tried again');
+  const kept = await call(`${parentId}/harmony`, { stem: 'bass' });
+  assert.equal(kept.status, 200, 'a stem regenerated once from this source is not redone');
+  assert.equal(kept.body.harmony.resultId, otherId);
+  finished('88888888-8888-4888-8888-888888888888', { stem: 'piano', status: 'failed', error: 'x', generatedAt: new Date().toISOString(), failedAt: new Date().toISOString() });
+  assert.equal((await call(`${parentId}/harmony`, { stem: 'piano' })).status, 202, 'a failed one can be tried again');
 });
 
 test('regenerating from the cleaned version uses the newest finished cleanup of that stem', async () => {

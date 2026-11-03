@@ -151,14 +151,16 @@ test('Cognito reset failures remain explicit', async () => {
 const deviceBody = { email: 'New@Example.com', deviceId: 'abcdef0123456789', password: 'correctHorse1!correct' };
 const hashed = value => createHash('sha256').update(value).digest('hex');
 const deviceKey = { emailHash: hashed('new@example.com'), deviceHash: hashed('abcdef0123456789') };
-function deviceFixture({ exists = true, known = false, unproven = [], failOn } = {}) {
+function deviceFixture({ exists = true, known = false, unproven = [], linked = [], failOn } = {}) {
   const database = [];
   const identity = [];
   const { handler } = fixture({
     database: { send: async command => {
       database.push(command);
       if (command.constructor.name === 'GetCommand') return known ? { Item: deviceKey } : {};
-      if (command.constructor.name === 'QueryCommand') return { Items: unproven };
+      if (command.constructor.name === 'QueryCommand') {
+        return { Items: command.input.IndexName === 'ByDevice' ? linked : unproven };
+      }
       return {};
     } },
     identity: { send: async command => {
@@ -184,6 +186,27 @@ test('device request creates a new account with no code and remembers the device
   const saved = database.find(command => command.constructor.name === 'PutCommand' && command.input.Item.deviceHash);
   assert.deepEqual(saved.input.Item, { ...deviceKey, proven: false });
   assert.ok(!JSON.stringify(database.map(command => command.input)).includes(deviceBody.deviceId));
+});
+
+test('a device that already has an account cannot create another, and nothing is left behind', async () => {
+  const other = { emailHash: hashed('first@example.com'), deviceHash: deviceKey.deviceHash };
+  const { handler, database, identity, names } = deviceFixture({ exists: false, linked: [other] });
+  const response = await handler(event('device', deviceBody));
+  assert.equal(response.statusCode, 409);
+  assert.equal(parse(response).code, 'DEVICE_HAS_ACCOUNT');
+  assert.deepEqual(names(identity), ['AdminCreateUserCommand', 'AdminDeleteUserCommand']);
+  assert.equal(identity[1].input.Username, 'new@example.com');
+  assert.equal(database.some(command => command.constructor.name === 'PutCommand' && command.input.Item.deviceHash), false);
+  const lookup = database.find(command => command.input.IndexName === 'ByDevice');
+  assert.equal(lookup.input.ExpressionAttributeValues[':device'], deviceKey.deviceHash);
+});
+
+test('a device with an account can still sign in to other existing accounts', async () => {
+  const other = { emailHash: hashed('first@example.com'), deviceHash: deviceKey.deviceHash };
+  const { handler, identity, names } = deviceFixture({ linked: [other] });
+  const response = await handler(event('device', deviceBody));
+  assert.deepEqual(parse(response), { status: 'code-required' });
+  assert.deepEqual(names(identity), ['AdminCreateUserCommand', 'ForgotPasswordCommand']);
 });
 
 test('reinstall on a known device resets the password with no code', async () => {
@@ -217,7 +240,8 @@ test('a rejected code leaves registered devices alone', async () => {
   const { handler, database, names } = deviceFixture({ failOn: 'ConfirmForgotPasswordCommand' });
   assert.equal((await handler(event('device', { ...deviceBody, code: '123456' }))).statusCode, 503);
   assert.ok(!names(database).includes('DeleteCommand'));
-  assert.ok(!names(database).includes('QueryCommand'));
+  assert.ok(!database.some(command => command.constructor.name === 'QueryCommand' && !command.input.IndexName),
+    'unproven devices are not even looked up');
 });
 
 test('a website password reset also removes unproven devices', async () => {

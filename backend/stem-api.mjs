@@ -10,6 +10,7 @@ import { createRestorationRoutes, listRestorations } from './restoration-api.mjs
 import { ANALYSES, createAnalysisRoutes, currentAnalysis } from './analysis-api.mjs';
 import { STEM_NAMES, stemInput, UPLOAD_WINDOW_MS, STEM_WINDOW_MS } from './stem-shared.mjs';
 import { createSongDeletion, guardChildWrites, SongDeletingError } from './scene-api.mjs';
+import { checkUploadAllowed, LimitError, refundSplit, takeSplit, usage } from './stem-usage.mjs';
 
 const db = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const s3 = new S3Client({});
@@ -32,13 +33,17 @@ export async function signedStemJob(job, signer = getSignedUrl, storage = s3) {
   const stems = Object.fromEntries(await Promise.all(STEM_NAMES.map(async name => {
     const params = { Bucket: process.env.BUCKET_NAME, Key: visible.stems[name].key };
     return [name, {
-      playUrl: await signer(storage, new GetObjectCommand(params), { expiresIn: 3600 }),
+      // AAC when the song has a playback copy, otherwise the WAV; downloads are always WAV.
+      playUrl: await signer(storage, new GetObjectCommand({
+        ...params, Key: visible.stems[name].playKey ?? params.Key,
+      }), { expiresIn: 3600 }),
       downloadUrl: await signer(storage, new GetObjectCommand({
         ...params, ResponseContentDisposition: `attachment; filename="${name}.wav"`,
       }), { expiresIn: 3600 }),
     }];
   })));
-  return { ...visible, stems };
+  // Changes when the playback files are replaced, so app caches can tell.
+  return { ...visible, stems, playVersion: visible.playVersion ?? 'wav' };
 }
 
 export function createStemHandler({
@@ -84,6 +89,7 @@ export function createStemHandler({
         if (method !== 'POST') return reply(404, { message: 'Endpoint not found.' });
         return await analyses.create({ type: analyzing[2], userId, parentJobId: analyzing[1], reply, body });
       }
+      if (route === '/api/stems/usage' && method === 'GET') return reply(200, { usage: await usage(database, userId) });
       if (route === '/api/stems/uploads' && method === 'POST') {
         let input;
         try {
@@ -92,6 +98,7 @@ export function createStemHandler({
           console.warn('Invalid stem upload request', { name: error.name });
           return reply(400, { message: 'Choose a WAV, MP3, M4A, FLAC, OGG or AAC file up to 55 MB (55,000,000 bytes), with a title under 200 characters.' });
         }
+        await checkUploadAllowed(database, userId);
         const jobId = randomUUID();
         const job = {
           userId, jobId, type: 'stems', status: 'uploading', title: input.title,
@@ -178,24 +185,27 @@ export function createStemHandler({
           return reply(400, { message: 'Uploaded file size does not match. Upload again.' });
         }
         const startedAt = new Date().toISOString();
+        const month = await takeSplit(database, userId);
         try {
           await database.send(new UpdateCommand({
             TableName: process.env.TABLE_NAME, Key: key,
-            UpdateExpression: 'SET #status = :queued, startedAt = :started, expiresAt = :expiry',
+            UpdateExpression: 'SET #status = :queued, startedAt = :started, expiresAt = :expiry, usageMonth = :month',
             ConditionExpression: '#status = :uploading',
             ExpressionAttributeNames: { '#status': 'status' },
             ExpressionAttributeValues: {
-              ':queued': 'queued', ':uploading': 'uploading', ':started': startedAt,
+              ':queued': 'queued', ':uploading': 'uploading', ':started': startedAt, ':month': month,
               ':expiry': Math.ceil((Date.parse(startedAt) + STEM_WINDOW_MS + 600000) / 1000),
             },
           }));
         } catch (error) {
+          await refundSplit(database, userId, month);
           if (error.name !== 'ConditionalCheckFailedException') throw error;
           // A competing completion request owns the start; its deterministic execution is safe to repeat.
           return reply(202, { job: { ...job, status: 'queued' } });
         }
         job.status = 'queued';
         job.startedAt = startedAt;
+        job.usageMonth = month;
       }
       try {
         await orchestrator.send(new StartExecutionCommand({
@@ -212,6 +222,7 @@ export function createStemHandler({
       return reply(202, { job });
     } catch (error) {
       if (error instanceof SongDeletingError) return reply(409, { message: 'This song is being deleted.' });
+      if (error instanceof LimitError) return reply(403, { message: error.message, code: error.code });
       console.error('Stem API failed', { name: error.name });
       return reply(500, { message: 'The separation service is unavailable. Please try again.' });
     }

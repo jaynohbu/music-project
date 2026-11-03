@@ -169,6 +169,13 @@ export function createAccountHandler({
         const remember = proven => database.send(new PutCommand({
           TableName: process.env.ACCOUNT_DEVICES_TABLE, Item: { ...key, proven },
         }));
+        // One new account per device, or each new email would reset the free usage limits.
+        const { Items: linked = [] } = await database.send(new QueryCommand({
+          TableName: process.env.ACCOUNT_DEVICES_TABLE, IndexName: 'ByDevice',
+          KeyConditionExpression: 'deviceHash = :device',
+          ExpressionAttributeValues: { ':device': key.deviceHash },
+        }));
+        const deviceTaken = linked.some(item => item.emailHash !== key.emailHash);
         let created = false;
         try {
           await identity.send(new AdminCreateUserCommand({
@@ -180,6 +187,14 @@ export function createAccountHandler({
             ],
           }));
           created = true;
+          if (deviceTaken) {
+            // Remove only the account created by this invocation, never an existing user.
+            await identity.send(new AdminDeleteUserCommand(params));
+            return reply(409, {
+              code: 'DEVICE_HAS_ACCOUNT',
+              message: 'This phone already has an account. Sign in with the email you used before.',
+            });
+          }
           await identity.send(new AdminSetUserPasswordCommand({ ...params, Password: password, Permanent: true }));
           await remember(false);
           return reply(201, { status: 'ready' });

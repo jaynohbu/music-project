@@ -483,6 +483,23 @@ test('song deletion refuses records pointing outside the song\'s own storage', a
   assert.equal((await call(stems, A, 'DELETE', `/api/stems/jobs/${SONG}`)).status, 500);
   assert.ok(storage.objects.has(`users/${B}/stems/${SONG}/drums.wav`));
   assert.ok(database.get(A, SONG));
+  const drums = { key: `users/${A}/stems/${SONG}/drums.wav`, playKey: `users/${B}/stems/${SONG}/drums.m4a` };
+  seedSong(database, storage, A, SONG, { stems: { ...song(A, SONG).stems, drums } });
+  assert.equal((await call(stems, A, 'DELETE', `/api/stems/jobs/${SONG}`)).status, 500, 'a play key elsewhere is refused too');
+});
+
+test('deleting a song removes its AAC playback copies', async () => {
+  const { database, storage, stems } = setup();
+  const copies = Object.fromEntries(STEM_NAMES.map(name => [name, {
+    key: `users/${A}/stems/${SONG}/${name}.wav`, playKey: `users/${A}/stems/${SONG}/${name}.m4a`,
+  }]));
+  seedSong(database, storage, A, SONG, { stems: copies, playVersion: 'aac-256k' });
+  for (const { playKey } of Object.values(copies)) storage.objects.set(playKey, Buffer.from('aac'));
+  assert.equal((await call(stems, A, 'DELETE', `/api/stems/jobs/${SONG}`)).status, 200);
+  for (const { key, playKey } of Object.values(copies)) {
+    assert.equal(storage.objects.has(key), false);
+    assert.equal(storage.objects.has(playKey), false);
+  }
 });
 
 test('a song being deleted blocks new scene entries, cleanups, analyses and metadata edits', async () => {

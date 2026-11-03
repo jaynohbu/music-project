@@ -10,7 +10,9 @@ import { fileURLToPath } from 'node:url';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { PLAY_VERSION, playbackEncoder, savePlayCopies } from './stem-playback.mjs';
 import { failureRetention } from './shared.mjs';
+import { refundSplit } from './stem-usage.mjs';
 import { STEM_NAMES, STEM_MAX_BYTES, STEM_MAX_DURATION, STEM_MAX_OUTPUT_BYTES, stemDeadline } from './stem-shared.mjs';
 
 const db = DynamoDBDocumentClient.from(new DynamoDBClient({}));
@@ -22,6 +24,7 @@ export function createStemWorker({
   pythonPath = process.env.STEM_PYTHON_PATH ?? 'python3',
   ffmpegPath = process.env.LOCAL_FFMPEG_PATH ?? 'ffmpeg',
   device = process.env.STEM_DEVICE ?? 'cpu',
+  encode = playbackEncoder(ffmpegPath),
 } = {}) {
   return async input => {
     const key = { userId: input.userId, jobId: input.jobId };
@@ -115,10 +118,20 @@ export function createStemWorker({
         uploaded.push(objectKey);
         stems[file.name] = { key: objectKey, bytes: file.bytes };
       }
+      const copies = await savePlayCopies({
+        storage, encode, jobId: job.jobId,
+        files: files.map(file => ({ file: file.file, key: stems[file.name].key })),
+      });
+      if (copies) {
+        for (const name of STEM_NAMES) {
+          Object.assign(stems[name], copies[stems[name].key]);
+          uploaded.push(stems[name].playKey);
+        }
+      }
       stage = 'record';
       await update({
         status: 'completed', stems, duration: output.duration,
-        completedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(), ...(copies ? { playVersion: PLAY_VERSION } : {}),
       });
     } catch (error) {
       console.error('Stem separation failed', { jobId: job.jobId, stage, name: error.name });
@@ -133,6 +146,7 @@ export function createStemWorker({
         status: 'failed', ...failureRetention(), error: messages[stage],
         errorCode: `STEM_${stage.toUpperCase()}_FAILED`, failureStage: stage,
       });
+      await refundSplit(database, job.userId, job.usageMonth);
       for (const objectKey of uploaded) {
         await storage.send(new DeleteObjectCommand({ Bucket: process.env.BUCKET_NAME, Key: objectKey }));
       }
@@ -166,5 +180,7 @@ export async function finalize(event) {
     }));
   } catch (error) {
     if (error.name !== 'ConditionalCheckFailedException') throw error;
+    return;
   }
+  if (result.Item.type === 'stems') await refundSplit(db, result.Item.userId, result.Item.usageMonth);
 }

@@ -383,7 +383,8 @@ export function createSongDeletion({ database = db, storage = s3 } = {}) {
     }
     const prefixes = songPrefixes(userId, jobId);
     const owned = value => value === undefined || prefixes.some(prefix => typeof value === 'string' && value.startsWith(prefix));
-    if (!owned(song.inputKey) || !STEM_NAMES.every(name => owned(song.stems?.[name]?.key))) {
+    if (!owned(song.inputKey) ||
+        !STEM_NAMES.every(name => owned(song.stems?.[name]?.key) && owned(song.stems?.[name]?.playKey))) {
       throw new Error('Song has an unexpected storage key.');
     }
     const token = randomUUID();

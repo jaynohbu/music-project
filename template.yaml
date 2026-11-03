@@ -210,6 +210,12 @@ Resources:
             ApiId: !Ref HttpApi
             Path: /api/stems/uploads
             Method: POST
+        Usage:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/stems/usage
+            Method: GET
         Complete:
           Type: HttpApi
           Properties:
@@ -586,6 +592,14 @@ Resources:
           KeyType: HASH
         - AttributeName: deviceHash
           KeyType: RANGE
+      # Finds the accounts a device already has: one new account per device.
+      GlobalSecondaryIndexes:
+        - IndexName: ByDevice
+          KeySchema:
+            - AttributeName: deviceHash
+              KeyType: HASH
+          Projection:
+            ProjectionType: KEYS_ONLY
       SSESpecification:
         SSEEnabled: true
   Accounts:
@@ -611,7 +625,9 @@ Resources:
               Resource: !GetAtt AccountSessions.Arn
             - Effect: Allow
               Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:DeleteItem, dynamodb:Query]
-              Resource: !GetAtt AccountDevices.Arn
+              Resource:
+                - !GetAtt AccountDevices.Arn
+                - !Sub '${AccountDevices.Arn}/index/ByDevice'
             - Effect: Allow
               Action:
                 - cognito-idp:AdminCreateUser

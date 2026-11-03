@@ -54,7 +54,8 @@ async function publicRestoration(item, signer, storage) {
   const params = { Bucket: process.env.BUCKET_NAME, Key: item.key };
   return {
     ...fields,
-    playUrl: await signer(storage, new GetObjectCommand(params), { expiresIn: 3600 }),
+    playVersion: item.playVersion ?? 'wav',
+    playUrl: await signer(storage, new GetObjectCommand({ ...params, Key: item.playKey ?? item.key }), { expiresIn: 3600 }),
     downloadUrl: await signer(storage, new GetObjectCommand({
       ...params, ResponseContentDisposition: `attachment; filename="${item.stem}-cleaned-${item.jobId}.wav"`,
     }), { expiresIn: 3600 }),
@@ -84,6 +85,10 @@ export function createRestorationRoutes({ database, storage, orchestrator, signe
     const same = existing.find(item => item.status !== 'failed' && item.stem === input.stem &&
       item.strength === input.strength && item.references.join() === input.references.join());
     if (same) return reply(200, { restoration: same });
+    // Usage limit: one cleanup per stem. A failed one can be retried, and deleting it frees the stem.
+    if (existing.some(item => item.status !== 'failed' && item.stem === input.stem)) {
+      return reply(409, { message: 'This stem already has a cleaned version. Delete it to clean the stem again.' });
+    }
     if (existing.length >= MAX_RESTORATIONS) {
       return reply(409, { message: `Delete a cleaned stem first. A song can have up to ${MAX_RESTORATIONS}.` });
     }
@@ -136,10 +141,13 @@ export function createRestorationRoutes({ database, storage, orchestrator, signe
     if (status !== 'completed' && status !== 'failed') {
       return reply(409, { message: 'This stem is still being cleaned. Try again when it finishes.' });
     }
-    if (!child.key?.startsWith(`users/${userId}/restored/${parentJobId}/`)) {
+    const keys = [child.key, ...(child.playKey === undefined ? [] : [child.playKey])];
+    if (!keys.every(objectKey => objectKey?.startsWith(`users/${userId}/restored/${parentJobId}/`))) {
       throw new Error('Cleaned stem has an unexpected storage key.');
     }
-    await storage.send(new DeleteObjectCommand({ Bucket: process.env.BUCKET_NAME, Key: child.key }));
+    for (const objectKey of keys) {
+      await storage.send(new DeleteObjectCommand({ Bucket: process.env.BUCKET_NAME, Key: objectKey }));
+    }
     try {
       await database.send(new DeleteCommand({
         TableName: table(), Key: { userId, jobId: id },
