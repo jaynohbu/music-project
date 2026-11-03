@@ -1,0 +1,38 @@
+# EAS reads this file from the git root instead of every .gitignore, so it repeats
+# their rules. Unlike mobile/.gitignore, it uploads mobile/engine-trial-audio, which
+# the engine trial build embeds (docs/mobile-app-design.md). The mobile app imports
+# nothing outside mobile/, so the website, backend and sample music stay local.
+
+# repo
+**/node_modules/
+.aws-sam/
+.venv-download/
+.venv-stems/
+**/__pycache__/
+web/
+backend/
+music-files/
+
+# mobile/.gitignore
+mobile/.expo/
+mobile/dist/
+mobile/web-build/
+mobile/expo-env.d.ts
+mobile/.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+.metro-health-check*
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+.DS_Store
+*.pem
+.env*
+*.tsbuildinfo
+*.log
+mobile/ios/
+mobile/android/

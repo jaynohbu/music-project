@@ -2,13 +2,17 @@
   "expo": {
     "name": "Sorituh",
     "slug": "sorituh",
+    "owner": "nohjiyoung",
     "version": "1.0.0",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.tunesbasis.sorituh"
+      "bundleIdentifier": "com.tunesbasis.sorituh",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.tunesbasis.sorituh",
@@ -31,6 +35,11 @@
       ],
       "expo-asset",
       "react-native-audio-api"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "621ec342-3002-4e90-994e-d789aa50e02e"
+      }
+    }
   }
 }

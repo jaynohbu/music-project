@@ -39,3 +39,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# engine trial audio (src/engine-trial/push-test-audio.sh)
+/engine-trial-audio
