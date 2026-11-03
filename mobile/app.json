@@ -1,0 +1,36 @@
+{
+  "expo": {
+    "name": "Sorituh",
+    "slug": "sorituh",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.tunesbasis.sorituh"
+    },
+    "android": {
+      "package": "com.tunesbasis.sorituh",
+      "adaptiveIcon": {
+        "backgroundColor": "#3459c9",
+        "foregroundImage": "./assets/android-icon-foreground.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": false
+        }
+      ],
+      "expo-asset",
+      "react-native-audio-api"
+    ]
+  }
+}
