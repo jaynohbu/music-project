@@ -1,6 +1,8 @@
 import { randomBytes, createHash } from 'node:crypto';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, UpdateCommand,
+} from '@aws-sdk/lib-dynamodb';
 import {
   CognitoIdentityProviderClient, AdminCreateUserCommand, AdminDisableUserCommand,
   AdminSetUserPasswordCommand, AdminDeleteUserCommand, ForgotPasswordCommand,
@@ -39,12 +41,32 @@ function emailAddress(value) {
   return value.trim().toLowerCase();
 }
 
+const strongPassword = value => typeof value === 'string' && value.length >= 12 &&
+  value.length <= 256 && /[A-Z]/.test(value) && /[a-z]/.test(value) &&
+  /[0-9]/.test(value) && /[^A-Za-z0-9]/.test(value);
+
 export function createAccountHandler({
   database = db, identity = cognito, secretStore = secrets,
   now = () => Math.floor(Date.now() / 1000),
   random = () => randomBytes(32).toString('base64url'),
 } = {}) {
   const table = () => process.env.ACCOUNT_SESSIONS_TABLE;
+  // A device registered without an emailed code never proved it owns the address,
+  // so it loses access as soon as somebody does prove it.
+  const forgetUnprovenDevices = async email => {
+    const emailHash = hash(email);
+    const { Items = [] } = await database.send(new QueryCommand({
+      TableName: process.env.ACCOUNT_DEVICES_TABLE, ConsistentRead: true,
+      KeyConditionExpression: 'emailHash = :email',
+      FilterExpression: 'proven = :false',
+      ExpressionAttributeValues: { ':email': emailHash, ':false': false },
+    }));
+    for (const { deviceHash } of Items) {
+      await database.send(new DeleteCommand({
+        TableName: process.env.ACCOUNT_DEVICES_TABLE, Key: { emailHash, deviceHash },
+      }));
+    }
+  };
   return async event => {
     const reply = (statusCode, body) => ({
       statusCode, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
@@ -80,7 +102,7 @@ export function createAccountHandler({
         }));
         return reply(201, { token, expiresAt: expiresAt * 1000, expiresIn: SESSION_SECONDS });
       }
-      if (!['register', 'forgot-password', 'confirm-password'].includes(action)) {
+      if (!['register', 'device', 'forgot-password', 'confirm-password'].includes(action)) {
         throw new RequestError(404, 'Account endpoint not found.');
       }
       const token = Object.entries(event.headers ?? {})
@@ -136,23 +158,76 @@ export function createAccountHandler({
           message: 'Registration complete. Your account is disabled until an administrator enables it.',
         });
       }
+      if (action === 'device') {
+        const { deviceId, password, code } = body;
+        if (typeof deviceId !== 'string' || !/^[A-Za-z0-9-]{16,128}$/.test(deviceId) ||
+            !strongPassword(password) ||
+            (code !== undefined && (typeof code !== 'string' || !/^\d{6}$/.test(code)))) {
+          throw new RequestError(400, 'Send a valid device, password and code.');
+        }
+        const key = { emailHash: hash(email), deviceHash: hash(deviceId) };
+        const remember = proven => database.send(new PutCommand({
+          TableName: process.env.ACCOUNT_DEVICES_TABLE, Item: { ...key, proven },
+        }));
+        let created = false;
+        try {
+          await identity.send(new AdminCreateUserCommand({
+            ...params, MessageAction: 'SUPPRESS',
+            TemporaryPassword: `${random()}aA1!`,
+            UserAttributes: [
+              { Name: 'email', Value: email },
+              { Name: 'email_verified', Value: 'true' },
+            ],
+          }));
+          created = true;
+          await identity.send(new AdminSetUserPasswordCommand({ ...params, Password: password, Permanent: true }));
+          await remember(false);
+          return reply(201, { status: 'ready' });
+        } catch (error) {
+          if (created) {
+            console.error('Device account setup failed', { name: error.name });
+            // Remove only the account created by this invocation, never an existing user.
+            await identity.send(new AdminDeleteUserCommand(params));
+            throw error;
+          }
+          if (error.name !== 'UsernameExistsException') throw error;
+        }
+        if (code) {
+          await identity.send(new ConfirmForgotPasswordCommand({
+            ClientId: process.env.USER_POOL_CLIENT_ID, Username: email,
+            ConfirmationCode: code, Password: password,
+          }));
+          await forgetUnprovenDevices(email);
+          await remember(true);
+          return reply(200, { status: 'ready' });
+        }
+        const known = await database.send(new GetCommand({
+          TableName: process.env.ACCOUNT_DEVICES_TABLE, Key: key, ConsistentRead: true,
+        }));
+        if (known.Item) {
+          await identity.send(new AdminSetUserPasswordCommand({ ...params, Password: password, Permanent: true }));
+          return reply(200, { status: 'ready' });
+        }
+        // The email alone must never unlock an account this device has not been used with.
+        await identity.send(new ForgotPasswordCommand({
+          ClientId: process.env.USER_POOL_CLIENT_ID, Username: email,
+        }));
+        return reply(200, { status: 'code-required' });
+      }
       if (action === 'forgot-password') {
         await identity.send(new ForgotPasswordCommand({
           ClientId: process.env.USER_POOL_CLIENT_ID, Username: email,
         }));
         return reply(200, { message: 'A reset code has been sent. Check your email.' });
       }
-      if (typeof body.code !== 'string' || !/^\d{6}$/.test(body.code) ||
-          typeof body.password !== 'string' || body.password.length < 12 ||
-          body.password.length > 256 || !/[A-Z]/.test(body.password) ||
-          !/[a-z]/.test(body.password) || !/[0-9]/.test(body.password) ||
-          !/[^A-Za-z0-9]/.test(body.password)) {
+      if (typeof body.code !== 'string' || !/^\d{6}$/.test(body.code) || !strongPassword(body.password)) {
         throw new RequestError(400, 'Enter a six-digit code and a password of 12+ characters with uppercase, lowercase, a number and a symbol.');
       }
       await identity.send(new ConfirmForgotPasswordCommand({
         ClientId: process.env.USER_POOL_CLIENT_ID, Username: email,
         ConfirmationCode: body.code, Password: body.password,
       }));
+      await forgetUnprovenDevices(email);
       return reply(200, { message: 'Password updated. You can now sign in if your account is enabled.' });
     } catch (error) {
       // Never log account request bodies, session tokens, passwords, or reset codes.

@@ -18,16 +18,15 @@ DISTRIBUTION="$(output DistributionId)"
 SITE="$(output WebsiteUrl)"
 POOL="$(output UserPoolId)"
 CLIENT="$(output UserPoolClientId)"
-YOUTUBE_OWNER_SUB="$(output YoutubeOwnerSubject)"
 API_BASE_URL="$(output PublicApiUrl)"
-export POOL CLIENT YOUTUBE_OWNER_SUB API_BASE_URL
+export POOL CLIENT API_BASE_URL
 npm run build --prefix web
 # Written into the build only: web/public/config.json keeps "/api" for local development.
 node --input-type=module -e '
   import { writeFileSync } from "node:fs";
   writeFileSync("web/dist/youtube-library/browser/config.json", JSON.stringify({
     region: "us-west-2", userPoolId: process.env.POOL,
-    clientId: process.env.CLIENT, apiBaseUrl: process.env.API_BASE_URL, youtubeOwnerSubject: process.env.YOUTUBE_OWNER_SUB
+    clientId: process.env.CLIENT, apiBaseUrl: process.env.API_BASE_URL
   }, null, 2));
 '
 aws s3 sync web/dist/youtube-library/browser/ "s3://$BUCKET/" --region "$REGION" \

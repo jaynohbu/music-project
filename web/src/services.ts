@@ -8,7 +8,6 @@ export interface Config {
   userPoolId: string;
   clientId: string;
   apiBaseUrl: string;
-  youtubeOwnerSubject?: string;
 }
 export const CONFIG = new InjectionToken<Config>('runtime configuration');
 
@@ -48,7 +47,6 @@ export class AuthService {
   private readonly http = inject(HttpClient);
   private readonly config = inject(CONFIG);
   readonly signedIn = signal(false);
-  readonly youtubeAllowed = signal(false);
   readonly notice = signal('');
   private session: Session | null = null;
   private refreshing?: Promise<string>;
@@ -71,7 +69,6 @@ export class AuthService {
           refreshToken: value.refreshToken, expiresAt: value.expiresAt,
         };
         this.signedIn.set(true);
-        this.updateYoutubeAccess(value.idToken);
       } catch (error) {
         console.warn('Discarding invalid saved session', error);
         sessionStorage.removeItem('youtube-session');
@@ -87,18 +84,6 @@ export class AuthService {
         'X-Amz-Target': `AWSCognitoIdentityProviderService.${action}`,
       } },
     ));
-  }
-
-  private updateYoutubeAccess(token: string): void {
-    try {
-      const payload: unknown = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
-      this.youtubeAllowed.set(!!this.config.youtubeOwnerSubject && this.config.youtubeOwnerSubject !== 'disabled' &&
-        typeof payload === 'object' && payload !== null && 'sub' in payload &&
-        payload.sub === this.config.youtubeOwnerSubject);
-    } catch (error) {
-      console.warn('Unable to read account display permissions', error);
-      this.youtubeAllowed.set(false);
-    }
   }
 
   async login(username: string, password: string): Promise<boolean> {
@@ -143,7 +128,6 @@ export class AuthService {
     sessionStorage.setItem('youtube-session', JSON.stringify(this.session));
     this.notice.set('');
     this.signedIn.set(true);
-    this.updateYoutubeAccess(tokens.IdToken);
   }
 
   async token(): Promise<string> {
@@ -188,15 +172,13 @@ export class AuthService {
     sessionStorage.removeItem('youtube-session');
     this.notice.set('');
     this.signedIn.set(false);
-    this.youtubeAllowed.set(false);
   }
 }
 
 export interface Job {
   jobId: string;
   createdAt: string;
-  type?: 'youtube' | 'stems';
-  sourceUrl?: string;
+  type?: 'stems';
   status: 'uploading' | 'queued' | 'processing' | 'completed' | 'failed' | 'deleting';
   title?: string;
   author?: string;
@@ -208,8 +190,6 @@ export interface Job {
   error?: string;
   errorCode?: string;
   failureStage?: string;
-  playUrl?: string;
-  downloadUrl?: string;
 }
 
 export interface SceneTrackSettings extends EffectSettings {
@@ -311,21 +291,6 @@ export class LibraryService {
   private readonly http = inject(HttpClient);
   private readonly auth = inject(AuthService);
   private readonly config = inject(CONFIG);
-
-  async create(url: string): Promise<{ job: Job }> {
-    const token = await this.auth.token();
-    try {
-      return await firstValueFrom(this.http.post<{ job: Job }>(
-      'http://127.0.0.1:3001/api/jobs', { url },
-      { headers: { Authorization: `Bearer ${token}` } },
-    ));
-    } catch (error) {
-      if (error instanceof HttpErrorResponse && error.status === 0) {
-        throw new Error('Cannot reach the local conversion service at http://127.0.0.1:3001. Start the local service on this computer and allow local-network access in your browser.');
-      }
-      throw error;
-    }
-  }
 
   async list(cursor?: string): Promise<JobPage> {
     const token = await this.auth.token();

@@ -4,6 +4,5 @@ version = 0.1
 stack_name = "youtube-audio-library"
 region = "us-west-2"
 resolve_s3 = false
-resolve_image_repos = true
 capabilities = "CAPABILITY_IAM"
 confirm_changeset = true

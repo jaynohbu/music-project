@@ -29,8 +29,7 @@ aws s3api head-bucket --bucket "$ARTIFACT_BUCKET" --region "$REGION"
 STEM_IMAGE="$(bash build-stem-image.sh "$STACK")"
 sam build
 sam deploy --stack-name "$STACK" --region "$REGION" --s3-bucket "$ARTIFACT_BUCKET" \
-  --resolve-image-repos --capabilities CAPABILITY_IAM --confirm-changeset \
-  --parameter-overrides "InitialPasswordSecretName=youtube-audio-library/registration-password" "StemImageUri=$STEM_IMAGE" \
-    "YoutubeOwnerSubject=${YOUTUBE_OWNER_SUB:-disabled}"
+  --capabilities CAPABILITY_IAM --confirm-changeset \
+  --parameter-overrides "InitialPasswordSecretName=youtube-audio-library/registration-password" "StemImageUri=$STEM_IMAGE"
 bash publish-api.sh "$STACK"
 bash publish-web.sh "$STACK"

@@ -21,63 +21,32 @@ async function serverFixture(t, options = {}) {
   return { events, base: `http://127.0.0.1:${server.address().port}` };
 }
 
-test('local health explicitly reports local conversion and AWS storage', async t => {
+test('local health explicitly reports local processing and AWS storage', async t => {
   const { base } = await serverFixture(t);
   assert.deepEqual(await (await fetch(`${base}/health`)).json(),
-    { status: 'ok', conversion: 'local', storage: 'aws' });
+    { status: 'ok', processing: 'local', storage: 'aws' });
 });
 
-test('hosted Sorituh can preflight local conversion with private-network access', async t => {
+test('local server takes no new jobs through the library route', async t => {
   const { base, events } = await serverFixture(t);
-  const origin = 'https://d324d1xuqjbi6.cloudfront.net';
-  const response = await fetch(`${base}/api/jobs`, { method: 'OPTIONS', headers: {
-    Origin: origin, 'Access-Control-Request-Method': 'POST',
-    'Access-Control-Request-Headers': 'authorization,content-type',
-    'Access-Control-Request-Private-Network': 'true',
-  } });
-  assert.equal(response.status, 204);
-  assert.equal(response.headers.get('access-control-allow-origin'), origin);
-  assert.equal(response.headers.get('access-control-allow-private-network'), 'true');
-  assert.equal(response.headers.get('access-control-allow-methods'), 'POST');
-  assert.equal(events.length, 0);
-  const unauthorized = await fetch(`${base}/api/jobs`, { method: 'POST', headers: { Origin: origin } });
-  assert.equal(unauthorized.status, 401);
-  assert.equal(unauthorized.headers.get('access-control-allow-origin'), origin);
-  const submitted = await fetch(`${base}/api/jobs`, {
-    method: 'POST', headers: { Origin: origin, Authorization: 'Bearer valid-token' }, body: '{"url":"https://youtu.be/abcdefghijk"}',
+  const response = await fetch(`${base}/api/jobs`, {
+    method: 'POST', headers: { Authorization: 'Bearer valid-token' }, body: '{"url":"https://youtu.be/abcdefghijk"}',
   });
-  assert.equal(submitted.status, 200);
-  assert.equal(submitted.headers.get('access-control-allow-origin'), origin);
-  assert.equal(events[0].requestContext.authorizer.jwt.claims.sub, 'cognito-user');
+  assert.equal(response.status, 405);
+  assert.equal(events.length, 0);
 });
 
-test('local conversion trusts the public site domains', async t => {
-  const { base } = await serverFixture(t);
-  for (const origin of ['https://tunesbasis.com', 'https://www.tunesbasis.com']) {
-    const response = await fetch(`${base}/api/jobs`, { method: 'OPTIONS', headers: {
+test('local server refuses every hosted or untrusted site', async t => {
+  const { base, events } = await serverFixture(t);
+  for (const origin of ['https://tunesbasis.com', 'https://d324d1xuqjbi6.cloudfront.net', 'https://untrusted.example']) {
+    const preflight = await fetch(`${base}/api/jobs`, { method: 'OPTIONS', headers: {
       Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'authorization',
     } });
-    assert.equal(response.status, 204);
-    assert.equal(response.headers.get('access-control-allow-origin'), origin);
+    assert.equal(preflight.status, 403);
+    assert.equal(preflight.headers.get('access-control-allow-origin'), null);
+    const direct = await fetch(`${base}/api/jobs`, { headers: { Origin: origin, Authorization: 'Bearer valid-token' } });
+    assert.equal(direct.status, 403);
   }
-});
-
-test('local CORS rejects untrusted sites, other routes, and unsupported headers', async t => {
-  const { base, events } = await serverFixture(t);
-  for (const [path, origin, headers] of [
-    ['/api/jobs', 'https://untrusted.example', 'authorization'],
-    ['/api/scenes', 'https://d324d1xuqjbi6.cloudfront.net', 'authorization'],
-    ['/api/jobs', 'https://d324d1xuqjbi6.cloudfront.net', 'x-untrusted'],
-  ]) {
-    const response = await fetch(base + path, { method: 'OPTIONS', headers: {
-      Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': headers,
-    } });
-    assert.equal(response.status, 403);
-    assert.equal(response.headers.get('access-control-allow-methods'), null);
-  }
-  assert.equal((await fetch(`${base}/api/jobs`, { method: 'POST', headers: {
-    Origin: 'https://untrusted.example', Authorization: 'Bearer valid-token',
-  } })).status, 403);
   assert.equal(events.length, 0);
 });
 

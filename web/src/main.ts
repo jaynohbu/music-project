@@ -3,7 +3,7 @@ import { bootstrapApplication } from '@angular/platform-browser';
 import { provideHttpClient } from '@angular/common/http';
 import { CanActivateFn, Router, RouterLink, RouterLinkActive, RouterOutlet, provideRouter, withHashLocation } from '@angular/router';
 import { AuthService, CONFIG, Config, errorMessage } from './services';
-import { ListPage, LoginPage, UploadPage } from './pages';
+import { ListPage, LoginPage } from './pages';
 import { MixerPage, SplitPage } from './stem-pages';
 import { ForgotPasswordPage, RegisterPage } from './account-pages';
 import { ConfirmationDialog } from './confirmation';
@@ -13,8 +13,6 @@ const authenticated: CanActivateFn = () =>
   inject(AuthService).signedIn() || inject(Router).createUrlTree(['/login']);
 const anonymous: CanActivateFn = () =>
   !inject(AuthService).signedIn() || inject(Router).createUrlTree(['/list']);
-const youtubeOnly: CanActivateFn = () =>
-  inject(AuthService).youtubeAllowed() || inject(Router).createUrlTree(['/list']);
 
 @Component({
   selector: 'app-root',
@@ -29,9 +27,6 @@ const youtubeOnly: CanActivateFn = () =>
       </a>
       @if (auth.signedIn()) {
         <nav aria-label="Main navigation">
-          @if (auth.youtubeAllowed()) {
-            <a routerLink="/upload" routerLinkActive="active">YouTube</a>
-          }
           <a routerLink="/list" routerLinkActive="active">Music</a>
           <a routerLink="/scenes" routerLinkActive="active">Scenes</a>
           <button class="secondary" (click)="logout()" [disabled]="busy()">Log out</button>
@@ -92,8 +87,6 @@ async function start(): Promise<void> {
   const config: Config = {
     region: value.region, userPoolId: value.userPoolId,
     clientId: value.clientId, apiBaseUrl: value.apiBaseUrl.replace(/\/$/, ''),
-    youtubeOwnerSubject: 'youtubeOwnerSubject' in value && typeof value.youtubeOwnerSubject === 'string'
-      ? value.youtubeOwnerSubject : undefined,
   };
   await bootstrapApplication(AppComponent, {
     providers: [
@@ -102,11 +95,9 @@ async function start(): Promise<void> {
         { path: 'login', component: LoginPage, canActivate: [anonymous] },
         { path: 'register', component: RegisterPage, canActivate: [anonymous] },
         { path: 'forgot-password', component: ForgotPasswordPage, canActivate: [anonymous] },
-        { path: 'upload', component: UploadPage, canActivate: [authenticated, youtubeOnly] },
         { path: 'split', component: SplitPage, canActivate: [authenticated], canDeactivate: [(page: SplitPage) => page.canLeave()] },
         { path: 'mixer/:jobId', component: MixerPage, canActivate: [authenticated] },
         { path: 'list', component: ListPage, canActivate: [authenticated] },
-        { path: 'youtube-files', component: ListPage, canActivate: [authenticated, youtubeOnly], data: { youtube: true } },
         { path: 'scenes', component: ScenesPage, canActivate: [authenticated] },
         { path: 'scenes/:sceneId', component: ScenePage, canActivate: [authenticated],
           canDeactivate: [(page: ScenePage) => page.canLeave()] },

@@ -1,4 +1,3 @@
-export const MAX_DURATION = 600;
 export const JOB_LIFETIME_MS = 17 * 60 * 1000;
 export const FAILED_HISTORY_MS = 10 * 60 * 1000;
 
@@ -30,32 +29,6 @@ export function failedHistoryExpired(job, now = Date.now()) {
   return now >= failedAt + FAILED_HISTORY_MS;
 }
 
-export function youtubeUrl(input) {
-  if (typeof input !== 'string' || input.length > 2048) {
-    throw new Error('Enter a valid YouTube video URL.');
-  }
-  let url;
-  try {
-    url = new URL(input);
-  } catch {
-    throw new Error('Enter a valid YouTube video URL.');
-  }
-  if (url.protocol !== 'https:' || url.username || url.password || url.port) {
-    throw new Error('Use an HTTPS YouTube video URL.');
-  }
-  let id;
-  if (url.hostname === 'youtu.be') {
-    id = url.pathname.slice(1);
-  } else if (['youtube.com', 'www.youtube.com', 'm.youtube.com'].includes(url.hostname)) {
-    if (url.pathname === '/watch') id = url.searchParams.get('v');
-    else id = /^\/(?:shorts|embed)\/([^/]+)$/.exec(url.pathname)?.[1];
-  }
-  if (!id || !/^[A-Za-z0-9_-]{11}$/.test(id)) {
-    throw new Error('Enter a single YouTube video URL, not a playlist.');
-  }
-  return `https://www.youtube.com/watch?v=${id}`;
-}
-
 export function visibleJob(job, now = Date.now()) {
   const stemJob = ['stems', 'restoration', 'lyrics', 'harmony'].includes(job.type);
   if (stemJob && ['uploading', 'queued', 'processing'].includes(job.status) &&
@@ -69,14 +42,6 @@ export function visibleJob(job, now = Date.now()) {
         harmony: 'Chord analysis expired. Please try again.',
       }[job.type],
       ...failureRetention(stemDeadline(job)),
-    };
-  }
-  if (stemJob) return job;
-  if (['queued', 'processing'].includes(job.status) &&
-      now - Date.parse(job.createdAt) >= JOB_LIFETIME_MS) {
-    return {
-      ...job, status: 'failed', error: 'Conversion expired. Please try again.',
-      ...failureRetention(Date.parse(job.createdAt) + JOB_LIFETIME_MS),
     };
   }
   return job;

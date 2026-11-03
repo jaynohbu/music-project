@@ -3,11 +3,9 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { fileURLToPath } from 'node:url';
-import { existsSync } from 'node:fs';
 import { CloudFormationClient, DescribeStacksCommand, DescribeStackResourceCommand } from '@aws-sdk/client-cloudformation';
 import { CognitoJwtVerifier } from 'aws-jwt-verify';
 import { createHandler } from './api.mjs';
-import { createWorker } from './worker.mjs';
 import { createAccountHandler } from './accounts.mjs';
 import { createStemHandler } from './stem-api.mjs';
 import { createStemWorker } from './stem-worker.mjs';
@@ -22,7 +20,7 @@ export function localQueue(worker, capacity = 2) {
   return {
     running,
     async send(command) {
-      if (running.size >= capacity) throw new Error('Local conversion capacity reached. Try again shortly.');
+      if (running.size >= capacity) throw new Error('Local processing capacity reached. Try again shortly.');
       const job = JSON.parse(Buffer.from(command.input.Payload).toString());
       const task = Promise.resolve().then(() => worker(job))
         .catch(error => console.error('Local worker failed to record job outcome', {
@@ -35,51 +33,26 @@ export function localQueue(worker, capacity = 2) {
   };
 }
 
-const HOSTED_ORIGINS = ['https://tunesbasis.com', 'https://www.tunesbasis.com', 'https://d324d1xuqjbi6.cloudfront.net'];
-
 export function createLocalServer({ api, accounts, stems, scenes, verify }) {
   return createServer(async (request, response) => {
     const origin = request.headers.origin;
-    const trustedOrigin = HOSTED_ORIGINS.includes(origin);
-    const localSubmission = request.url === '/api/jobs' && request.method === 'POST';
-    const preflight = request.url === '/api/jobs' && request.method === 'OPTIONS' &&
-      request.headers['access-control-request-method'] === 'POST';
-    if (trustedOrigin && (localSubmission || preflight)) {
-      response.setHeader('Access-Control-Allow-Origin', origin);
-      response.setHeader('Vary', 'Origin');
-    }
     const reply = (status, message) => {
       response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
       response.end(JSON.stringify({ message }));
     };
     try {
-      if (request.method === 'OPTIONS') {
-        const headers = (request.headers['access-control-request-headers'] ?? '').toLowerCase()
-          .split(',').map(header => header.trim()).filter(Boolean);
-        if (!trustedOrigin || !preflight || headers.some(header => !['authorization', 'content-type'].includes(header))) {
-          reply(403, 'Cross-origin request is not allowed.');
-          return;
-        }
-        response.setHeader('Access-Control-Allow-Methods', 'POST');
-        response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-        if (request.headers['access-control-request-private-network'] === 'true') {
-          response.setHeader('Access-Control-Allow-Private-Network', 'true');
-        }
-        response.writeHead(204);
-        response.end();
-        return;
-      }
-      if (origin && !trustedOrigin && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+      if (request.method === 'OPTIONS' ||
+          (origin && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin))) {
         reply(403, 'Cross-origin request is not allowed.');
         return;
       }
       const url = new URL(request.url, 'http://127.0.0.1');
       if (request.method === 'GET' && url.pathname === '/health') {
         response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ status: 'ok', conversion: 'local', storage: 'aws' }));
+        response.end(JSON.stringify({ status: 'ok', processing: 'local', storage: 'aws' }));
         return;
       }
-      const accountRoutes = ['session', 'register', 'forgot-password', 'confirm-password'];
+      const accountRoutes = ['session', 'register', 'device', 'forgot-password', 'confirm-password'];
       const isAccount = accountRoutes.some(action => url.pathname === `/api/accounts/${action}`);
       const isJobs = url.pathname === '/api/jobs';
       const isRestorations = /^\/api\/stems\/jobs\/[0-9a-f-]{36}\/restorations$/.test(url.pathname);
@@ -95,11 +68,12 @@ export function createLocalServer({ api, accounts, stems, scenes, verify }) {
         /^\/api\/stems\/jobs\/[0-9a-f-]{36}(\/complete)?$/.test(url.pathname);
       if (!isAccount && !isJobs && !isStems && !isScenes) { reply(404, 'Endpoint not found.'); return; }
       if ((isAccount && request.method !== 'POST') ||
+          (isJobs && request.method !== 'GET') ||
           (isSceneList && !['GET', 'POST'].includes(request.method)) ||
           (isScene && !['GET', 'PATCH', 'DELETE'].includes(request.method)) ||
           (isRestoration ? request.method !== 'DELETE'
             : isRestorations || isAnalysis ? request.method !== 'POST'
-              : (isJobs || isStems) && !isMetadata && !isSongDelete && !['GET', 'POST'].includes(request.method))) {
+              : isStems && !isMetadata && !isSongDelete && !['GET', 'POST'].includes(request.method))) {
         reply(405, 'Method not allowed.');
         return;
       }
@@ -156,27 +130,22 @@ async function main() {
   process.env.BUCKET_NAME = output('AudioBucketName');
   process.env.USER_POOL_ID = output('UserPoolId');
   process.env.USER_POOL_CLIENT_ID = output('UserPoolClientId');
-  process.env.YOUTUBE_OWNER_SUB = output('YoutubeOwnerSubject');
   process.env.INITIAL_PASSWORD_SECRET ??= 'youtube-audio-library/registration-password';
   const sessions = await cloudformation.send(new DescribeStackResourceCommand({
     StackName: stackName, LogicalResourceId: 'AccountSessions',
   }));
   process.env.ACCOUNT_SESSIONS_TABLE = sessions.StackResourceDetail?.PhysicalResourceId;
   if (!process.env.ACCOUNT_SESSIONS_TABLE) throw new Error('AccountSessions table not found.');
-  const projectDownloader = fileURLToPath(new URL('../.venv-download/bin/yt-dlp', import.meta.url));
-  const downloaderPath = process.env.LOCAL_YTDLP_PATH ??
-    (existsSync(projectDownloader) ? projectDownloader : 'yt-dlp');
-  const help = await execute(downloaderPath, ['--help']);
-  if (!help.stdout.includes('--js-runtimes')) {
-    throw new Error('Local yt-dlp is too old. Set LOCAL_YTDLP_PATH to a current executable supporting --js-runtimes.');
-  }
-  const downloaderVersion = (await execute(downloaderPath, ['--version'])).stdout.trim();
+  const devices = await cloudformation.send(new DescribeStackResourceCommand({
+    StackName: stackName, LogicalResourceId: 'AccountDevices',
+  }));
+  process.env.ACCOUNT_DEVICES_TABLE = devices.StackResourceDetail?.PhysicalResourceId;
+  if (!process.env.ACCOUNT_DEVICES_TABLE) throw new Error('AccountDevices table not found.');
   const ffmpegPath = process.env.LOCAL_FFMPEG_PATH ?? (await execute('which', ['ffmpeg'])).stdout.trim();
   await execute(ffmpegPath, ['-version']);
   const verifier = CognitoJwtVerifier.create({
     userPoolId: process.env.USER_POOL_ID, tokenUse: 'id', clientId: process.env.USER_POOL_CLIENT_ID,
   });
-  const queue = localQueue(createWorker({ ffmpegPath, downloaderPath }));
   const stemPython = process.env.STEM_PYTHON_PATH ??
     fileURLToPath(new URL('../.venv-stems/bin/python', import.meta.url));
   const stemQueue = localQueue(runStemTask({
@@ -196,7 +165,7 @@ async function main() {
     },
   };
   const server = createLocalServer({
-    api: createHandler({ invoker: queue }), accounts: createAccountHandler(),
+    api: createHandler(), accounts: createAccountHandler(),
     stems: createStemHandler({ orchestrator: stemOrchestrator }), scenes: createSceneHandler(),
     verify: token => verifier.verify(token),
   });
@@ -207,13 +176,12 @@ async function main() {
     server.once('error', reject);
     server.listen(port, '127.0.0.1', resolve);
   });
-  console.log(`Local API http://127.0.0.1:${port}; conversion=local, Cognito/DynamoDB/S3=AWS (${stackName})`);
-  console.log(`Downloader: ${downloaderPath} (${downloaderVersion})`);
+  console.log(`Local API http://127.0.0.1:${port}; processing=local, Cognito/DynamoDB/S3=AWS (${stackName})`);
   console.log(`Stem worker: ${stemPython}; device=${process.env.STEM_DEVICE ?? 'cpu'}`);
   const stop = () => {
-    console.log('Stopping local API; allowing active conversions to finish.');
+    console.log('Stopping local API; allowing active jobs to finish.');
     server.close(async () => {
-      await Promise.allSettled([...queue.running, ...stemQueue.running]);
+      await Promise.allSettled(stemQueue.running);
     });
   };
   process.once('SIGTERM', stop);

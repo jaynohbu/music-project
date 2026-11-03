@@ -11,7 +11,6 @@ import { STEM_NAMES } from '../stem-shared.mjs';
 process.env.TABLE_NAME = 'jobs';
 process.env.BUCKET_NAME = 'bucket';
 process.env.STEM_STATE_MACHINE = 'machine';
-process.env.YOUTUBE_OWNER_SUB = 'owner-sub';
 
 const A = 'user-a', B = 'user-b';
 const uuid = n => `${String(n).padStart(8, '0')}-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -396,7 +395,7 @@ test('deleting a song removes its files, children and scene entries, and nothing
   seedSong(database, storage, B, SONG);
   seedChildren(database, storage, B, SONG);
   storage.objects.set(`users/${A}/stems/${SONG}0/drums.wav`, Buffer.from('x'));
-  storage.objects.set(`users/${A}/${SONG}.wav`, Buffer.from('youtube'));
+  storage.objects.set(`users/${A}/${SONG}.wav`, Buffer.from('x'));
   const bScene = await makeScene(scenes, B);
   await call(scenes, B, 'PATCH', `/api/scenes/${bScene.id}`, { revision: 1, entries: [{ id: uuid(600), jobId: SONG }] });
 

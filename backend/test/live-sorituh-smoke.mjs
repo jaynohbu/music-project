@@ -9,7 +9,6 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, PutCommand, GetCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { restrictLegacyYoutube } from '../youtube-admin.mjs';
 import { STEM_NAMES } from '../stem-shared.mjs';
 
 // Explicit live test: temporary account and synthetic fixtures, no audio processing.
@@ -26,7 +25,7 @@ const output = key => stack.Stacks[0].Outputs.find(item => item.OutputKey === ke
 const table = output('JobsTableName'), bucket = output('AudioBucketName');
 const email = `sorituh-smoke-${randomUUID()}@example.com`;
 const password = `Aa1!${randomUUID()}${randomUUID()}`;
-const parentId = randomUUID(), youtubeId = randomUUID(), foreignId = randomUUID();
+const parentId = randomUUID(), legacyId = randomUUID(), foreignId = randomUUID();
 const records = [], objects = [];
 const sceneIds = [];
 let request;
@@ -65,17 +64,14 @@ try {
     createdAt: new Date().toISOString(), duration: 1,
     stems: Object.fromEntries(STEM_NAMES.map(name => [name, { key: mediaKey }])),
   });
-  const youtubeKey = `users/${userId}/${youtubeId}.wav`;
-  objects.push(youtubeKey);
-  await storage.send(new PutObjectCommand({ Bucket: bucket, Key: youtubeKey, Body: Buffer.alloc(100), ContentType: 'audio/wav' }));
-  const legacy = { userId, jobId: youtubeId, status: 'completed', key: youtubeKey, createdAt: new Date().toISOString() };
-  await put(legacy);
+  const legacyKey = `users/${userId}/${legacyId}.wav`;
+  objects.push(legacyKey);
+  await storage.send(new PutObjectCommand({ Bucket: bucket, Key: legacyKey, Body: Buffer.alloc(100), ContentType: 'audio/wav' }));
+  await put({ userId, jobId: legacyId, status: 'completed', key: legacyKey, createdAt: new Date().toISOString() });
   const foreignUser = `smoke-foreign-${randomUUID()}`;
   await put({ userId: foreignUser, jobId: foreignId, type: 'stems', status: 'completed', title: 'Untouched' });
 
-  assert.equal((await request('/jobs', 'POST', {
-    url: 'https://youtu.be/abcdefghijk', userId: output('YoutubeOwnerSubject'),
-  })).status, 403);
+  assert.equal((await request('/jobs', 'POST', { url: 'https://youtu.be/abcdefghijk' })).status, 404);
   const upload = await request('/stems/uploads', 'POST', { fileName: 'fixture.wav', bytes: 100, title: 'Direct upload still allowed' });
   assert.equal(upload.status, 201);
   records.push({ userId, jobId: upload.body.job.jobId });
@@ -92,13 +88,6 @@ try {
   assert.equal(library.status, 200);
   assert.ok(library.body.jobs.every(job => job.type === 'stems'));
 
-  const oldLink = await getSignedUrl(storage, new GetObjectCommand({ Bucket: bucket, Key: youtubeKey }), { expiresIn: 120 });
-  assert.equal((await fetch(oldLink)).status, 200);
-  await restrictLegacyYoutube({
-    owner: output('YoutubeOwnerSubject'), table, bucket, storage,
-    database: { send: async () => ({ Items: [legacy] }) },
-  });
-  assert.equal((await fetch(oldLink)).status, 403, 'An already-issued URL must stop working after revocation.');
   const stemLink = await getSignedUrl(storage, new GetObjectCommand({ Bucket: bucket, Key: mediaKey }), { expiresIn: 120 });
   assert.equal((await fetch(stemLink)).status, 200, 'Original uploaded stems remain accessible.');
   const created = await request('/scenes', 'POST', { name: 'Temporary rehearsal' });
@@ -130,7 +119,7 @@ try {
   assert.equal((await fetch(stemLink)).status, 404, 'Deleting the source removes its stored stem audio.');
   assert.equal((await request(scenePath, 'DELETE')).status, 200);
   assert.equal((await request(scenePath)).status, 404);
-  console.log('PASS: live YouTube restriction, upload/metadata ownership, scenes CRUD/settings/isolation/stale revision, song deletion, scene-reference and audio cleanup.');
+  console.log('PASS: no job-creation route, split-only library, upload/metadata ownership, scenes CRUD/settings/isolation/stale revision, song deletion, scene-reference and audio cleanup.');
 } finally {
   const cleanup = await Promise.allSettled([
     ...sceneIds.map(async id => {

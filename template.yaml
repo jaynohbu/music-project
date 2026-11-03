@@ -3,10 +3,6 @@ Transform: AWS::Serverless-2016-10-31
 Description: Sorituh private music library - Angular, Cognito, API and on-demand CPU processing
 
 Parameters:
-  YoutubeOwnerSubject:
-    Type: String
-    Default: disabled
-    Description: Immutable Cognito subject for nohjiyoung@hotmail.com; disabled denies all YouTube access
   StemImageUri:
     Type: String
     Description: ECR URI of the separately built CPU Demucs image
@@ -94,14 +90,6 @@ Resources:
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
-          - Sid: BlockRestrictedYoutubeAudio
-            Effect: Deny
-            Principal: '*'
-            Action: s3:GetObject
-            Resource: !Sub '${AudioBucket.Arn}/users/*'
-            Condition:
-              StringEquals:
-                s3:ExistingObjectTag/sorituh-youtube-access: blocked
           - Effect: Deny
             Principal: '*'
             Action: 's3:*'
@@ -143,36 +131,6 @@ Resources:
       TimeToLiveSpecification:
         AttributeName: expiresAt
         Enabled: true
-  Worker:
-    Type: AWS::Serverless::Function
-    Metadata:
-      DockerContext: backend
-      Dockerfile: Dockerfile
-      DockerTag: cpu-v1
-    Properties:
-      PackageType: Image
-      Architectures: [x86_64]
-      MemorySize: 2048
-      Timeout: 900
-      ReservedConcurrentExecutions: 2
-      EphemeralStorage:
-        Size: 1024
-      EventInvokeConfig:
-        MaximumEventAgeInSeconds: 60
-        MaximumRetryAttempts: 0
-      Environment:
-        Variables:
-          TABLE_NAME: !Ref Jobs
-          BUCKET_NAME: !Ref AudioBucket
-      Policies:
-        - Version: '2012-10-17'
-          Statement:
-            - Effect: Allow
-              Action: dynamodb:UpdateItem
-              Resource: !GetAtt Jobs.Arn
-            - Effect: Allow
-              Action: s3:PutObject
-              Resource: !Sub '${AudioBucket.Arn}/users/*'
   Api:
     Type: AWS::Serverless::Function
     Properties:
@@ -186,30 +144,16 @@ Resources:
         Variables:
           TABLE_NAME: !Ref Jobs
           BUCKET_NAME: !Ref AudioBucket
-          WORKER_NAME: !Ref Worker
-          YOUTUBE_OWNER_SUB: !Ref YoutubeOwnerSubject
       Policies:
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow
-              Action: [dynamodb:PutItem, dynamodb:UpdateItem]
-              Resource: !GetAtt Jobs.Arn
-            - Effect: Allow
               Action: dynamodb:Query
               Resource: [!GetAtt Jobs.Arn, !Sub '${Jobs.Arn}/index/ByCreatedAt']
-            - Effect: Allow
-              Action: lambda:InvokeFunction
-              Resource: !GetAtt Worker.Arn
             - Effect: Allow
               Action: s3:GetObject
               Resource: !Sub '${AudioBucket.Arn}/users/*'
       Events:
-        CreateJob:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref HttpApi
-            Path: /api/jobs
-            Method: POST
         ListJobs:
           Type: HttpApi
           Properties:
@@ -626,6 +570,24 @@ Resources:
         Enabled: true
       SSESpecification:
         SSEEnabled: true
+  AccountDevices:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: emailHash
+          AttributeType: S
+        - AttributeName: deviceHash
+          AttributeType: S
+      KeySchema:
+        - AttributeName: emailHash
+          KeyType: HASH
+        - AttributeName: deviceHash
+          KeyType: RANGE
+      SSESpecification:
+        SSEEnabled: true
   Accounts:
     Type: AWS::Serverless::Function
     Properties:
@@ -637,6 +599,7 @@ Resources:
       Environment:
         Variables:
           ACCOUNT_SESSIONS_TABLE: !Ref AccountSessions
+          ACCOUNT_DEVICES_TABLE: !Ref AccountDevices
           USER_POOL_ID: !Ref UserPool
           USER_POOL_CLIENT_ID: !Ref UserPoolClient
           INITIAL_PASSWORD_SECRET: !Ref InitialPasswordSecretName
@@ -646,6 +609,9 @@ Resources:
             - Effect: Allow
               Action: [dynamodb:PutItem, dynamodb:UpdateItem]
               Resource: !GetAtt AccountSessions.Arn
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:DeleteItem, dynamodb:Query]
+              Resource: !GetAtt AccountDevices.Arn
             - Effect: Allow
               Action:
                 - cognito-idp:AdminCreateUser
@@ -670,6 +636,14 @@ Resources:
           Properties:
             ApiId: !Ref HttpApi
             Path: /api/accounts/register
+            Method: POST
+            Auth:
+              Authorizer: NONE
+        Device:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/accounts/device
             Method: POST
             Auth:
               Authorizer: NONE
@@ -701,6 +675,9 @@ Resources:
           ThrottlingBurstLimit: 5
           ThrottlingRateLimit: 2
         'POST /api/accounts/register':
+          ThrottlingBurstLimit: 3
+          ThrottlingRateLimit: 1
+        'POST /api/accounts/device':
           ThrottlingBurstLimit: 3
           ThrottlingRateLimit: 1
         'POST /api/accounts/forgot-password':
@@ -841,8 +818,6 @@ Resources:
                 aws:SecureTransport: false
 
 Outputs:
-  YoutubeOwnerSubject:
-    Value: !Ref YoutubeOwnerSubject
   StemStateMachineArn:
     Value: !Ref StemWorkflow
   WebsiteUrl:
