@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { PanResponder, Pressable, StyleSheet, Text, View, type GestureResponderEvent, type PanResponderGestureState } from 'react-native';
+import Svg, { Path, Rect } from 'react-native-svg';
 
 // Visual parity with the website mixer (web/src/styles.css: marker rail, waveform, console faders).
 export const METAL = 'linear-gradient(180deg, #edf1f6 0%, #cbd4df 45%, #eef2f7 55%, #c4ceda 100%)';
@@ -206,17 +207,45 @@ export function LampSwitch({ label, on, onPress, disabled, accessibilityLabel }:
   </Pressable>;
 }
 
-export function ConsoleButton({ label, onPress, disabled, primary, accessibilityLabel }: {
-  label: string; onPress: () => void; disabled?: boolean; primary?: boolean; accessibilityLabel?: string;
+export type IconName = 'play' | 'pause' | 'stop' | 'mute' | 'muteAll' | 'solo' | 'loop';
+
+function Icon({ name, color }: { name: IconName; color: string }) {
+  const line = { stroke: color, strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, fill: 'none' };
+  const speaker = (x: number) => `M${x} 9h3.5l4.5-4v14l-4.5-4H${x}z`;
+  return <Svg width={20} height={20} viewBox="0 0 24 24">
+    {name === 'play' && <Path d="M7 4.5v15l12.5-7.5z" fill={color} />}
+    {name === 'pause' && <><Rect x={5.5} y={4.5} width={4.5} height={15} rx={1} fill={color} /><Rect x={14} y={4.5} width={4.5} height={15} rx={1} fill={color} /></>}
+    {name === 'stop' && <Rect x={5.5} y={5.5} width={13} height={13} rx={1.5} fill={color} />}
+    {name === 'mute' && <><Path d={speaker(3)} fill={color} /><Path d="M15.5 9l6 6M21.5 9l-6 6" {...line} /></>}
+    {name === 'muteAll' && <><Path d={speaker(5)} {...line} strokeWidth={1.5} /><Path d={speaker(1)} fill={color} />
+      <Path d="M16 9l6 6M22 9l-6 6" {...line} /></>}
+    {name === 'solo' && <><Path d="M4 16v-4a8 8 0 0 1 16 0v4" {...line} />
+      <Rect x={3} y={14} width={5} height={7} rx={1.5} fill={color} /><Rect x={16} y={14} width={5} height={7} rx={1.5} fill={color} /></>}
+    {name === 'loop' && <><Path d="M4 12V9.5A3.5 3.5 0 0 1 7.5 6H19M16 3l3 3-3 3" {...line} />
+      <Path d="M20 12v2.5a3.5 3.5 0 0 1-3.5 3.5H5M8 21l-3-3 3-3" {...line} /></>}
+  </Svg>;
+}
+
+// A small metal key with an icon; lit blue while its switch is on, solid blue for the main action.
+export function IconButton({ icon, accessibilityLabel, onPress, disabled, on, primary }: {
+  icon: IconName; accessibilityLabel: string; onPress: () => void; disabled?: boolean; on?: boolean; primary?: boolean;
 }) {
-  return <Pressable onPress={onPress} disabled={disabled} accessibilityRole="button" accessibilityLabel={accessibilityLabel ?? label}
-    accessibilityState={{ disabled }}
-    style={({ pressed }) => [styles.consoleButton, primary && styles.consolePrimary, pressed && { opacity: .75 }, disabled && { opacity: .45 }]}>
-    <Text style={[styles.consoleButtonText, primary && { color: 'white' }]}>{label}</Text>
+  const lit = primary || on;
+  return <Pressable onPress={onPress} disabled={disabled} hitSlop={4}
+    accessibilityRole={on === undefined ? 'button' : 'switch'} accessibilityLabel={accessibilityLabel}
+    accessibilityState={on === undefined ? { disabled } : { checked: on, disabled }}
+    style={({ pressed }) => [styles.iconButton, !lit && styles.iconMetal, on && styles.iconOn, primary && styles.iconPrimary,
+      pressed && { opacity: .75 }, disabled && { opacity: .45 }]}>
+    <Icon name={icon} color={lit ? 'white' : '#28384e'} />
   </Pressable>;
 }
 
 const styles = StyleSheet.create({
+  iconButton: { width: 38, height: 38, borderRadius: 6, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#8f9db0' },
+  iconMetal: { backgroundImage: 'linear-gradient(180deg, #fbfcfe 0%, #d5dce6 100%)' },
+  iconOn: { backgroundColor: '#3459c9', borderColor: '#2747a8',
+    shadowColor: '#5d8dff', shadowOpacity: .9, shadowRadius: 5, shadowOffset: { width: 0, height: 0 } },
+  iconPrimary: { backgroundColor: '#3459c9', borderColor: '#2747a8' },
   editor: { paddingHorizontal: EDITOR_PADDING, paddingTop: 4 },
   rail: { height: 38, position: 'relative' },
   marker: { position: 'absolute', top: 0, width: MARKER_WIDTH, height: 38, alignItems: 'center', justifyContent: 'flex-end', zIndex: 2 },
@@ -260,7 +289,4 @@ const styles = StyleSheet.create({
   lamp: { width: 28, height: 18, borderRadius: 3, borderWidth: 2, borderColor: '#697b92', backgroundColor: '#8e9aab' },
   lampOn: { backgroundColor: '#a3c5ff', borderColor: '#3459c9', shadowColor: '#5d8dff', shadowOpacity: .9, shadowRadius: 5, shadowOffset: { width: 0, height: 0 } },
   switchText: { fontSize: 11, fontWeight: '800', letterSpacing: .5, color: '#28384e' },
-  consoleButton: { minHeight: 44, paddingHorizontal: 14, borderRadius: 6, justifyContent: 'center', borderWidth: 1, borderColor: '#8f9db0', backgroundColor: 'white' },
-  consolePrimary: { backgroundColor: '#3459c9', borderColor: '#2747a8' },
-  consoleButtonText: { fontWeight: '700', color: '#28384e' },
 });

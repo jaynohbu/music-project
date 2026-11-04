@@ -3,6 +3,7 @@ import { useEffect, useReducer, useRef, useState, type ComponentRef } from 'reac
 import { AppState, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { randomUUID } from 'expo-crypto';
 import { getScene, listReadySongs, updateScene, type SceneEntry, type Song } from '../../api';
+import { StemScrollView } from '../../stem-scroll';
 import { MixerView } from '../../mixer-view';
 import type { Mixer } from '../../player';
 import { SceneStore } from '../../scene-store';
@@ -101,7 +102,7 @@ function SceneEditor({ id }: { id: string }) {
     if (!activeId) setActiveId(entries[0]?.id ?? '');
     setPicker(false);
   };
-  return <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
+  return <StemScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
     <Stack.Screen options={{ title: scene?.name ?? 'Scene' }} />
     {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
     {!scene ? error ? <Button label="Retry loading scene" onPress={() => { setError(''); setReload(value => value + 1); }} />
@@ -172,7 +173,7 @@ function SceneEditor({ id }: { id: string }) {
           <Button label="Add selected songs" disabled={!selected.size} onPress={add} /></View>
       </ScrollView>
     </Modal>
-  </ScrollView>;
+  </StemScrollView>;
 }
 const styles = StyleSheet.create({
   page: { padding: 16, gap: 14 },

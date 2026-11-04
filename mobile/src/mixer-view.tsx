@@ -1,11 +1,13 @@
 import { useIsFocused } from 'expo-router';
-import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useReducer, useRef, useState, type ComponentRef } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { HARMONY_STEMS, STEM_NAMES, getSong, type LyricLine, type SceneEntry, type SceneSettings, type Song, type StemName } from './api';
 import { holdSong, songFiles, stemPaths } from './cache';
 import { EFFECT_CONTROLS } from './effects';
 import { Mixer, defaultChannel } from './player';
-import { ChannelStrip, ConsoleButton, LampSwitch, METAL, MasterFader, Timeline } from './mixer-console';
+import { ChannelStrip, IconButton, LampSwitch, METAL, MasterFader, Timeline } from './mixer-console';
+import { useStemScroll } from './stem-scroll';
+import { focusedStem } from './stem-focus';
 import { BLUE, Button, Centered, GREY, INK, LINE, errorText, useConfirm } from './ui';
 
 import { snapshot, restore } from './mixer-settings';
@@ -79,7 +81,33 @@ function MountedMixer({ jobId, title, entry, onSettings, onEnded, onReady, onSon
 export function MixerControls({ mixer, title, song = null }: { mixer: Mixer; title: string; song?: Song | null }) {
   const [, refresh] = useReducer(count => count + 1, 0);
   const [position, setPosition] = useState(0);
-  const [open, setOpen] = useState<StemName | null>('vocals');
+  const [open, setOpen] = useState<StemName>('vocals');
+  const stems = useRef<Partial<Record<StemName, ComponentRef<typeof View> | null>>>({});
+  const anchor = useRef<{ name: StemName; top: number } | null>(null);
+  const scroll = useStemScroll();
+  // Opening one stem closes the others; keep the newly opened stem where it was so content above shrinking does not jump.
+  const openStem = (name: StemName) => {
+    const view = stems.current[name];
+    if (!view) { setOpen(name); return; }
+    view.measureInWindow((_x, top) => { anchor.current = { name, top }; setOpen(name); });
+  };
+  useLayoutEffect(() => {
+    const held = anchor.current;
+    anchor.current = null;
+    if (held && held.name === open) stems.current[open]?.measureInWindow((_x, top) => scroll?.scrollBy(top - held.top));
+  }, [open, scroll]);
+  useEffect(() => scroll?.onSettle(viewport => {
+    const names = STEM_NAMES.filter(name => stems.current[name]);
+    Promise.all(names.map(name => new Promise<{ name: StemName; top: number; bottom: number }>(resolve =>
+      stems.current[name]!.measureInWindow((_x, top, _width, height) => resolve({ name, top, bottom: top + height })))))
+      .then(frames => {
+        const found = focusedStem(frames, viewport);
+        if (found && found !== open) {
+          anchor.current = { name: found, top: frames.find(frame => frame.name === found)!.top };
+          setOpen(found);
+        }
+      });
+  }), [scroll, open]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [editingLyrics, setEditingLyrics] = useState(false);
@@ -129,7 +157,7 @@ export function MixerControls({ mixer, title, song = null }: { mixer: Mixer; tit
       const label = name[0].toUpperCase() + name.slice(1);
       const expanded = open === name;
       const live = mixer.isPlaying && !channel.muted && !(soloing && !channel.solo);
-      return <View key={name} style={styles.stem}>
+      return <View key={name} style={styles.stem} ref={view => { stems.current[name] = view; }}>
         <View style={styles.stemHeader}>
           <Text style={styles.stemTitle}>{label}</Text>
           {mixer.hasCleaned(name) && <View style={styles.versions} accessibilityRole="radiogroup" accessibilityLabel={`${label} version`}>
@@ -147,31 +175,36 @@ export function MixerControls({ mixer, title, song = null }: { mixer: Mixer; tit
           disabled={busy} onSection={(start, end) => mixer.setSection(start, end)}
           onSeek={time => void run(() => mixer.seek(time))}
           onReset={() => mixer.setSection(0, mixer.duration)} />
-        <Pressable onPress={() => setOpen(expanded ? null : name)} style={styles.consoleHeading}
+        <Pressable onPress={() => { if (!expanded) openStem(name); }} style={styles.consoleHeading}
           accessibilityRole="button" accessibilityLabel={`${label} mixer controls`} accessibilityState={{ expanded }}>
-          <Text style={styles.consoleTitle}>{expanded ? '▾' : '▸'} Mixer <Text style={styles.consoleAction}>{expanded ? 'Hide controls' : 'Show controls'}</Text></Text>
+          <View style={styles.consoleTitleRow}>
+            <Text style={styles.consoleChevron}>{expanded ? '▾' : '▸'}</Text>
+            <Text style={styles.consoleTitle}>Mixer</Text>
+            {!expanded && <Text style={styles.consoleAction}>Show controls</Text>}
+          </View>
           <View style={styles.consoleStatus}>
             <Text style={styles.statusText}>{Math.round(channel.volume * 100)}%</Text>
             {channel.muted && <Text style={styles.statusState}>Muted</Text>}
             {channel.solo && <Text style={styles.statusState}>Solo</Text>}
             <View style={[styles.led, live && styles.ledOn]} />
-            <Text style={styles.statusText}>{channel.bypassed ? 'FX bypassed' : 'FX active'}</Text>
+            <Text style={styles.statusText}>{channel.bypassed ? 'FX off' : 'FX on'}</Text>
           </View>
         </Pressable>
         {expanded && <View style={styles.console}>
           <View style={styles.transport}>
-            <ConsoleButton primary label={mixer.isPlaying ? 'Pause' : inside ? 'Resume' : 'Play'} disabled={busy}
-              accessibilityLabel={`${label} ${mixer.isPlaying ? 'pause' : 'play'} all stems`}
+            <IconButton primary icon={mixer.isPlaying ? 'pause' : 'play'} disabled={busy}
+              accessibilityLabel={`${mixer.isPlaying ? 'Pause' : inside ? 'Resume' : 'Play'} all stems`}
               onPress={() => void run(() => mixer.isPlaying ? mixer.pause() : mixer.play())} />
-            <ConsoleButton label="Stop" disabled={busy || (!mixer.isPlaying && position === mixer.sectionStart)}
-              accessibilityLabel={`${label} stop all stems`} onPress={() => void run(() => mixer.stop())} />
-            <LampSwitch label="Mute" accessibilityLabel={`${label} mute`} on={channel.muted}
+            <IconButton icon="stop" disabled={busy || (!mixer.isPlaying && position === mixer.sectionStart)}
+              accessibilityLabel="Stop all stems" onPress={() => void run(() => mixer.stop())} />
+            <View style={styles.transportGap} />
+            <IconButton icon="mute" accessibilityLabel={`Mute ${label}`} on={channel.muted}
               onPress={() => mixer.setChannel(name, { muted: !channel.muted })} />
-            <LampSwitch label="All mute" accessibilityLabel="Mute all stems" on={allMuted}
+            <IconButton icon="muteAll" accessibilityLabel="Mute all stems" on={allMuted}
               onPress={() => STEM_NAMES.forEach(stem => mixer.setChannel(stem, { muted: !allMuted }))} />
-            <LampSwitch label="Solo" accessibilityLabel={`${label} solo`} on={channel.solo}
+            <IconButton icon="solo" accessibilityLabel={`Solo ${label}`} on={channel.solo}
               onPress={() => mixer.setChannel(name, { solo: !channel.solo })} />
-            <LampSwitch label="Loop" accessibilityLabel={`${label} loop all stems`} on={mixer.loop}
+            <IconButton icon="loop" accessibilityLabel="Loop all stems" on={mixer.loop}
               onPress={() => mixer.setLoop(!mixer.loop)} />
           </View>
           <MasterFader value={Math.round(mixer.volume * 100)} onChange={value => mixer.setVolume(value / 100)} />
@@ -262,17 +295,20 @@ const styles = StyleSheet.create({
   version: { paddingHorizontal: 12, minHeight: 36, justifyContent: 'center' },
   versionOn: { backgroundColor: BLUE },
   versionText: { fontSize: 13, fontWeight: '700', color: BLUE },
-  consoleHeading: { marginTop: 12, paddingHorizontal: 14, paddingVertical: 10, minHeight: 56, gap: 4, backgroundImage: METAL,
-    borderTopWidth: 1, borderTopColor: '#a9b5c5' },
-  consoleTitle: { fontSize: 15, fontWeight: '800', color: INK },
-  consoleAction: { fontSize: 13, fontWeight: '600', color: BLUE },
-  consoleStatus: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-  statusText: { fontSize: 12, color: '#28384e', fontWeight: '600' },
+  consoleHeading: { marginTop: 12, paddingHorizontal: 14, paddingVertical: 8, minHeight: 52, flexDirection: 'row', alignItems: 'center',
+    alignContent: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, backgroundImage: METAL, borderTopWidth: 1, borderTopColor: '#a9b5c5' },
+  consoleTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  consoleChevron: { fontSize: 13, lineHeight: 20, color: INK },
+  consoleTitle: { fontSize: 15, lineHeight: 20, fontWeight: '800', color: INK },
+  consoleAction: { fontSize: 13, lineHeight: 20, fontWeight: '600', color: BLUE },
+  consoleStatus: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  statusText: { fontSize: 12, lineHeight: 20, color: '#28384e', fontWeight: '600' },
   statusState: { fontSize: 11, color: 'white', backgroundColor: '#28384e', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 3, overflow: 'hidden' },
   led: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#6d7b8e', borderWidth: 1, borderColor: '#3c4a5c' },
   ledOn: { backgroundColor: '#5cf08a', shadowColor: '#5cf08a', shadowOpacity: 1, shadowRadius: 4, shadowOffset: { width: 0, height: 0 } },
   console: { backgroundImage: METAL, borderTopWidth: 1, borderTopColor: '#a9b5c5', paddingVertical: 10, gap: 8 },
-  transport: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 14 },
+  transport: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, paddingHorizontal: 14 },
+  transportGap: { width: 6 },
   channels: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: '#a9b5c5' },
   channelRow: { flexDirection: 'row' },
   consoleNote: { fontSize: 12, color: GREY, paddingHorizontal: 14 },

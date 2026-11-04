@@ -1,12 +1,13 @@
 import { Paths } from 'expo-file-system';
 import { useEffect, useState } from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AnalyserNode } from 'react-native-audio-api';
 import { STEM_NAMES, type StemName } from '../api';
 import { EXPLICIT_STEREO, stereoGain } from '../effects';
 import { AppHeader, type MainRoute } from '../app-header';
 import { MixerControls } from '../mixer-view';
+import { StemScrollView } from '../stem-scroll';
 import { ScorePreview } from './score-preview';
 import { Mixer } from '../player';
 import { ConfirmationProvider } from '../ui';
@@ -123,10 +124,10 @@ export default function MixerDiagnostic() {
   }, []);
   return <SafeAreaProvider><ConfirmationProvider><View style={{ flex: 1 }}>
     <AppHeader pathname={route} navigate={setRoute} />
-    <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
+    <StemScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
       <ScorePreview />
       {messages.slice(0, 6).map((message, index) => <Text key={index} selectable>{message}</Text>)}
       {player && <MixerControls mixer={player} title="Mixer controls test" />}
-    </ScrollView>
+    </StemScrollView>
   </View></ConfirmationProvider></SafeAreaProvider>;
 }
