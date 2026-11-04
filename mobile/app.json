@@ -26,20 +26,25 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      "expo-router",
       "expo-secure-store",
-      [
-        "expo-audio",
-        {
-          "microphonePermission": false
-        }
-      ],
       "expo-asset",
-      "react-native-audio-api"
+      [
+        "react-native-audio-api",
+        {
+          "iosBackgroundMode": true,
+          "androidForegroundService": true,
+          "androidFSTypes": [
+            "mediaPlayback"
+          ]
+        }
+      ]
     ],
     "extra": {
       "eas": {
         "projectId": "621ec342-3002-4e90-994e-d789aa50e02e"
       }
-    }
+    },
+    "scheme": "sorituh"
   }
 }

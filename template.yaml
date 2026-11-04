@@ -41,6 +41,13 @@ Resources:
         RecoveryMechanisms:
           - Name: verified_email
             Priority: 1
+      # Cognito's own sender did not reach Hotmail, so codes go through SES from the
+      # verified tunesbasis.com domain. While SES is in its sandbox it delivers only to
+      # addresses verified in SES.
+      EmailConfiguration:
+        EmailSendingAccount: DEVELOPER
+        SourceArn: !Sub arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/tunesbasis.com
+        From: Sorituh <no-reply@tunesbasis.com>
   UserPoolClient:
     Type: AWS::Cognito::UserPoolClient
     Properties:

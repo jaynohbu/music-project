@@ -1,8 +1,6 @@
-// Engine trial builds (EXPO_PUBLIC_ENGINE_TRIAL=1) embed the test audio from
-// src/engine-trial/push-test-audio.sh, so an iPhone can read it from the app bundle.
-// Other builds use app.json unchanged.
+// Test builds embed the engine trial's audio; normal builds use app.json unchanged.
 module.exports = ({ config }) => {
-  if (process.env.EXPO_PUBLIC_ENGINE_TRIAL !== '1') return config;
+  if (process.env.EXPO_PUBLIC_ENGINE_TRIAL !== '1' && process.env.EXPO_PUBLIC_MIXER_DIAGNOSTIC !== '1') return config;
   return {
     ...config,
     plugins: config.plugins.map(plugin =>

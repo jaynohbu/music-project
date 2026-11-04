@@ -1,6 +1,6 @@
 # Sorituh mobile app design
 
-Status: step 1 (engine trial) passed on the iPhone; step 2 (server) is next. Last updated 2026-11-03.
+Status: step 1 passed on the iPhone, step 2 is deployed, and step 3 now includes native Scenes and the full effects mixer. The parity repair passes 16 mocked regression tests, typecheck, lint, Expo Doctor, Android native compilation and iOS bundle export; it has not yet been tested signed in on a physical phone. Last updated 2026-11-03.
 
 This is the source of truth for the native app work. Read it before changing `mobile/`, the stem pipeline, or account limits. A Korean summary for people is in `sorituh-mobile-app-design.docx`; if the two differ, this file wins.
 
@@ -12,14 +12,14 @@ Replace the WebView wrapper with a native Expo app that plays stems from its own
 
 | Area | State | Where |
 |---|---|---|
-| WebView app | Works on the Android emulator; to be replaced except for sign-in | `mobile/App.tsx` |
+| App, first version | Written 2026-11-03; builds and opens to sign-in on the Android emulator; not tested signed in or on the iPhone | `mobile/src/app/`, see Step 3 |
 | Sign-in logic | Keep | `mobile/src/auth.ts` |
 | Device account API | Deployed 2026-11-03 with the `ByDevice` index; session route answers 201; not yet used from a phone | `backend/accounts.mjs`, `template.yaml` |
 | AAC generation | Deployed 2026-11-03 (worker image `cpu-20261103210959`); not yet seen on a real split | `backend/stem-playback.mjs`, `backend/stem-worker.mjs`, `backend/stem-restore.mjs` |
 | AAC for existing songs | Script written; dry run lists 4 songs and 7 cleaned stems; not applied yet | `backend/convert-playback.mjs` |
 | Usage limits | Deployed 2026-11-03; `GET /api/stems/usage` answers 401 signed out | `backend/stem-usage.mjs`, `backend/stem-api.mjs`, `backend/accounts.mjs` |
-| Audio engine | Not started; biggest risk | none yet |
-| Local cache | Not started | none yet |
+| Audio engine | Written from the trial findings; not yet run on real songs | `mobile/src/player.ts` |
+| Local cache | Written; not yet run | `mobile/src/cache.ts` |
 
 Step 1 and step 2 work is committed and pushed (`9b01351` on `main`). Commit, push or deploy only when the user asks.
 
@@ -30,11 +30,11 @@ Nothing has run end to end against real AWS or on a physical phone.
 ```
 App (Expo)
  ├ Sign-in: email + device ID
- ├ Screens: music list, upload, mixer, settings
+ ├ Screens: music list, scenes, upload, mixer, settings
  ├ Audio engine: real-time mix of 6 AAC files read from disk
  └ Local cache: most recent 20 songs or 2 GB, whichever comes first
 Server (existing AWS stack)
- ├ API: accounts, song list, usage limits
+ ├ API: accounts, song list, scenes, usage limits
  ├ Split worker: on-demand Fargate task, also produces AAC
  └ S3: WAV (original, downloads) + AAC (playback, cache)
 ```
@@ -84,7 +84,8 @@ AAC adds about 20–50 ms of start delay. Stems shift together, but timing again
 
 - **Read from disk and decode as it plays; do not load whole songs into memory.** The website's approach (`decodeAudioData` in `web/src/stem-pages.ts`) needs about 508 MB for a 4-minute song and 1.9 GB for 15 minutes, and AAC does not reduce that.
 - Drive all 6 stems from one audio callback and clock, keeping sample-accurate sync through seeks.
-- Port bass/mid/treble EQ from `web/src/stem-effects.ts`. **Compressor and reverb are out of scope for now:** the user decided on 2026-11-02 that neither is an important feature. The website keeps them. Other effects on the web mixer (distortion, pan, pre-gain) were not discussed; do not port them without asking.
+- **Updated scope, explicitly approved during the native parity repair:** include all nine web controls: volume, pre-gain, compression, distortion, bass, mid, treble, pan and reverb, plus bypass. This supersedes the earlier EQ-only decision. `src/effects.ts` uses the website's defaults/ranges, fixed soft-clip curve and seeded impulse. Compression is a stereo-linked worklet with the same threshold/ratio mapping and 3 ms attack/250 ms release, but without the browser node's lookahead or knee; it is not claimed to sound identical.
+- Full effects are not yet measured on a physical phone. The current independent per-stem convolvers preserve each stem's pan/mute/solo/bypass behavior, but the trial below showed a substantial CPU cost for six reverbs. Benchmark full effects before shipping; a shared reverb would require an intentional routing/tail-behavior change.
 - Background playback: iOS background audio, Android foreground media service, lock-screen controls.
 - First candidate is `react-native-audio-api`. It passed on the Android emulator but is **not yet proven on physical phones** (see Step 1 plan). The fallback is custom Expo modules using AVAudioEngine on iOS and Oboe on Android.
 
@@ -177,7 +178,7 @@ These came from the user's short description. The user confirmed 1, 2 and 4 on 2
 1. **Engine trial:** 6 stems at once, sync, seeking, effects and a 15-minute song, on a low-end Android phone and an iPhone. A failure here reopens the design, so it comes first.
 2. **Server:** AAC, deletion, conversion of existing songs, usage limits, device API deployment.
 3. **App, first version:** sign-in, song list, upload, mixer, cache, background playback.
-4. **App, second version:** lyrics, chords, restoration.
+4. **App, second version:** lyrics and chords (written 2026-11-03, see "Lyrics and score"; rendering checked on the iOS simulator build 20efb6bf with `react-native-svg`; an iPhone build with the new native module is still needed), restoration.
 5. **Release:** account deletion, Amazon SES, billing, EAS setup and store submission (see App deployment). Set up the `staging` profile earlier, because step 1 needs an iPhone build.
 
 ## Step 1 plan: engine trial
@@ -241,7 +242,7 @@ Trial runs stopped reporting a position once a file ended, which shows up as a l
 
 - Route each source through `MediaElementAudioSourceNode`. Without it, `start()` also connects the source directly to the speakers and bypasses the effects.
 - Sample-accurate start and seek use `start(when)` on `AudioFileSourceNode`, which is **not public API**: it is deep-imported from `lib/module/Audio/AudioFileSourceNode`. The library is pre-1.0, so the version is pinned to 0.13.6; expect this to break on upgrade.
-- If the compressor comes back: there is no `DynamicsCompressorNode` (on the library's roadmap). The trial's JS worklet worked but had no 6 ms lookahead, and needed `react-native-worklets`, which has been removed from the app.
+- There is no `DynamicsCompressorNode` (on the library's roadmap). The trial's JS worklet worked but had no 6 ms lookahead. `react-native-worklets` was removed after the EQ-only decision and has now been restored at Expo-compatible version 0.13.0 for the approved full-effects scope. A new native binary is required; this is not a JS-only update.
 - Read sync from audio, not from `getCurrentTime()`. Its spread reached 23 ms while the mix still cancelled, so it does not measure alignment.
 - If reverb comes back: use one shared reverb rather than one per stem, because six convolvers were the main CPU cost.
 - Pushing files with `adb` creates folders the app cannot read until `chmod -R 777`; a closed file reports duration 0 and silence, with no error.
@@ -270,6 +271,106 @@ For the Android phone only, when one is available; step 2 comes first. The user 
 
 After step 1, `mobile/App.tsx` is still the WebView app; step 3 replaces it.
 
+## Step 3: app, first version
+
+**Status (2026-11-03): written, typechecks and lints, and a release build opens to the sign-in screen on the Android emulator. Nothing has been tested signed in, and nothing on the iPhone.** The WebView app (`App.tsx`) and `react-native-webview` and `expo-audio` are removed.
+
+**Layout:** Expo Router, routes in `mobile/src/app/`. `index.ts` loads `expo-router/entry`, or the engine trial when `EXPO_PUBLIC_ENGINE_TRIAL=1`.
+
+| File | What it does |
+|---|---|
+| `src/app/_layout.tsx` | Session provider; `Stack.Protected` shows sign-in or the app; persistent, safe-area top Music/Scenes/Settings navigation via `src/app-header.tsx` |
+| `src/app/sign-in.tsx` | Email and code form, moved from the old `App.tsx` |
+| `src/app/index.tsx` | Owned stem-song cards (`GET /api/jobs`, pages of 20), usage, Add a song, visible Open mixer/Delete actions; polls every 5 s during processing; custom deletion confirmation explains Scene cleanup |
+| `src/app/upload.tsx` | Modal document picker/upload flow; checks extension and 55 MB, presigned POST with progress, then `/complete`; retry does not upload again; returns to Music |
+| `src/app/song/[id].tsx` | Standalone reusable `MixerView` |
+| `src/app/scenes/index.tsx` | List/create/open/delete owned Scenes |
+| `src/app/scenes/[id].tsx` | Numbered overlapping song tabs, independent names/settings, add/remove songs, move earlier/later, sequential natural-end playback; manual tab selection/Stop/Pause do not auto-advance |
+| `src/mixer-view.tsx` | Six stem cards matching the website: Original/Cleaned switch, timeline, metallic Mixer heading with level/LED/FX status, Play/Pause/Stop, MUTE/ALL MUTE/SOLO/LOOP lamp switches, master fader, nine vertical channel strips (horizontal scroll), EFFECTS BYPASS/RESET; visible loading/playback errors |
+| `src/mixer-console.tsx` | Web-styled controls: draggable down-arrow S/E markers with the section highlight, red playhead with grip (scrub previews, seeks once on release), Start/Playing/End times with Reset; metallic vertical faders (LCD, scale, dark track, blue-centre thumb) and horizontal master fader; lamp switches. Gradients use React Native's native `backgroundImage`, so no new dependency. All drags claim the responder so the page ScrollView cannot steal them; every control is VoiceOver-adjustable |
+| `src/mixer-settings.ts` | Native fractions ↔ web percentages, all effects/flags/selection/loop; restores against decoded/source duration |
+| `src/scene-store.ts` | Debounced revision-aware serialized autosave; preserves local edits on failure, Retry/Reload actions and unsaved-change removal guard |
+| `src/ui.tsx` | Shared Sorituh palette/buttons and custom confirmation modals (no native Alert dialogs) |
+| `src/app/settings.tsx` | Email, plan, splits and songs used, cache size, Remove saved songs, Sign out |
+| `src/session.tsx` | Sign-in state, ID token refresh (`REFRESH_TOKEN_AUTH`, 60 s early), falls back to the saved password and then the device route |
+| `src/api.ts` | API calls with the ID token as `Authorization: Bearer` |
+| `src/cache.ts` | Cache in `Paths.document/songs/<jobId>/`; validates file existence/size, caches completed cleaned versions, deduplicates downloads, reference-counts active songs, waits for every failed-download task before cleanup |
+| `src/player.ts` | Async initialization resumes context before building sources; shared `start(when)` for originals/cleaned stems, real source switching, error propagation, atomic Stop and serialized cleanup |
+| `src/audio-native.d.ts` | Pinned native audio event binding; subscriptions are explicitly removed because library `attach()/dispose()` does not unregister its JS listeners |
+| `test/native-mixer.test.cjs` | Node regression tests using mocked native audio/filesystem and the real backend Scene settings validator |
+| `test/mixer-console.test.cjs` | Drives the real console components' gesture handlers with a tiny hook renderer: fader range/snap/clamp, bypass, master, S/E interval limits and scrub-then-seek |
+
+**Choices made without asking (change if wrong):**
+
+- English text, as in the old app and the website.
+- Leaving the mixer screen stops playback; there is no mini player. Screen lock and background keep playing while the mixer is open.
+- Standalone Music songs open at the website's defaults. Scene entries autosave every effect, master volume, mute/solo, bypass, cleaned-source preference, section and loop independently. Reorder preserves the active entry ID; up to 99 entries, including duplicates. Playback position and playing state are not saved.
+- Scene save failures are visible and do not silently overwrite newer server revisions. Retry uses the last acknowledged revision; Reload explicitly discards local edits. Removal navigation flushes pending changes or asks before leaving.
+- Loop/selection completion is driven by the native position/end callbacks and a 100 ms UI tick, not sample-accurate loop points. Verify background section boundaries and Scene advancement on the physical phone.
+- Lock screen: play, pause, ±15 s and seek. Playback pauses on a phone call and resumes if the system says so, and pauses when headphones are unplugged.
+- No duration check before upload; the worker rejects songs over 15 minutes and refunds the split.
+- Signing out runs Cognito `GlobalSignOut`, removes the saved password and clears the cache.
+- Downloads with HTTP errors are caught by size (under 4 KB), since the download task does not report the status.
+
+**To test next:** sign in on the emulator (a new device on an existing account needs the emailed code), open each of the 4 songs (they play WAV until `convert-playback.mjs --apply` runs), upload a short song, check sync by ear, seeking, lock screen, the cache limit and sign-out. Then an iPhone build with the `staging` profile.
+
+**Native parity repair validation:** `npm test` passes 16 tests covering real effect-node parameter wiring, stereo-linked/non-amplifying compression, synchronized original/cleaned scheduling and switching, mute/solo gains, lock-screen title updates, Play failure and queue recovery, completion exactly once, loop without Scene advance (including turning loop off during restart), shutdown during Play, stalled-audio errors, invalid-source cleanup, cache deduplication/reference counts/missing files/download failures, percentage snapshots accepted by the real backend validator, and autosave revision serialization/conflicts/discard. `npx tsc --noEmit`, `npx expo lint`, all 20 Expo Doctor checks, final Android `:app:assembleRelease` with native Worklets, and an iOS Hermes export pass. The Android APK was compiled only, not installed. These are not evidence of signed-in playback, full-effects CPU/battery, or iPhone navigation/audio correctness. No commit, push or production release was made for this repair.
+
+**Approved iPhone test build:** after validation, the user approved an internal `staging` build. EAS build [`57af3d51-e0c9-44f0-865b-2e6c0e81f995`](https://expo.dev/accounts/nohjiyoung/projects/sorituh/builds/57af3d51-e0c9-44f0-865b-2e6c0e81f995) finished successfully and is ready to install on the existing registered iPhone using that link. Installation and signed-in playback have not yet been verified. Staging explicitly sets `EXPO_PUBLIC_ENGINE_TRIAL=0`; the separate engine-trial profile still overrides it with `1`. The latest EAS CLI installation failed with npm `Invalid Version`; the already installed compatible EAS CLI 20.5.1 authenticated and submitted the build successfully.
+
+### Mixer-loading crash investigation (2026-11-03)
+
+The user reported the staging app exits while loading the mixer, and requested an iOS simulator reproduction. This Mac can run its installed iOS 18.3 simulator, although Xcode 16.2 cannot compile Expo 58 locally. An EAS simulator build, [`1de8315e-4136-499d-bcda-41c250898a53`](https://expo.dev/accounts/nohjiyoung/projects/sorituh/builds/1de8315e-4136-499d-bcda-41c250898a53), was built using the `mixer-diagnostic` profile. It runs the **production Mixer** with six bundled test stems, without account credentials.
+
+- **Reproduced:** native `EXC_BAD_ACCESS / SIGSEGV` at address `0x30`, in `audioapi::ThreadPool::wait()` → `ConvolverNode::performConvolution()` → `ConvolverNode::processNode()`, while loading the mixer. The supplied pasted report matches the simulator report.
+- **Cause:** `src/effects.ts` connected a convolver with no impulse buffer, expecting to initialize it later when Reverb became nonzero. Native audio-api 0.13.6 renders that connected path even with send gain zero. Its convolver unconditionally dereferences a thread pool which is created only when `buffer` is set.
+- **Fix:** initialize the cached impulse on every convolver **before connecting it**. Moving the Reverb fader now only adjusts gains; it never replaces the live impulse. No effects were removed.
+- **Regression:** the audio mock now refuses to connect an uninitialized convolver. The relevant test failed before the fix and passes afterward.
+- **Native verification:** replaced only the simulator artifact's JS bundle using Expo's compiled Hermes export, leaving the native binary unchanged. The same reproduction completes create/play/all-effects/stop/close, reports approximately 2.8 seconds of audio progress, and remains alive. A second run rendered the actual `MixerControls` and the shared safe-area top `AppHeader` successfully. This is test-audio verification, not signed-in real-song or physical-iPhone performance validation.
+- **Navigation:** Music/Scenes/Settings now appear at the top, below the notch, with a separate flex container for the route stack so content cannot squeeze the header away.
+- **Diagnostic isolation:** `EXPO_PUBLIC_MIXER_DIAGNOSTIC=1` selects `src/engine-trial/MixerDiagnostic.tsx` and embeds test audio only for that build. Normal staging continues to use the real app; no authentication behavior was changed.
+
+The original iPhone staging build above still contains the crash. The user approved a replacement; fixed iPhone staging build [`b77fb229-c94e-416a-a70d-898cf38b6080`](https://expo.dev/accounts/nohjiyoung/projects/sorituh/builds/b77fb229-c94e-416a-a70d-898cf38b6080) completed successfully and is ready to install. Both diagnostic flags are explicitly `0` in staging, so this is the normal signed-in app with the convolver fix and top navigation. Physical-phone verification of the replacement remains pending.
+
+### Silent mixer and lock-screen crash (2026-11-03)
+
+After the convolver fix the app stayed open but made no sound. Analyser RMS probes in the simulator diagnostic (`src/engine-trial/MixerDiagnostic.tsx`) showed signal up to `distortionDry` and exact zero from the distortion mix onward, including the master.
+
+- **Cause (native `react-native-audio-api` 0.13.6, `AudioNode.cpp`):** with the default `channelCountMode: 'max'`, a node with a single input processes that input node's own buffer in place, so the ×0 distortion wet gain zeroed the shared compressor output; a fan-out node's second consumer also received a stale cached buffer.
+- **Fix:** every graph node is constructed with `{ channelCount: 2, channelCountMode: 'explicit' }` (`EXPLICIT_STEREO`/`stereoGain` in `src/effects.ts`), which mixes inputs into the node's own buffer. The worklet compressor cannot take options, so it feeds exactly one explicit `compressed` splitter gain. `context.createX()` cannot pass options; use the node constructors. Set the waveshaper `curve` and convolver `buffer` through setters (the option parsers do not read them), the convolver before connecting.
+- **Verified in the simulator with test audio:** every stage carries signal, master RMS ≈ 0.0137; with compression 35, distortion 20, reverb 30 the reverb path and master remain audible (master ≈ 0.0133). Not yet verified on the iPhone with real songs.
+- **Second crash found while probing:** SIGSEGV in `-[NotificationRegistry showNotificationWithType:]`. The native lock-screen registry mutates an unsynchronized dictionary from concurrent queues, and the app fired several `enableControl` calls in parallel. `src/player.ts` now serializes `enableControl`/`show`/`hide` through one queue; `show` reads the latest state when it runs and is skipped once the mixer is closed.
+- **Regression tests:** "every mixing node is explicit stereo" and "lock-screen control calls never overlap" both fail when the fixes are reverted.
+
+**Web-matching mixer controls:** the user asked for down-arrow start/end markers, a cursor showing the playing position, and the website's vertical metallic faders. `src/mixer-console.tsx` implements these. Rendering was checked with simulator screenshots, matching the web colours and layout. Native streaming file sources expose no peaks, so the timeline is a plain track with quarter ticks rather than a waveform. The simulator could not receive synthetic touches without macOS Accessibility permission, so dragging was verified by `test/mixer-console.test.cjs` (mutations of the fader mapping and the ScrollView guard fail all four tests), not by hand. `@react-native-community/slider` is no longer imported but remains installed until the next dependency cleanup.
+
+The user approved a replacement iPhone staging build: [`b7d97010-a0da-440f-99f9-ea2d42457b20`](https://expo.dev/accounts/nohjiyoung/projects/sorituh/builds/b7d97010-a0da-440f-99f9-ea2d42457b20) finished successfully. It contains the explicit-stereo audio fix, the lock-screen serialization and the web-matching controls. Physical-phone playback is still to be confirmed.
+
+### Mixer scrolling and diagnostic test audio
+
+- Faders, the timeline and the master fader used to claim every touch on start, so the page could not scroll. `useDrag` now accepts `claim: 'horizontal'` (timeline, master: claimed only for sideways drags) and `startsOn` (channel faders: claimed only when the touch starts on the knob). Vertical swipes elsewhere scroll the page; S/E markers and the playhead still claim immediately.
+- The bundled diagnostic stems are opposite-polarity pairs, so playing all six cancels to silence and makes mute/solo misleading. The controls test now uses only the non-cancelling "a" stems and logs per-stem levels for all-on, mute and solo, which confirmed mute and solo work. Real songs are unaffected.
+- iPhone staging build 93fc2cf2 includes the scrolling fix.
+
+### Lyrics and score (악보)
+
+The app now has the website's lyrics and score in each stem card, between the header and the timeline:
+
+- **Vocals:** "Lyrics" starts finding lyrics. Once found, a word strip glides so the sung word reaches the middle, and its neighbours are lit more faintly. "Edit lyrics" pauses playback and opens a full-screen editor with timed rows, add-line buttons and an in-modal discard confirmation. Saving moves the cursor one second before the first change.
+- **Guitar, piano, other, bass:** "Chords & melody" runs the whole score. The result is a staff with chords, notes, rests, ties and a clef. "Regenerate" redoes one stem from the version being heard (original or cleaned).
+- **Drums:** a drum staff with crossed cymbals, beamed hands, the kick as a separate voice and pattern letters.
+- The API calls, 4-second polling, wording and empty and failed messages are the same as the website's.
+
+Where the code lives:
+
+- `src/score.ts`: pure layout and timing, ported unchanged from `web/src/harmony-strip.ts`, `lyrics-strip.ts` and `lyrics-editor.ts`, and tested in `test/score.test.cjs`.
+- `src/song-tasks.ts`: state and polling.
+- `src/score-view.tsx`: views.
+
+The staff uses `react-native-svg`. It draws in four-bar chunks and mounts only those near the playhead. Moving the active highlight redraws one chunk.
+
+`react-native-svg` is a native module, so this needs a new native build. Builds 93fc2cf2 and earlier do not include it.
+
 ## Constraints
 
 - **iOS cannot be built on this Mac.** Expo SDK 58 needs Swift 6.2 (Xcode 26); the Mac has Xcode 16.2 on macOS 14.5. Use EAS and a physical iPhone, as in App deployment. Yanji's submit settings suggest an Apple Developer account exists, but its status has not been checked, and an old Yanji `build.log` shows a "no team" failure.
@@ -287,6 +388,6 @@ The ADTOF licence is handled by a plan to train an in-house model before product
 - **Android build:** from `mobile/`, run `npx expo run:android --variant release --no-bundler` with `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"` and `ANDROID_HOME=~/Library/Android/sdk`. The system Java 26 is not suitable. AVD: `Medium_Phone_API_36.1`.
 - **CocoaPods** needs `LANG=en_US.UTF-8` and `LC_ALL=en_US.UTF-8`.
 - **Expo APIs:** `mobile/AGENTS.md` says to check the versioned docs, because SDK 58 differs from older knowledge. `ios/` and `android/` are generated and gitignored; never edit them by hand.
-- **Checks:** `node --test test/*.test.mjs` in `backend/`; `npx tsc --noEmit`, `npx expo lint` and `npx expo-doctor` in `mobile/`; `sam validate --lint` in the repo root.
+- **Checks:** `node --test test/*.test.mjs` in `backend/`; `npm test`, `npx tsc --noEmit`, `npx expo lint` and `npx expo-doctor` in `mobile/`; `sam validate --lint` in the repo root.
 - **API deploy:** `STEM_IMAGE=<image> bash publish-api.sh youtube-audio-library`. The current image is `086723604095.dkr.ecr.us-west-2.amazonaws.com/youtube-audio-library-artifacts-stemrepository-8kjzuftyhvbg:cpu-20261103210959`. Worker code changes need a new image first (`build-stem-image.sh`). The publish scripts ship the working folder as it stands.
 - **Names:** "youtube" in the stack name, the `youtube-session` key and similar is only a label; YouTube downloading has been removed.

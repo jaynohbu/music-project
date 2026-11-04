@@ -9,12 +9,25 @@
       "distribution": "internal"
     },
     "staging": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_ENGINE_TRIAL": "0",
+        "EXPO_PUBLIC_MIXER_DIAGNOSTIC": "0"
+      }
     },
     "engine-trial": {
       "extends": "staging",
       "env": {
         "EXPO_PUBLIC_ENGINE_TRIAL": "1"
+      }
+    },
+    "mixer-diagnostic": {
+      "extends": "staging",
+      "ios": {
+        "simulator": true
+      },
+      "env": {
+        "EXPO_PUBLIC_MIXER_DIAGNOSTIC": "1"
       }
     },
     "production": {
