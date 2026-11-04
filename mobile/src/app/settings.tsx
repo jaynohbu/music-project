@@ -1,10 +1,11 @@
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { type Usage, getUsage } from '../api';
 import { cacheSize, clearCache } from '../cache';
 import { useSession } from '../session';
-import { BACKGROUND, Button, GREY, INK, LINE, errorText, formatBytes, useConfirm } from '../ui';
+import { THEMES, type Theme, useSetTheme, useStyles, useTheme } from '../theme';
+import { Button, errorText, formatBytes, useConfirm } from '../ui';
 
 export default function Settings() {
   const { email, logOut } = useSession();
@@ -12,6 +13,7 @@ export default function Settings() {
   const [cache, setCache] = useState(cacheSize);
   const [error, setError] = useState('');
   const confirm = useConfirm();
+  const styles = useStyles(makeStyles);
 
   useFocusEffect(useCallback(() => {
     setCache(cacheSize());
@@ -26,6 +28,9 @@ export default function Settings() {
   return (
     <ScrollView contentContainerStyle={styles.page}>
       {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
+      <Text style={styles.section} accessibilityRole="header">Theme</Text>
+      <ThemePicker />
+      <Text style={styles.section} accessibilityRole="header">Account</Text>
       <Row label="Email" value={email} />
       {usage && <>
         <Row label="Plan" value={usage.plan === 'premium' ? 'Premium' : 'Free'} />
@@ -46,7 +51,29 @@ export default function Settings() {
   );
 }
 
+function ThemePicker() {
+  const styles = useStyles(makeStyles), current = useTheme(), setTheme = useSetTheme();
+  return <View style={styles.themes} accessibilityRole="radiogroup">
+    {THEMES.map(theme => {
+      const selected = theme.id === current.id;
+      return <Pressable key={theme.id} onPress={() => setTheme(theme.id)} accessibilityRole="radio"
+        accessibilityState={{ checked: selected }} accessibilityLabel={`${theme.name} theme`}
+        style={[styles.theme, selected && styles.themeOn]}>
+        <View style={[styles.swatch, { backgroundColor: theme.background, backgroundImage: theme.gradient }]}>
+          {theme.image && <Image source={theme.image} resizeMode="cover" style={StyleSheet.absoluteFill} />}
+          <View style={[styles.swatchCard, { backgroundColor: theme.surface }]}>
+            <View style={[styles.swatchLine, { backgroundColor: theme.ink }]} />
+            <View style={[styles.swatchKey, { backgroundColor: theme.accent }]} />
+          </View>
+        </View>
+        <Text style={[styles.themeName, selected && styles.themeNameOn]} numberOfLines={1}>{theme.name}</Text>
+      </Pressable>;
+    })}
+  </View>;
+}
+
 function Row({ label, value }: { label: string; value: string }) {
+  const styles = useStyles(makeStyles);
   return (
     <View style={styles.row}>
       <Text style={styles.label}>{label}</Text>
@@ -55,14 +82,24 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-const styles = StyleSheet.create({
-  page: { padding: 16, gap: 12, backgroundColor: BACKGROUND },
+const makeStyles = (t: Theme) => StyleSheet.create({
+  page: { padding: 16, gap: 12 },
+  section: { fontSize: 13, fontWeight: '700', letterSpacing: 1, color: t.muted, textTransform: 'uppercase', marginTop: 4 },
+  themes: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  theme: { width: '31%', flexGrow: 1, padding: 6, gap: 6, borderRadius: 12, borderWidth: 2, borderColor: t.line, backgroundColor: t.surface },
+  themeOn: { borderColor: t.accent },
+  swatch: { height: 64, borderRadius: 8, overflow: 'hidden', justifyContent: 'flex-end', padding: 6 },
+  swatchCard: { borderRadius: 5, padding: 5, gap: 4, flexDirection: 'row', alignItems: 'center' },
+  swatchLine: { flex: 1, height: 4, borderRadius: 2, opacity: .7 },
+  swatchKey: { width: 16, height: 10, borderRadius: 3 },
+  themeName: { fontSize: 14, fontWeight: '600', color: t.muted, textAlign: 'center' },
+  themeNameOn: { color: t.accent },
   row: {
     flexDirection: 'row', justifyContent: 'space-between', gap: 12, paddingVertical: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: LINE,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.line,
   },
-  label: { fontSize: 16, color: INK },
-  value: { flexShrink: 1, fontSize: 16, color: GREY },
-  note: { fontSize: 13, color: GREY, paddingVertical: 8 },
-  error: { color: '#a52c35', padding: 12, backgroundColor: '#fff0f0' },
+  label: { fontSize: 16, color: t.ink },
+  value: { flexShrink: 1, fontSize: 16, color: t.muted },
+  note: { fontSize: 13, color: t.muted, paddingVertical: 8 },
+  error: { color: t.errorInk, padding: 12, backgroundColor: t.dangerSoft },
 });

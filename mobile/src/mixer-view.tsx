@@ -5,16 +5,17 @@ import { HARMONY_STEMS, STEM_NAMES, getSong, type LyricLine, type SceneEntry, ty
 import { addCleanedFile, holdSong, songFiles, stemPaths } from './cache';
 import { EFFECT_CONTROLS } from './effects';
 import { Mixer, defaultChannel } from './player';
-import { ChannelStrip, IconButton, LampSwitch, METAL, MasterFader, Timeline } from './mixer-console';
+import { ChannelStrip, IconButton, LampSwitch, MasterFader, Timeline } from './mixer-console';
 import { useStemScroll } from './stem-scroll';
 import { focusedStem } from './stem-focus';
 import { stemPeaks } from './waveform';
-import { BLUE, Button, ButtonRow, Centered, GREY, INK, LINE, errorText, useConfirm } from './ui';
+import { Button, ButtonRow, Centered, errorText, useConfirm } from './ui';
 
 import { snapshot, restore } from './mixer-settings';
 import { HarmonyStrip, LyricsEditor, LyricsStrip } from './score-view';
 import { LYRICS_REPLAY_LEAD, firstChange } from './score';
 import { CHORDS_NOTE, LYRICS_NOTE, hasMusic, regenerateLabel, useSongTasks } from './song-tasks';
+import { type Theme, useStyles, useTheme } from './theme';
 
 interface MixerProps {
   jobId: string; title?: string; entry?: SceneEntry;
@@ -27,6 +28,7 @@ export function MixerView(props: MixerProps) {
   return focused ? <MountedMixer {...props} /> : null;
 }
 function MountedMixer({ jobId, title, entry, onSettings, onEnded, onReady, onSong, onMixer }: MixerProps) {
+  const styles = useStyles(makeStyles);
   const [mixer, setMixer] = useState<Mixer | null>(null);
   const [song, setSong] = useState<Song | null>(null);
   const [fraction, setFraction] = useState<number | null>(null);
@@ -91,6 +93,7 @@ function MountedMixer({ jobId, title, entry, onSettings, onEnded, onReady, onSon
 }
 
 export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; song?: Song | null; peaks?: StemPeaks }) {
+  const styles = useStyles(makeStyles), theme = useTheme();
   const [, refresh] = useReducer(count => count + 1, 0);
   const [position, setPosition] = useState(0);
   const [open, setOpen] = useState<StemName>('vocals');
@@ -208,7 +211,7 @@ export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; son
               accessibilityState={{ checked: channel.useCleaned === cleaned }}
               onPress={() => mixer.setChannel(name, { useCleaned: cleaned })}
               style={[styles.version, channel.useCleaned === cleaned && styles.versionOn]}>
-              <Text style={[styles.versionText, channel.useCleaned === cleaned && { color: 'white' }]}>{cleaned ? 'Cleaned' : 'Original'}</Text>
+              <Text style={[styles.versionText, channel.useCleaned === cleaned && { color: theme.onAccent }]}>{cleaned ? 'Cleaned' : 'Original'}</Text>
             </Pressable>)}
           </View>}
           {!mixer.hasCleaned(name) && song && (cleanErrors[name]
@@ -297,6 +300,7 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
   name: StemName; label: string; cleaned: boolean; tasks: ReturnType<typeof useSongTasks>; position: number;
   disabled: boolean; onEditLyrics: () => void;
 }) {
+  const styles = useStyles(makeStyles);
   const vocals = name === 'vocals', harmonic = HARMONY_STEMS.includes(name);
   if (!vocals && !harmonic) return null;
   const parts = tasks.parts, part = parts?.[name];
@@ -340,39 +344,39 @@ function displayValue(key: ControlKey, value: number) {
   return UNITS[key] === 'dB' ? `${value} dB` : `${value}%`;
 }
 
-const styles = StyleSheet.create({
-  page: { gap: 14 }, card: { backgroundColor: 'white', padding: 20, gap: 14, borderRadius: 12 },
-  stem: { backgroundColor: 'white', borderRadius: 10, borderWidth: 1, borderColor: LINE, overflow: 'hidden', paddingTop: 12 },
+const makeStyles = (t: Theme) => StyleSheet.create({
+  page: { gap: 14 }, card: { backgroundColor: t.surface, padding: 20, gap: 14, borderRadius: 12 },
+  stem: { backgroundColor: t.surface, borderRadius: 10, borderWidth: 1, borderColor: t.line, overflow: 'hidden', paddingTop: 12 },
   stemHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, minHeight: 36 },
-  stemTitle: { fontSize: 16, fontWeight: '700', color: INK },
-  versions: { flexDirection: 'row', borderWidth: 1, borderColor: BLUE, borderRadius: 6, overflow: 'hidden' },
+  stemTitle: { fontSize: 16, fontWeight: '700', color: t.ink },
+  versions: { flexDirection: 'row', borderWidth: 1, borderColor: t.accent, borderRadius: 6, overflow: 'hidden' },
   version: { paddingHorizontal: 12, minHeight: 36, justifyContent: 'center' },
-  versionOn: { backgroundColor: BLUE },
-  versionText: { fontSize: 13, fontWeight: '700', color: BLUE },
+  versionOn: { backgroundColor: t.accent },
+  versionText: { fontSize: 13, fontWeight: '700', color: t.accent },
   stemError: { marginHorizontal: 14 },
   consoleHeading: { marginTop: 12, paddingHorizontal: 14, paddingVertical: 8, minHeight: 52, flexDirection: 'row', alignItems: 'center',
-    alignContent: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, backgroundImage: METAL, borderTopWidth: 1, borderTopColor: '#a9b5c5' },
+    alignContent: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, backgroundImage: t.metal, borderTopWidth: 1, borderTopColor: t.consoleLine },
   consoleTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  consoleChevron: { fontSize: 13, lineHeight: 20, color: INK },
-  consoleTitle: { fontSize: 15, lineHeight: 20, fontWeight: '800', color: INK },
-  consoleAction: { fontSize: 13, lineHeight: 20, fontWeight: '600', color: BLUE },
+  consoleChevron: { fontSize: 13, lineHeight: 20, color: t.consoleInk },
+  consoleTitle: { fontSize: 15, lineHeight: 20, fontWeight: '800', color: t.consoleInk },
+  consoleAction: { fontSize: 13, lineHeight: 20, fontWeight: '600', color: t.consoleAccent },
   consoleStatus: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  statusText: { fontSize: 12, lineHeight: 20, color: '#28384e', fontWeight: '600' },
+  statusText: { fontSize: 12, lineHeight: 20, color: t.consoleInk, fontWeight: '600' },
   statusState: { fontSize: 11, color: 'white', backgroundColor: '#28384e', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 3, overflow: 'hidden' },
   led: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#6d7b8e', borderWidth: 1, borderColor: '#3c4a5c' },
   ledOn: { backgroundColor: '#5cf08a', shadowColor: '#5cf08a', shadowOpacity: 1, shadowRadius: 4, shadowOffset: { width: 0, height: 0 } },
-  console: { backgroundImage: METAL, borderTopWidth: 1, borderTopColor: '#a9b5c5', paddingVertical: 10, gap: 8 },
+  console: { backgroundImage: t.metal, borderTopWidth: 1, borderTopColor: t.consoleLine, paddingVertical: 10, gap: 8 },
   transport: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14 },
   switches: { paddingHorizontal: 14 },
-  channels: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: '#a9b5c5' },
+  channels: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: t.consoleLine },
   channelRow: { flexDirection: 'row' },
-  consoleNote: { fontSize: 12, color: GREY, paddingHorizontal: 14 },
-  detail: { color: GREY, fontSize: 13, lineHeight: 20 },
-  error: { backgroundColor: '#fff0f0', color: '#a52c35', padding: 12, borderRadius: 8 },
+  consoleNote: { fontSize: 12, color: t.consoleMuted, paddingHorizontal: 14 },
+  detail: { color: t.muted, fontSize: 13, lineHeight: 20 },
+  error: { backgroundColor: t.dangerSoft, color: t.errorInk, padding: 12, borderRadius: 8 },
   taskRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 14, marginTop: 8 },
-  taskButton: { minHeight: 36, paddingHorizontal: 12, justifyContent: 'center', borderRadius: 6, borderWidth: 1, borderColor: BLUE, backgroundColor: '#eef2fb' },
-  taskButtonText: { color: BLUE, fontSize: 13, fontWeight: '700' },
+  taskButton: { minHeight: 36, paddingHorizontal: 12, justifyContent: 'center', borderRadius: 6, borderWidth: 1, borderColor: t.accent, backgroundColor: t.accentSoft },
+  taskButtonText: { color: t.accent, fontSize: 13, fontWeight: '700' },
   taskError: { marginHorizontal: 14, marginTop: 8 },
-  taskNote: { marginHorizontal: 14, marginTop: 10, padding: 8, borderRadius: 6, backgroundColor: '#f1f4f9', color: '#42536b', fontSize: 13 },
-  taskHint: { marginHorizontal: 14, marginTop: 8, color: GREY, fontSize: 13 },
+  taskNote: { marginHorizontal: 14, marginTop: 10, padding: 8, borderRadius: 6, backgroundColor: t.surfaceMuted, color: t.muted, fontSize: 13 },
+  taskHint: { marginHorizontal: 14, marginTop: 8, color: t.muted, fontSize: 13 },
 });

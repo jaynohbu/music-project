@@ -11,7 +11,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.tunesbasis.sorituh",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "UIViewControllerBasedStatusBarAppearance": true
       }
     },
     "android": {

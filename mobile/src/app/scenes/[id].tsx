@@ -8,13 +8,15 @@ import { MixerView } from '../../mixer-view';
 import { IconButton, InlineEdit } from '../../mixer-console';
 import type { Mixer } from '../../player';
 import { SceneStore } from '../../scene-store';
-import { BLUE, Button, ButtonRow, GREY, INK, LINE, errorText, useConfirm } from '../../ui';
+import { Button, ButtonRow, errorText, useConfirm } from '../../ui';
+import { type Theme, useStyles, useTheme } from '../../theme';
 
 export default function ScenePlayer() {
   const { id } = useLocalSearchParams<{ id: string }>();
   return <SceneEditor key={id} id={id} />;
 }
 function SceneEditor({ id }: { id: string }) {
+  const styles = useStyles(makeStyles), theme = useTheme();
   const [, render] = useReducer(value => value + 1, 0);
   const [store, setStore] = useState<SceneStore | null>(null);
   const [activeId, setActiveId] = useState('');
@@ -135,7 +137,7 @@ function SceneEditor({ id }: { id: string }) {
           onLayout={event => { tabBounds.current[item.id] = event.nativeEvent.layout; if (item.id === activeId) reveal(item.id); }}
           accessibilityRole="tab" accessibilityState={{ selected: activeId === item.id }}
           onPress={() => void select(item.id)}>
-          <Text numberOfLines={1} style={[styles.tabLabel, activeId === item.id && { color: BLUE }]}>{i + 1}. {title(item)}</Text>
+          <Text numberOfLines={1} style={[styles.tabLabel, activeId === item.id && { color: theme.accent }]}>{i + 1}. {title(item)}</Text>
         </Pressable>)}
         <Pressable style={[styles.tab, styles.addTab, !!scene.entries.length && { marginLeft: -10 }]}
           accessibilityRole="button" accessibilityLabel="Add songs to the scene" onPress={() => void openPicker()}>
@@ -188,25 +190,25 @@ function SceneEditor({ id }: { id: string }) {
     </Modal>
   </StemScrollView>;
 }
-const styles = StyleSheet.create({
+const makeStyles = (t: Theme) => StyleSheet.create({
   page: { padding: 16, gap: 14 },
-  heading: { color: INK, fontSize: 26, fontWeight: '700' },
-  label: { color: INK, fontSize: 15, fontWeight: '600' },
+  heading: { color: t.ink, fontSize: 26, fontWeight: '700' },
+  label: { color: t.ink, fontSize: 15, fontWeight: '600' },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
   headerTitle: { flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: 280 },
-  headerText: { color: INK, fontSize: 17, fontWeight: '600', flexShrink: 1 },
+  headerText: { color: t.ink, fontSize: 17, fontWeight: '600', flexShrink: 1 },
   addTab: { paddingVertical: 0, paddingHorizontal: 20, justifyContent: 'center' },
   addLabel: { fontSize: 24, lineHeight: 28, fontWeight: '500' },
   songControls: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   order: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  position: { minWidth: 56, textAlign: 'center', color: INK, fontSize: 18, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  positionTotal: { color: GREY, fontSize: 14, fontWeight: '600' },
-  description: { color: GREY, fontSize: 14, lineHeight: 22 },
-  error: { color: '#a52c35', backgroundColor: '#fff0f0', padding: 12, borderRadius: 8 },
-  tabs: { borderBottomWidth: 1, borderBottomColor: LINE },
-  tab: { padding: 16, maxWidth: 260, borderWidth: 1, borderColor: LINE, borderTopRightRadius: 14, backgroundColor: '#eef2f8', minHeight: 48 },
-  activeTab: { backgroundColor: '#dfe9ff', borderBottomColor: BLUE, borderBottomWidth: 3, zIndex: 2 },
-  tabLabel: { fontSize: 15, fontWeight: '600', color: GREY },
+  position: { minWidth: 56, textAlign: 'center', color: t.ink, fontSize: 18, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  positionTotal: { color: t.muted, fontSize: 14, fontWeight: '600' },
+  description: { color: t.muted, fontSize: 14, lineHeight: 22 },
+  error: { color: t.errorInk, backgroundColor: t.dangerSoft, padding: 12, borderRadius: 8 },
+  tabs: { borderBottomWidth: 1, borderBottomColor: t.line },
+  tab: { padding: 16, maxWidth: 260, borderWidth: 1, borderColor: t.line, borderTopRightRadius: 14, backgroundColor: t.surfaceMuted, minHeight: 48 },
+  activeTab: { backgroundColor: t.tabOn, borderBottomColor: t.accent, borderBottomWidth: 3, zIndex: 2 },
+  tabLabel: { fontSize: 15, fontWeight: '600', color: t.muted },
   picker: { paddingHorizontal: 20, paddingTop: 64, paddingBottom: 40, gap: 16 },
-  choice: { padding: 16, borderWidth: 1, borderColor: LINE, borderRadius: 10, minHeight: 48 },
+  choice: { padding: 16, borderWidth: 1, borderColor: t.line, borderRadius: 10, minHeight: 48 },
 });

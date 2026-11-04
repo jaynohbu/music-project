@@ -2,9 +2,11 @@ import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSession } from '../session';
-import { BLUE, Button, RED, errorText } from '../ui';
+import { Button, errorText } from '../ui';
+import { type Theme, useStyles, useTheme } from '../theme';
 
 export default function SignIn() {
+  const styles = useStyles(makeStyles), theme = useTheme();
   const { state, email, setEmail, retry, continueWith, changeEmail } = useSession();
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
@@ -38,7 +40,7 @@ export default function SignIn() {
         {state.name === 'email' && <>
           <Text style={styles.text}>{state.notice ?? 'Enter your email to get started.'}</Text>
           <TextInput
-            style={styles.input} value={email} onChangeText={setEmail} placeholder="Email"
+            style={styles.input} placeholderTextColor={theme.muted} value={email} onChangeText={setEmail} placeholder="Email"
             autoCapitalize="none" autoComplete="email" autoCorrect={false} keyboardType="email-address"
             textContentType="emailAddress" editable={!busy} maxLength={254}
           />
@@ -48,7 +50,7 @@ export default function SignIn() {
         {state.name === 'code' && <>
           <Text style={styles.text}>This email already has an account. Enter the six-digit code we sent to {email}.</Text>
           <TextInput
-            style={styles.input} value={code} onChangeText={setCode} placeholder="Six-digit code"
+            style={styles.input} placeholderTextColor={theme.muted} value={code} onChangeText={setCode} placeholder="Six-digit code"
             keyboardType="number-pad" autoComplete="one-time-code" textContentType="oneTimeCode"
             editable={!busy} maxLength={6}
           />
@@ -63,11 +65,11 @@ export default function SignIn() {
   );
 }
 
-const styles = StyleSheet.create({
-  page: { flex: 1, backgroundColor: '#fff' },
+const makeStyles = (t: Theme) => StyleSheet.create({
+  page: { flex: 1 },
   form: { flex: 1, justifyContent: 'center', padding: 24, gap: 14 },
-  brand: { fontSize: 32, fontWeight: '700', color: BLUE },
-  text: { fontSize: 16, color: '#333' },
-  input: { borderWidth: 1, borderColor: '#bbb', borderRadius: 8, padding: 14, fontSize: 16 },
-  error: { color: RED, fontSize: 14 },
+  brand: { fontSize: 32, fontWeight: '700', color: t.accent },
+  text: { fontSize: 16, color: t.ink },
+  input: { borderWidth: 1, borderColor: t.line, borderRadius: 8, padding: 14, fontSize: 16, color: t.ink, backgroundColor: t.input },
+  error: { color: t.danger, fontSize: 14 },
 });

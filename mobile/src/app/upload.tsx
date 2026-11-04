@@ -4,7 +4,8 @@ import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
 import { MAX_UPLOAD_BYTES, UPLOAD_EXTENSIONS, type Upload, createUpload, startSplit, toNumber } from '../api';
-import { BACKGROUND, BLUE, Button, GREY, INK, LINE, RED, errorText, formatBytes } from '../ui';
+import { Button, errorText, formatBytes } from '../ui';
+import { type Theme, useStyles, useTheme } from '../theme';
 
 interface Picked { file: File; name: string; bytes: number }
 
@@ -16,6 +17,7 @@ type Step =
   | { name: 'retry'; jobId: string };
 
 export default function UploadSong() {
+  const styles = useStyles(makeStyles), theme = useTheme();
   const [picked, setPicked] = useState<Picked | null>(null);
   const [title, setTitle] = useState('');
   const [step, setStep] = useState<Step>({ name: 'choose' });
@@ -92,7 +94,7 @@ export default function UploadSong() {
         label={picked ? 'Choose another file' : 'Choose a file'} onPress={() => void choose()} />}
       {picked && (
         <TextInput
-          style={styles.input} value={title} onChangeText={setTitle} placeholder="Title"
+          style={styles.input} placeholderTextColor={theme.muted} value={title} onChangeText={setTitle} placeholder="Title"
           maxLength={200} editable={step.name === 'choose'}
         />
       )}
@@ -109,12 +111,12 @@ export default function UploadSong() {
   );
 }
 
-const styles = StyleSheet.create({
-  page: { flex: 1, padding: 20, gap: 14, backgroundColor: BACKGROUND },
-  text: { fontSize: 15, color: GREY },
-  file: { fontSize: 16, color: INK },
-  input: { borderWidth: 1, borderColor: LINE, backgroundColor: 'white', color: INK, borderRadius: 8, padding: 14, fontSize: 16 },
-  error: { color: RED, fontSize: 14 },
-  progress: { height: 8, borderRadius: 4, backgroundColor: LINE, overflow: 'hidden' },
-  bar: { height: 8, backgroundColor: BLUE },
+const makeStyles = (t: Theme) => StyleSheet.create({
+  page: { flex: 1, padding: 20, gap: 14 },
+  text: { fontSize: 15, color: t.muted },
+  file: { fontSize: 16, color: t.ink },
+  input: { borderWidth: 1, borderColor: t.line, backgroundColor: t.input, color: t.ink, borderRadius: 8, padding: 14, fontSize: 16 },
+  error: { color: t.danger, fontSize: 14 },
+  progress: { height: 8, borderRadius: 4, backgroundColor: t.line, overflow: 'hidden' },
+  bar: { height: 8, backgroundColor: t.accent },
 });

@@ -26,7 +26,9 @@ function harness() {
   const code = ts.transpileModule(source, { compilerOptions: {
     module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX,
   } }).outputText;
-  const mocks = { react, 'react-native': native, 'react/jsx-runtime': { jsx: element, jsxs: element, Fragment: 'Fragment' } };
+  const palette = new Proxy({}, { get: () => '#123456' });
+  const theme = { useStyles: make => make(palette), useTheme: () => palette };
+  const mocks = { react, 'react-native': native, 'react/jsx-runtime': { jsx: element, jsxs: element, Fragment: 'Fragment' }, './theme': theme };
   const module = { exports: {} };
   new Function('require', 'module', 'exports', code)(name => mocks[name], module, module.exports);
   return {

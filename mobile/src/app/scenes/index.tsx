@@ -2,9 +2,11 @@ import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { createScene, deleteScene, listScenes, type Scene } from '../../api';
-import { BLUE, Button, ButtonRow, GREY, INK, LINE, errorText, useConfirm } from '../../ui';
+import { Button, ButtonRow, errorText, useConfirm } from '../../ui';
+import { type Theme, useStyles, useTheme } from '../../theme';
 
 export default function Scenes() {
+  const styles = useStyles(makeStyles), theme = useTheme();
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [name, setName] = useState('');
   const [error, setError] = useState('');
@@ -39,7 +41,7 @@ export default function Scenes() {
     {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
     <View style={styles.card}>
       <Text style={styles.label}>New scene name</Text>
-      <TextInput value={name} onChangeText={setName} maxLength={200} style={styles.input} accessibilityLabel="New scene name" />
+      <TextInput value={name} onChangeText={setName} maxLength={200} style={styles.input} placeholderTextColor={theme.muted} accessibilityLabel="New scene name" />
       <Button label="Create scene" disabled={!name.trim() || busy} onPress={() => void create()} />
     </View>
     {loading && <Text>Loading scenes…</Text>}
@@ -55,14 +57,14 @@ export default function Scenes() {
     <Button kind="plain" label="Refresh" disabled={busy} onPress={() => void load()} />
   </ScrollView>;
 }
-const styles = StyleSheet.create({
+const makeStyles = (t: Theme) => StyleSheet.create({
   page: { padding: 16, gap: 14 },
-  eyebrow: { fontSize: 12, letterSpacing: 1.5, color: BLUE, fontWeight: '700' },
-  heading: { fontSize: 30, fontWeight: '700', color: INK },
-  description: { fontSize: 14, lineHeight: 21, color: GREY },
-  card: { backgroundColor: 'white', padding: 18, borderWidth: 1, borderColor: LINE, borderRadius: 14, gap: 12 },
-  input: { borderColor: LINE, borderWidth: 1, borderRadius: 9, padding: 12, fontSize: 16, color: INK, backgroundColor: 'white' },
-  label: { color: INK, fontWeight: '600', fontSize: 14 },
-  title: { color: INK, fontWeight: '700', fontSize: 19 },
-  error: { color: '#a52c35', backgroundColor: '#fff0f0', padding: 12, borderRadius: 8 },
+  eyebrow: { fontSize: 12, letterSpacing: 1.5, color: t.accent, fontWeight: '700' },
+  heading: { fontSize: 30, fontWeight: '700', color: t.ink },
+  description: { fontSize: 14, lineHeight: 21, color: t.muted },
+  card: { backgroundColor: t.surface, padding: 18, borderWidth: 1, borderColor: t.line, borderRadius: 14, gap: 12 },
+  input: { borderColor: t.line, borderWidth: 1, borderRadius: 9, padding: 12, fontSize: 16, color: t.ink, backgroundColor: t.input },
+  label: { color: t.ink, fontWeight: '600', fontSize: 14 },
+  title: { color: t.ink, fontWeight: '700', fontSize: 19 },
+  error: { color: t.errorInk, backgroundColor: t.dangerSoft, padding: 12, borderRadius: 8 },
 });

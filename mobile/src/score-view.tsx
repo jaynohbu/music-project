@@ -9,28 +9,32 @@ import {
   drumScore, editedLines, firstChange, gapAfter, lineText, lyricIndex, notePieces, positionAt, reachedIndex, scoreRests,
   type LyricRow, type NotePiece, type ScoreRest,
 } from './score';
-import { BLUE, Button, ButtonRow, GREY, INK, LINE, formatTime } from './ui';
+import { Button, ButtonRow, formatTime } from './ui';
+import { type Theme, useStyles, useTheme } from './theme';
 
 // Matches the mixer's 100ms position timer, so the strips glide between updates.
 const GLIDE_MS = 100;
-const STRIP = '#f1f4f9';
-const NOTE = '#2c3a4e';
 const glide = (value: Animated.Value, to: number) =>
   Animated.timing(value, { toValue: to, duration: GLIDE_MS, easing: Easing.linear, useNativeDriver: true }).start();
 
-const Fades = () => <>
-  <View pointerEvents="none" style={[styles.fade, { left: 0, backgroundImage: `linear-gradient(90deg, ${STRIP}, ${STRIP}00)` }]} />
-  <View pointerEvents="none" style={[styles.fade, { right: 0, backgroundImage: `linear-gradient(270deg, ${STRIP}, ${STRIP}00)` }]} />
-</>;
+function Fades() {
+  const styles = useStyles(makeStyles), { strip } = useTheme();
+  return <>
+    <View pointerEvents="none" style={[styles.fade, { left: 0, backgroundImage: `linear-gradient(90deg, ${strip}, ${strip}00)` }]} />
+    <View pointerEvents="none" style={[styles.fade, { right: 0, backgroundImage: `linear-gradient(270deg, ${strip}, ${strip}00)` }]} />
+  </>;
+}
 
 // Only the text and highlight redraw a word; its layout callback writes by stable index.
 const Word = memo(function Word({ text, state, onCenter }: { text: string; state: 'active' | 'near' | ''; onCenter: (x: number) => void }) {
+  const styles = useStyles(makeStyles);
   return <Text onLayout={event => onCenter(event.nativeEvent.layout.x + event.nativeEvent.layout.width / 2)}
     style={[styles.word, state === 'near' && styles.wordNear, state === 'active' && styles.wordActive]}>{text}</Text>;
 }, (before, after) => before.text === after.text && before.state === after.state);
 
 // The words flow past, and the one being sung glides into the middle.
 export function LyricsStrip({ lines, time }: { lines: LyricLine[]; time: number }) {
+  const styles = useStyles(makeStyles);
   const words = useMemo(() => lines.flatMap(line => line.words), [lines]);
   const [width, setWidth] = useState(0);
   const [centers, setCenters] = useState<number[]>([]);
@@ -129,7 +133,7 @@ function layout(part: HarmonyPart, stem: string, grid: HarmonyGrid): Score {
 const cross = (x: number, y: number) => `M${x - 4} ${y - 4} L${x + 4} ${y + 4} M${x - 4} ${y + 4} L${x + 4} ${y - 4}`;
 
 function RestMark({ rest }: { rest: ScoreRest }) {
-  const y = MIDDLE_LINE_Y, ink = '#4c5c72';
+  const y = MIDDLE_LINE_Y, ink = useTheme().scoreInk;
   if (rest.units === 16) return <Rect x={rest.x + 6} y={y - 8} width={12} height={4} fill={ink} />;
   if (rest.units === 8) return <Rect x={rest.x + 6} y={y - 4} width={12} height={4} fill={ink} />;
   const line = { fill: 'none', stroke: ink, strokeWidth: 1.7 };
@@ -176,21 +180,23 @@ function StrokeMark({ stroke, color }: { stroke: Score['strokes'][number]; color
 const Chunk = memo(function Chunk({ score, chunk, activeChord, activeNote }: {
   score: Score; chunk: number; activeChord: number; activeNote: number;
 }) {
+  const theme = useTheme();
   const inside = (x: number) => chunkOf(x) === chunk;
   const left = chunk * CHUNK - MARGIN, width = CHUNK + 2 * MARGIN;
   return <Svg width={width} height={HEIGHT} viewBox={`${left} 0 ${width} ${HEIGHT}`} style={{ position: 'absolute', left, top: 0 }}>
-    {score.bars.filter(inside).map(x => <Line key={x} x1={x} x2={x} y1={STAFF_LINES[4]} y2={STAFF_LINES[0]} stroke="#8a99ad" strokeWidth={1} />)}
+    {score.bars.filter(inside).map(x => <Line key={x} x1={x} x2={x} y1={STAFF_LINES[4]} y2={STAFF_LINES[0]} stroke={theme.staff} strokeWidth={1} />)}
     {score.chords.map((chord, index) => inside(chord.x) && <SvgText key={index} x={chord.x} y={18} textAnchor="middle" fontWeight="700"
-      fontSize={index === activeChord ? 16 : 14} fill={index === activeChord ? BLUE : '#42536b'}>{chord.name}</SvgText>)}
+      fontSize={index === activeChord ? 16 : 14} fill={index === activeChord ? theme.accent : theme.scoreInk}>{chord.name}</SvgText>)}
     {score.rests.map((rest, index) => inside(rest.x) && <RestMark key={index} rest={rest} />)}
-    {score.beams.map((beam, index) => inside(beam.x) && <Rect key={index} x={beam.x} y={beam.y} width={beam.width} height={BEAM_HEIGHT} fill={NOTE} />)}
-    {score.strokes.map((stroke, index) => inside(stroke.x) && <StrokeMark key={stroke.unit} stroke={stroke} color={index === activeNote ? BLUE : NOTE} />)}
-    {score.notes.map((pieces, index) => inside(pieces[0].x) && <NoteMark key={index} pieces={pieces} color={index === activeNote ? BLUE : NOTE} />)}
+    {score.beams.map((beam, index) => inside(beam.x) && <Rect key={index} x={beam.x} y={beam.y} width={beam.width} height={BEAM_HEIGHT} fill={theme.note} />)}
+    {score.strokes.map((stroke, index) => inside(stroke.x) && <StrokeMark key={stroke.unit} stroke={stroke} color={index === activeNote ? theme.accent : theme.note} />)}
+    {score.notes.map((pieces, index) => inside(pieces[0].x) && <NoteMark key={index} pieces={pieces} color={index === activeNote ? theme.accent : theme.note} />)}
   </Svg>;
 });
 
 // A staff that scrolls under a fixed "now" line, the same as the website's score strip.
 export function HarmonyStrip({ part, stem, grid, time }: { part: HarmonyPart; stem: string; grid: HarmonyGrid; time: number }) {
+  const styles = useStyles(makeStyles);
   const score = useMemo(() => layout(part, stem, grid), [part, stem, grid]);
   const [width, setWidth] = useState(0);
   const [offset] = useState(() => new Animated.Value(0));
@@ -228,6 +234,7 @@ export function HarmonyStrip({ part, stem, grid, time }: { part: HarmonyPart; st
 export function LyricsEditor({ lines, duration, onSave, onClose }: {
   lines: LyricLine[]; duration: number; onSave: (lines: LyricLine[]) => Promise<void>; onClose: () => void;
 }) {
+  const styles = useStyles(makeStyles);
   const nextId = useRef(lines.length);
   const [rows, setRows] = useState<LyricRow[]>(() => lines.map((line, id) => ({ id, start: line.start, end: line.end, text: lineText(line), words: line.words })));
   const [saving, setSaving] = useState(false);
@@ -284,40 +291,40 @@ export function LyricsEditor({ lines, duration, onSave, onClose }: {
   </Modal>;
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (t: Theme) => StyleSheet.create({
   fade: { position: 'absolute', top: 0, bottom: 0, width: '12%' },
-  lyrics: { overflow: 'hidden', height: 36, marginTop: 10, marginHorizontal: 14, borderRadius: 6, backgroundColor: STRIP },
+  lyrics: { overflow: 'hidden', height: 36, marginTop: 10, marginHorizontal: 14, borderRadius: 6, backgroundColor: t.strip },
   // Wide enough for any song, so the words are never wrapped to the strip's width.
   lyricsFlow: { position: 'absolute', left: 0, top: 6, width: 200000, flexDirection: 'row' },
   lyricsLine: { flexDirection: 'row', gap: 7, marginRight: 34 },
-  word: { color: '#697b92', fontSize: 16, lineHeight: 24 },
-  wordNear: { color: '#5f7fd6' },
-  wordActive: { color: '#2447b8', fontWeight: '700' },
-  harmony: { height: HEIGHT, marginTop: 10, marginHorizontal: 14, borderRadius: 6, backgroundColor: STRIP, overflow: 'hidden' },
+  word: { color: t.wordDim, fontSize: 16, lineHeight: 24 },
+  wordNear: { color: t.wordNear },
+  wordActive: { color: t.wordActive, fontWeight: '700' },
+  harmony: { height: HEIGHT, marginTop: 10, marginHorizontal: 14, borderRadius: 6, backgroundColor: t.strip, overflow: 'hidden' },
   chordsOnly: { height: 30 },
-  staffLine: { position: 'absolute', left: 0, right: 0, height: 1, marginTop: -0.5, backgroundColor: '#8a99ad' },
+  staffLine: { position: 'absolute', left: 0, right: 0, height: 1, marginTop: -0.5, backgroundColor: t.staff },
   window: { position: 'absolute', top: 0, bottom: 0, left: 44, right: 0, overflow: 'hidden' },
   flow: { position: 'absolute', left: -44, top: 0, height: HEIGHT, width: 1 },
-  clef: { position: 'absolute', left: 6, color: '#42536b' },
+  clef: { position: 'absolute', left: 6, color: t.scoreInk },
   trebleClef: { top: 46, fontSize: 44, lineHeight: 52 },
   bassClef: { top: 40, fontSize: 34, lineHeight: 52 },
-  drumClef: { position: 'absolute', left: 12, top: 64, width: 10, height: 16, borderLeftWidth: 3, borderRightWidth: 3, borderColor: '#42536b' },
-  now: { position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, backgroundColor: BLUE, opacity: 0.45 },
-  editor: { flex: 1, backgroundColor: 'white', paddingTop: 56 },
-  editorHeader: { paddingHorizontal: 18, paddingBottom: 12, gap: 4, borderBottomWidth: 1, borderBottomColor: LINE },
-  editorTitle: { fontSize: 22, fontWeight: '700', color: INK },
-  hint: { color: GREY, fontSize: 13 },
+  drumClef: { position: 'absolute', left: 12, top: 64, width: 10, height: 16, borderLeftWidth: 3, borderRightWidth: 3, borderColor: t.scoreInk },
+  now: { position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, backgroundColor: t.accent, opacity: 0.45 },
+  editor: { flex: 1, backgroundColor: t.dialog, paddingTop: 56 },
+  editorHeader: { paddingHorizontal: 18, paddingBottom: 12, gap: 4, borderBottomWidth: 1, borderBottomColor: t.line },
+  editorTitle: { fontSize: 22, fontWeight: '700', color: t.ink },
+  hint: { color: t.muted, fontSize: 13 },
   editorLines: { padding: 18, gap: 6 },
   editorRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  time: { width: 44, color: '#697b92', fontSize: 13, fontVariant: ['tabular-nums'] },
-  input: { flex: 1, borderWidth: 1, borderColor: '#aebacb', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 8, fontSize: 16, color: INK },
+  time: { width: 44, color: t.muted, fontSize: 13, fontVariant: ['tabular-nums'] },
+  input: { flex: 1, borderWidth: 1, borderColor: t.line, backgroundColor: t.input, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 8, fontSize: 16, color: t.ink },
   add: { alignSelf: 'flex-start', minHeight: 36, minWidth: 36, paddingHorizontal: 10, justifyContent: 'center', alignItems: 'center',
-    borderRadius: 6, backgroundColor: '#eef2fb' },
-  addText: { color: BLUE, fontWeight: '700', fontSize: 14 },
-  error: { backgroundColor: '#fff0f0', color: '#a52c35', padding: 12, marginHorizontal: 18, borderRadius: 8 },
-  editorFooter: { padding: 18, paddingBottom: 34, borderTopWidth: 1, borderTopColor: LINE },
-  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: '#19253699', padding: 24, justifyContent: 'center' },
-  dialog: { backgroundColor: 'white', borderRadius: 16, padding: 24, gap: 16 },
-  dialogTitle: { fontSize: 22, fontWeight: '700', color: INK },
-  dialogMessage: { fontSize: 16, lineHeight: 24, color: GREY },
+    borderRadius: 6, backgroundColor: t.accentSoft },
+  addText: { color: t.accent, fontWeight: '700', fontSize: 14 },
+  error: { backgroundColor: t.dangerSoft, color: t.errorInk, padding: 12, marginHorizontal: 18, borderRadius: 8 },
+  editorFooter: { padding: 18, paddingBottom: 34, borderTopWidth: 1, borderTopColor: t.line },
+  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: t.backdrop, padding: 24, justifyContent: 'center' },
+  dialog: { backgroundColor: t.dialog, borderRadius: 16, padding: 24, gap: 16 },
+  dialogTitle: { fontSize: 22, fontWeight: '700', color: t.ink },
+  dialogMessage: { fontSize: 16, lineHeight: 24, color: t.muted },
 });

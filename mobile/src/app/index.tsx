@@ -4,7 +4,8 @@ import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'rea
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { type Song, type Usage, deleteSong, getUsage, listSongs } from '../api';
 import { forgetSong } from '../cache';
-import { BACKGROUND, BLUE, Button, ButtonRow, Centered, GREY, INK, LINE, Loading, RED, errorText, formatTime, useConfirm } from '../ui';
+import { Button, ButtonRow, Centered, Loading, errorText, formatTime, useConfirm } from '../ui';
+import { type Theme, useStyles, useTheme } from '../theme';
 
 const POLL_MS = 5000;
 const WORKING = new Set(['uploading', 'queued', 'processing', 'deleting']);
@@ -14,6 +15,7 @@ const STATUS: Record<Song['status'], string> = {
 };
 
 export default function Songs() {
+  const styles = useStyles(makeStyles), theme = useTheme();
   const [songs, setSongs] = useState<Song[] | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
   const [usage, setUsage] = useState<Usage | null>(null);
@@ -83,13 +85,13 @@ export default function Songs() {
         contentContainerStyle={{ padding: 16, gap: 12 }}
         data={songs}
         keyExtractor={song => song.jobId}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => {
+        refreshControl={<RefreshControl tintColor={theme.muted} refreshing={refreshing} onRefresh={async () => {
           setRefreshing(true);
           await load();
           setRefreshing(false);
         }} />}
         ListHeaderComponent={<View style={{ gap: 8, paddingBottom: 12 }}>
-          <Text style={{ fontSize: 30, fontWeight: '700', color: INK }}>Music</Text>
+          <Text style={{ fontSize: 30, fontWeight: '700', color: theme.ink }}>Music</Text>
           <Text style={styles.detail}>Your split songs. Open a mixer, or arrange songs in Scenes.</Text>
           {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
         </View>}
@@ -135,18 +137,18 @@ export default function Songs() {
   );
 }
 
-const styles = StyleSheet.create({
-  page: { flex: 1, backgroundColor: BACKGROUND },
-  headerLink: { color: BLUE, fontSize: 16 },
+const makeStyles = (t: Theme) => StyleSheet.create({
+  page: { flex: 1 },
+  headerLink: { color: t.accent, fontSize: 16 },
   row: {
-    padding: 18, backgroundColor: 'white', borderRadius: 14,
-    borderWidth: 1, borderColor: LINE, gap: 14,
+    padding: 18, backgroundColor: t.surface, borderRadius: 14,
+    borderWidth: 1, borderColor: t.line, gap: 14,
   },
   rowText: { flex: 1, gap: 3 },
-  title: { fontSize: 19, fontWeight: '600', color: INK },
-  detail: { fontSize: 13, color: GREY },
-  error: { fontSize: 13, color: RED },
+  title: { fontSize: 19, fontWeight: '600', color: t.ink },
+  detail: { fontSize: 13, color: t.muted },
+  error: { fontSize: 13, color: t.danger },
   notice: { padding: 16 },
-  empty: { padding: 24, fontSize: 15, color: GREY, textAlign: 'center' },
-  footer: { padding: 16, gap: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: LINE },
+  empty: { padding: 24, fontSize: 15, color: t.muted, textAlign: 'center' },
+  footer: { padding: 16, gap: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.line },
 });
