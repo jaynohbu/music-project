@@ -6,7 +6,8 @@ import { AnalyserNode } from 'react-native-audio-api';
 import { STEM_NAMES, type StemName } from '../api';
 import { EXPLICIT_STEREO, stereoGain } from '../effects';
 import { AppHeader, type MainRoute } from '../app-header';
-import { MixerControls } from '../mixer-view';
+import { MixerControls, type StemPeaks } from '../mixer-view';
+import { decodePeaks } from '../waveform';
 import { StemScrollView } from '../stem-scroll';
 import { ScorePreview } from './score-preview';
 import { Mixer } from '../player';
@@ -63,6 +64,7 @@ async function probeStages(mixer: Mixer, log: (message: string) => void, only?: 
 export default function MixerDiagnostic() {
   const [messages, setMessages] = useState<string[]>([]);
   const [player, setPlayer] = useState<Mixer | null>(null);
+  const [peaks, setPeaks] = useState<StemPeaks>({});
   const [route, setRoute] = useState<MainRoute>('/');
   useEffect(() => {
     let mixer: Mixer | undefined;
@@ -118,6 +120,12 @@ export default function MixerDiagnostic() {
         await new Promise(resolve => setTimeout(resolve, 1500));
         await probeStages(mixer, log, ['master']);
         setPlayer(mixer);
+        const began = Date.now();
+        for (const name of STEM_NAMES) {
+          const result = await decodePeaks(controlPaths[name], mixer.duration);
+          setPeaks(current => ({ ...current, [name]: { original: result } }));
+        }
+        log(`Waveforms decoded in ${Date.now() - began} ms`);
       })().catch(failure => log(`FAILED: ${failure instanceof Error ? failure.stack : String(failure)}`));
     }, 1000);
     return () => { clearTimeout(timer); if (mixer) void mixer.close().catch(error => console.warn('Diagnostic cleanup failed', error)); };
@@ -127,7 +135,7 @@ export default function MixerDiagnostic() {
     <StemScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
       <ScorePreview />
       {messages.slice(0, 6).map((message, index) => <Text key={index} selectable>{message}</Text>)}
-      {player && <MixerControls mixer={player} title="Mixer controls test" />}
+      {player && <MixerControls mixer={player} peaks={peaks} title="Mixer controls test" />}
     </StemScrollView>
   </View></ConfirmationProvider></SafeAreaProvider>;
 }

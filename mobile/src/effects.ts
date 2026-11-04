@@ -94,14 +94,43 @@ export function createEffects(context: AudioContext) {
   const convolver = new ConvolverNode(context, EXPLICIT_STEREO);
   convolver.buffer = impulse(context);
   input.connect(dry); dry.connect(output);
-  input.connect(preGain); preGain.connect(compressor); compressor.connect(compressed);
+  // The compressor worklet and the convolver are linked in only while they have work to do
+  // (see route): six JS worklets and six convolvers on every 128-frame block overran the
+  // audio thread, and a late worklet block is zeroed natively, which is heard as static.
+  input.connect(preGain); preGain.connect(compressed);
   compressed.connect(distortionDry); distortionDry.connect(distortionOut);
   compressed.connect(distortion); distortion.connect(distortionWet); distortionWet.connect(distortionOut);
   distortionOut.connect(bass); bass.connect(mid); mid.connect(treble); treble.connect(pan);
   pan.connect(wet); wet.connect(output);
-  treble.connect(send); send.connect(convolver); convolver.connect(reverbWet); reverbWet.connect(pan);
-  return { input, output, compression, envelope, preGain, bass, mid, treble, pan,
+  treble.connect(send); reverbWet.connect(pan);
+  const links = { compressing: false, reverb: false, reverbOff: undefined as ReturnType<typeof setTimeout> | undefined };
+  return { input, output, compression, envelope, preGain, bass, mid, treble, pan, links,
     dry, wet, compressor, compressed, distortion, distortionDry, distortionWet, distortionOut, send, convolver, reverbWet };
+}
+
+// Reverb is unlinked a little after its send closes, so the faded tail is not cut off.
+const REVERB_RELEASE_MS = 250;
+function route(nodes: EffectNodes, compressing: boolean, reverb: boolean) {
+  const { links } = nodes;
+  if (compressing !== links.compressing) {
+    links.compressing = compressing;
+    if (compressing) {
+      nodes.preGain.disconnect(nodes.compressed);
+      nodes.preGain.connect(nodes.compressor); nodes.compressor.connect(nodes.compressed);
+    } else {
+      nodes.preGain.disconnect(nodes.compressor); nodes.compressor.disconnect(nodes.compressed);
+      nodes.preGain.connect(nodes.compressed);
+    }
+  }
+  if (reverb) {
+    clearTimeout(links.reverbOff); links.reverbOff = undefined;
+    if (!links.reverb) { links.reverb = true; nodes.send.connect(nodes.convolver); nodes.convolver.connect(nodes.reverbWet); }
+  } else if (links.reverb && links.reverbOff === undefined) {
+    links.reverbOff = setTimeout(() => {
+      links.reverbOff = undefined; links.reverb = false;
+      nodes.send.disconnect(nodes.convolver); nodes.convolver.disconnect(nodes.reverbWet);
+    }, REVERB_RELEASE_MS);
+  }
 }
 export type EffectNodes = ReturnType<typeof createEffects>;
 
@@ -116,4 +145,5 @@ export function applyEffects(context: AudioContext, nodes: EffectNodes, settings
   smooth(nodes.dry.gain, bypass ? 1 : 0); smooth(nodes.wet.gain, bypass ? 0 : 1);
   smooth(nodes.send.gain, bypass ? 0 : settings.reverb / 100);
   smooth(nodes.reverbWet.gain, bypass ? 0 : settings.reverb / 100 * .5);
+  route(nodes, !bypass && settings.compression > 0, !bypass && settings.reverb > 0);
 }

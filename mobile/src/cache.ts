@@ -213,6 +213,9 @@ async function downloadSong(song: Song, onProgress: (fraction: number) => void):
 }
 
 // Absolute paths in the form the audio engine reads.
+// A file stored alongside a cached song, deleted with it.
+export const songFile = (jobId: string, name: string) => new File(songDirectory(jobId), name);
+
 export function stemPaths(jobId: string, files: Record<StemName, string>): Record<StemName, string>;
 export function stemPaths(jobId: string, files: Partial<Record<StemName, string>>): Partial<Record<StemName, string>>;
 export function stemPaths(jobId: string, files: Partial<Record<StemName, string>>) {

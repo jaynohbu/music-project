@@ -39,9 +39,9 @@ function createDrag(handlers: DragHandlers) {
   return { handlersRef: latest, responder };
 }
 
-const MARKER_WIDTH = 44, EDITOR_PADDING = 14;
-export function Timeline({ label, duration, start, end, position, disabled, onSection, onSeek, onReset }: {
-  label: string; duration: number; start: number; end: number; position: number; disabled?: boolean;
+const MARKER_WIDTH = 44, EDITOR_PADDING = 14, RAIL = 28, WAVE = 44, HANDLE = 32;
+export function Timeline({ label, duration, start, end, position, peaks, disabled, onSection, onSeek, onReset }: {
+  label: string; duration: number; start: number; end: number; position: number; peaks?: number[]; disabled?: boolean;
   onSection: (start: number, end: number) => void; onSeek: (time: number) => void; onReset: () => void;
 }) {
   const [width, setWidth] = useState(0);
@@ -105,11 +105,18 @@ export function Timeline({ label, duration, start, end, position, disabled, onSe
     <View style={styles.wave} {...waveDrag.panHandlers} accessibilityLabel={`${label} timeline; drag to scrub all stems`}>
       <View pointerEvents="none" style={StyleSheet.absoluteFill}>
         {ticks.map(tick => <View key={tick} style={[styles.tick, { left: `${tick * 100}%` }]} />)}
-        <View style={styles.centerLine} />
+        {peaks?.length ? <Svg width="100%" height="100%" viewBox={`0 0 ${peaks.length * 6} ${WAVE}`} preserveAspectRatio="none">
+          {peaks.map((peak, index) => {
+            const height = Math.max(2, peak * (WAVE - 6));
+            const played = duration > 0 && (index + .5) / peaks.length * duration <= shown;
+            return <Rect key={index} x={index * 6 + 1} y={(WAVE - height) / 2} width={4} height={height} rx={1}
+              fill={played ? '#3459c9' : '#8fa3d4'} />;
+          })}
+        </Svg> : <View style={styles.centerLine} />}
         <View style={[styles.highlight, { left: toX(start), width: Math.max(0, toX(end) - toX(start)) }]} />
         <View style={[styles.sectionLine, { left: toX(start) - 1 }]} />
         <View style={[styles.sectionLine, { left: toX(end) - 1 }]} />
-        <View style={[styles.playedBar, { left: toX(start), width: Math.max(0, toX(shown) - toX(start)) }]} />
+        {!peaks?.length && <View style={[styles.playedBar, { left: toX(start), width: Math.max(0, toX(shown) - toX(start)) }]} />}
         <View style={[styles.playhead, { left: toX(shown) - 1 }]} />
       </View>
     </View>
@@ -247,20 +254,20 @@ const styles = StyleSheet.create({
     shadowColor: '#5d8dff', shadowOpacity: .9, shadowRadius: 5, shadowOffset: { width: 0, height: 0 } },
   iconPrimary: { backgroundColor: '#3459c9', borderColor: '#2747a8' },
   editor: { paddingHorizontal: EDITOR_PADDING, paddingTop: 4 },
-  rail: { height: 38, position: 'relative' },
-  marker: { position: 'absolute', top: 0, width: MARKER_WIDTH, height: 38, alignItems: 'center', justifyContent: 'flex-end', zIndex: 2 },
-  markerLetter: { fontSize: 12, fontWeight: '800', lineHeight: 14 },
-  arrow: { width: 0, height: 0, borderLeftWidth: 10, borderRightWidth: 10, borderTopWidth: 16, borderLeftColor: 'transparent', borderRightColor: 'transparent' },
-  wave: { height: 64, backgroundColor: '#f3f6fd', borderRadius: 4, borderWidth: 1, borderColor: '#d7deeb', overflow: 'hidden' },
+  rail: { height: RAIL, position: 'relative' },
+  marker: { position: 'absolute', top: 0, width: MARKER_WIDTH, height: RAIL, alignItems: 'center', justifyContent: 'flex-end', zIndex: 2 },
+  markerLetter: { fontSize: 11, fontWeight: '800', lineHeight: 13 },
+  arrow: { width: 0, height: 0, borderLeftWidth: 8, borderRightWidth: 8, borderTopWidth: 13, borderLeftColor: 'transparent', borderRightColor: 'transparent' },
+  wave: { height: WAVE, backgroundColor: '#f3f6fd', borderRadius: 4, borderWidth: 1, borderColor: '#d7deeb', overflow: 'hidden' },
   tick: { position: 'absolute', top: 0, bottom: 0, width: 1, backgroundColor: '#dfe5f1' },
-  centerLine: { position: 'absolute', left: 0, right: 0, top: 31, height: 2, backgroundColor: '#b9c6e4' },
-  highlight: { position: 'absolute', top: 0, bottom: 0, backgroundColor: '#3459c933' },
+  centerLine: { position: 'absolute', left: 0, right: 0, top: WAVE / 2 - 1, height: 2, backgroundColor: '#b9c6e4' },
+  highlight: { position: 'absolute', top: 0, bottom: 0, backgroundColor: '#3459c922' },
   sectionLine: { position: 'absolute', top: 0, bottom: 0, width: 2, backgroundColor: START },
-  playedBar: { position: 'absolute', top: 29, height: 6, backgroundColor: '#3459c9', borderRadius: 3 },
+  playedBar: { position: 'absolute', top: WAVE / 2 - 3, height: 6, backgroundColor: '#3459c9', borderRadius: 3 },
   playhead: { position: 'absolute', top: 0, bottom: 0, width: 2, backgroundColor: PLAYHEAD },
-  playheadHandle: { position: 'absolute', top: 38 + 64 - 14, width: 44, height: 44, alignItems: 'center', zIndex: 3 },
+  playheadHandle: { position: 'absolute', top: RAIL + WAVE - 14, width: 44, height: HANDLE, alignItems: 'center', zIndex: 3 },
   grip: { width: 12, height: 12, backgroundColor: PLAYHEAD, borderRadius: 2, borderWidth: 2, borderColor: 'white', marginTop: 8 },
-  times: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 26, gap: 8 },
+  times: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: HANDLE - 14 + 4, gap: 8 },
   timeStart: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   timeText: { fontSize: 12, fontWeight: '700', fontVariant: ['tabular-nums'] },
   resetButton: { paddingHorizontal: 10, minHeight: 32, justifyContent: 'center', borderRadius: 6, borderWidth: 1, borderColor: '#a9b5c5', backgroundColor: 'white' },

@@ -408,6 +408,7 @@ export class Mixer {
       this.playing = false;
       for (const subscription of this.subscriptions) subscription.remove();
       for (const source of this.sources) source.dispose();
+      for (const name of STEM_NAMES) clearTimeout(this.stems[name].effects.links.reverbOff);
       this.listeners.clear(); this.endedListeners.clear();
       await notification(() => PlaybackNotificationManager.hide()).catch(error => console.warn('Could not hide media controls', error));
       await this.context.close();

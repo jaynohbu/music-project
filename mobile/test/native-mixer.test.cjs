@@ -26,7 +26,7 @@ function fixture() {
       if (target.isConvolver && !target.buffer) throw new Error('Native convolver connected without an initialized impulse buffer');
       this.connections.push(target);
     }
-    disconnect() { this.connections = []; }
+    disconnect(target) { this.connections = target ? this.connections.filter(node => node !== target) : []; }
   }
   class Context {
     state = 'suspended'; currentTime = 0; sampleRate = 44100;
@@ -140,6 +140,7 @@ test('all nine effects have web ranges, real routing and smoothed controls', () 
 test('every mixing node is explicit stereo so native fan-out cannot silence a stem', async () => {
   const f = fixture(), { createEffects } = f.load('effects');
   const context = new f.Context(), nodes = createEffects(context);
+  f.load('effects').applyEffects(context, nodes, { ...f.load('effects').defaults(), compression: 50 }, false);
   for (const node of context.nodes) {
     if (node.process) {
       assert.deepEqual(node.connections, [nodes.compressed], 'The worklet must feed exactly one explicit node');
@@ -152,6 +153,27 @@ test('every mixing node is explicit stereo so native fan-out cannot silence a st
   await f.load('player').Mixer.create(f.paths, 'Explicit');
   const mixer = f.contexts.at(-1);
   assert.ok(mixer.nodes.every(node => node.process || node.options?.channelCountMode === 'explicit'));
+});
+
+test('idle compressor worklet and reverb convolver stay out of the audio graph', async () => {
+  const f = fixture(), { createEffects, applyEffects, defaults } = f.load('effects');
+  const context = new f.Context(), nodes = createEffects(context);
+  const linked = () => ({
+    compressor: nodes.preGain.connections.includes(nodes.compressor) && nodes.compressor.connections.includes(nodes.compressed),
+    direct: nodes.preGain.connections.includes(nodes.compressed),
+    reverb: nodes.send.connections.includes(nodes.convolver) && nodes.convolver.connections.includes(nodes.reverbWet),
+  });
+  assert.deepEqual(linked(), { compressor: false, direct: true, reverb: false }, 'Defaults must not run the worklet or convolver');
+  applyEffects(context, nodes, { ...defaults(), compression: 40, reverb: 30 }, false);
+  assert.deepEqual(linked(), { compressor: true, direct: false, reverb: true });
+  applyEffects(context, nodes, { ...defaults(), compression: 40, reverb: 30 }, true);
+  assert.equal(linked().compressor, false, 'Bypass unlinks the compressor');
+  assert.equal(linked().reverb, true, 'The reverb tail fades before it is unlinked');
+  applyEffects(context, nodes, { ...defaults(), reverb: 30 }, false);
+  assert.equal(linked().reverb, true, 'Turning reverb back on cancels the pending unlink');
+  applyEffects(context, nodes, defaults(), false);
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.deepEqual(linked(), { compressor: false, direct: true, reverb: false });
 });
 
 test('lock-screen control calls never overlap in the native registry', async () => {

@@ -8,6 +8,7 @@ import { Mixer, defaultChannel } from './player';
 import { ChannelStrip, IconButton, LampSwitch, METAL, MasterFader, Timeline } from './mixer-console';
 import { useStemScroll } from './stem-scroll';
 import { focusedStem } from './stem-focus';
+import { stemPeaks } from './waveform';
 import { BLUE, Button, Centered, GREY, INK, LINE, errorText, useConfirm } from './ui';
 
 import { snapshot, restore } from './mixer-settings';
@@ -20,6 +21,7 @@ interface MixerProps {
   onSettings?: (settings: SceneSettings) => void; onEnded?: () => void;
   onReady?: (mixer: Mixer) => void; onSong?: (song: Song) => void; onMixer?: (mixer: Mixer | null) => void;
 }
+export type StemPeaks = Partial<Record<StemName, { original?: number[]; cleaned?: number[] }>>;
 export function MixerView(props: MixerProps) {
   const focused = useIsFocused();
   return focused ? <MountedMixer {...props} /> : null;
@@ -30,6 +32,7 @@ function MountedMixer({ jobId, title, entry, onSettings, onEnded, onReady, onSon
   const [fraction, setFraction] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
+  const [peaks, setPeaks] = useState<StemPeaks>({});
   const callbacks = useRef({ onSettings, onEnded, onReady, onSong, onMixer, title });
   const initial = useRef(entry?.settings);
   useLayoutEffect(() => {
@@ -59,6 +62,15 @@ function MountedMixer({ jobId, title, entry, onSettings, onEnded, onReady, onSon
       });
       unend = player.onEnded(() => callbacks.current.onEnded?.());
       setMixer(player); callbacks.current.onMixer?.(player); callbacks.current.onReady?.(player);
+      const duration = player.duration;
+      for (const name of STEM_NAMES) {
+        for (const [version, fileName] of [['original', files.original[name]], ['cleaned', files.cleaned[name]]] as const) {
+          if (!fileName) continue;
+          stemPeaks(jobId, fileName, duration, () => cancelled).then(result => {
+            if (result && !cancelled) setPeaks(current => ({ ...current, [name]: { ...current[name], [version]: result } }));
+          }).catch(failure => console.warn('Waveform could not be drawn', name, failure));
+        }
+      }
     })().catch(failure => {
       if (!cancelled) setError(errorText(failure));
       if (player) void player.close().catch(failure => console.warn('Audio cleanup failed', failure));
@@ -72,13 +84,13 @@ function MountedMixer({ jobId, title, entry, onSettings, onEnded, onReady, onSon
   }, [jobId, attempt]);
   if (error) return <View style={styles.card}>
     <Text accessibilityRole="alert" style={styles.error}>{error}</Text>
-    <Button label="Retry loading audio" onPress={() => { setMixer(null); setFraction(null); setError(''); setAttempt(value => value + 1); }} />
+    <Button label="Retry loading audio" onPress={() => { setMixer(null); setFraction(null); setPeaks({}); setError(''); setAttempt(value => value + 1); }} />
   </View>;
   if (!mixer) return <Centered><Text style={styles.detail}>{fraction === null ? 'Loading song…' : `Downloading stems ${Math.round(fraction * 100)}%`}</Text></Centered>;
-  return <MixerControls mixer={mixer} song={song} title={title || song?.title || 'Untitled song'} />;
+  return <MixerControls mixer={mixer} song={song} peaks={peaks} title={title || song?.title || 'Untitled song'} />;
 }
 
-export function MixerControls({ mixer, title, song = null }: { mixer: Mixer; title: string; song?: Song | null }) {
+export function MixerControls({ mixer, title, song = null, peaks }: { mixer: Mixer; title: string; song?: Song | null; peaks?: StemPeaks }) {
   const [, refresh] = useReducer(count => count + 1, 0);
   const [position, setPosition] = useState(0);
   const [open, setOpen] = useState<StemName>('vocals');
@@ -172,6 +184,7 @@ export function MixerControls({ mixer, title, song = null }: { mixer: Mixer; tit
         {song && <StemTasks name={name} label={label} cleaned={channel.useCleaned} tasks={tasks} position={position}
           disabled={busy} onEditLyrics={editLyrics} />}
         <Timeline label={label} duration={mixer.duration} start={mixer.sectionStart} end={mixer.sectionEnd} position={position}
+          peaks={channel.useCleaned ? peaks?.[name]?.cleaned : peaks?.[name]?.original}
           disabled={busy} onSection={(start, end) => mixer.setSection(start, end)}
           onSeek={time => void run(() => mixer.seek(time))}
           onReset={() => mixer.setSection(0, mixer.duration)} />
