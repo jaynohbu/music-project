@@ -11,6 +11,8 @@ export interface Theme {
   header: string; tabOn: string; surface: string; surfaceMuted: string; input: string; dialog: string; backdrop: string;
   ink: string; muted: string; line: string;
   accent: string; accentSoft: string; onAccent: string;
+  // Optional gradient for filled accent controls (buttons, toggles, lit keys) and the icon colour on lit keys.
+  accentImage?: string; onConsoleAccent?: string;
   danger: string; dangerSoft: string; errorInk: string;
   // Mixer console hardware.
   metal: string; key: string; keyBorder: string; keyInk: string; consoleAccent: string; consoleInk: string; consoleMuted: string; consoleLine: string;
@@ -38,18 +40,20 @@ const simple: Theme = {
   strip: '#f1f4f9', note: '#2c3a4e', staff: '#8a99ad', scoreInk: '#42536b', wordDim: '#697b92', wordNear: '#5f7fd6', wordActive: '#2447b8',
 };
 
+const CHROME = 'linear-gradient(180deg, #f4f6f8 0%, #b9bec6 42%, #8c929b 52%, #d9dde2 100%)';
+
 const heavyMetal: Theme = {
   id: 'heavy_metal', name: 'Heavy metal', dark: true,
-  background: '#09090b', gradient: 'linear-gradient(180deg, #1a0a0a 0%, #09090b 60%, #200606 100%)', overlay: '#000000a0',
-  header: '#0a0a0ce6', tabOn: '#e0301e33', surface: '#141418dd', surfaceMuted: '#26262cdd', input: '#1c1c20', dialog: '#17171b', backdrop: '#000000b3',
-  ink: '#f2f2f2', muted: '#b0b0b8', line: '#ffffff26',
-  accent: '#e8341c', accentSoft: '#e8341c2e', onAccent: '#ffffff',
-  danger: '#ff5a4f', dangerSoft: '#ff5a4f26', errorInk: '#ff8a80',
-  metal: 'linear-gradient(180deg, #3b3e44 0%, #1e2024 45%, #34373c 55%, #151619 100%)',
-  key: 'linear-gradient(180deg, #4b4e55 0%, #24262a 100%)', keyBorder: '#62666e', keyInk: '#ececec', consoleAccent: '#ff5a2e',
+  background: '#09090b', gradient: 'linear-gradient(180deg, #1a1a1d 0%, #09090b 60%, #16161a 100%)', overlay: '#00000059',
+  header: '#0a0a0cd9', tabOn: '#ffffff1f', surface: '#14141880', surfaceMuted: '#26262c99', input: '#1c1c20cc', dialog: '#17171b', backdrop: '#000000b3',
+  ink: '#f2f2f2', muted: '#c2c4ca', line: '#ffffff2e',
+  accent: '#d3d7dd', accentSoft: '#d3d7dd24', onAccent: '#121317', accentImage: CHROME, onConsoleAccent: '#121317',
+  danger: '#ff6b5e', dangerSoft: '#ff6b5e26', errorInk: '#ff8a80',
+  metal: 'linear-gradient(180deg, #3b3e44e6 0%, #1e2024e6 45%, #34373ce6 55%, #151619e6 100%)',
+  key: 'linear-gradient(180deg, #4b4e55 0%, #24262a 100%)', keyBorder: '#70747c', keyInk: '#ececec', consoleAccent: '#d3d7dd',
   consoleInk: '#ececec', consoleMuted: '#a6a9b0', consoleLine: '#4d5057',
-  wave: '#101013', waveLine: '#26262b', waveBar: '#ff4a26', waveBarDim: '#6e3328', start: '#ff9a3c', end: '#5fd38a', playhead: '#ff2d2d',
-  strip: '#18181c', note: '#ececec', staff: '#6c6c74', scoreInk: '#c4c4cc', wordDim: '#8b8b93', wordNear: '#ff9a7a', wordActive: '#ff4422',
+  wave: '#10101380', waveLine: '#ffffff26', waveBar: '#c9ced6', waveBarDim: '#5a5e66', start: '#e8b04a', end: '#5fd38a', playhead: '#ff3b2f',
+  strip: '#18181c', note: '#ececec', staff: '#6c6c74', scoreInk: '#c4c4cc', wordDim: '#8b8b93', wordNear: '#d6dae0', wordActive: '#ffffff',
 };
 
 const pop: Theme = {

@@ -351,7 +351,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   stemTitle: { fontSize: 16, fontWeight: '700', color: t.ink },
   versions: { flexDirection: 'row', borderWidth: 1, borderColor: t.accent, borderRadius: 6, overflow: 'hidden' },
   version: { paddingHorizontal: 12, minHeight: 36, justifyContent: 'center' },
-  versionOn: { backgroundColor: t.accent },
+  versionOn: { backgroundColor: t.accent, ...(t.accentImage && { backgroundImage: t.accentImage }) },
   versionText: { fontSize: 13, fontWeight: '700', color: t.accent },
   stemError: { marginHorizontal: 14 },
   consoleHeading: { marginTop: 12, paddingHorizontal: 14, paddingVertical: 8, minHeight: 52, flexDirection: 'row', alignItems: 'center',

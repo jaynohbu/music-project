@@ -265,9 +265,9 @@ export function IconButton({ icon, accessibilityLabel, onPress, disabled, on, pr
   return <Pressable onPress={onPress} disabled={disabled} hitSlop={4}
     accessibilityRole={on === undefined ? 'button' : 'switch'} accessibilityLabel={accessibilityLabel}
     accessibilityState={on === undefined ? { disabled } : { checked: on, disabled }}
-    style={({ pressed }) => [styles.iconButton, !lit && styles.iconMetal, on && styles.iconOn, primary && styles.iconPrimary,
+    style={({ pressed }) => [styles.iconButton, !lit && styles.iconMetal, on && styles.iconOn, primary && styles.iconPrimary, lit && !!theme.accentImage && styles.iconChrome,
       pressed && { opacity: .75 }, disabled && { opacity: .45 }]}>
-    <Icon name={icon} color={lit ? 'white' : danger ? theme.danger : theme.keyInk} />
+    <Icon name={icon} color={lit ? theme.onConsoleAccent ?? 'white' : danger ? theme.danger : theme.keyInk} />
   </Pressable>;
 }
 
@@ -278,6 +278,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   iconOn: { backgroundColor: t.consoleAccent, borderColor: t.consoleAccent,
     shadowColor: t.consoleAccent, shadowOpacity: .9, shadowRadius: 5, shadowOffset: { width: 0, height: 0 } },
   iconPrimary: { backgroundColor: t.consoleAccent, borderColor: t.consoleAccent },
+  iconChrome: { backgroundImage: t.accentImage, borderColor: '#ffffffaa' },
   inlineEdit: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   inlineInput: { flex: 1, backgroundColor: t.input, borderWidth: 1, borderColor: t.line, borderRadius: 9, paddingHorizontal: 12,
     height: 44, color: t.ink, fontSize: 16 },

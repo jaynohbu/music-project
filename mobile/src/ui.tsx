@@ -83,7 +83,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   button: { borderRadius: 8, paddingVertical: 13, paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center' },
   buttonRow: { flexDirection: 'row', gap: 8 },
   buttonCell: { flex: 1 },
-  primary: { backgroundColor: t.accent },
+  primary: { backgroundColor: t.accent, ...(t.accentImage && { backgroundImage: t.accentImage, borderWidth: 1, borderColor: '#ffffff80' }) },
   plain: { backgroundColor: t.accentSoft },
   danger: { backgroundColor: t.dangerSoft },
   disabled: { opacity: 0.45 },
