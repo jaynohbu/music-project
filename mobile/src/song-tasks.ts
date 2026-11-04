@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  createHarmony, createLyrics, fetchResult, getSong, saveLyrics as sendLyrics,
-  type HarmonyGrid, type HarmonyPart, type LyricLine, type Song,
+  createHarmony, createLyrics, createRestoration, fetchResult, getSong, saveLyrics as sendLyrics,
+  type HarmonyGrid, type HarmonyPart, type LyricLine, type Song, type StemName,
 } from './api';
 import { errorText } from './ui';
 
@@ -12,7 +12,8 @@ export const CHORDS_NOTE = 'Converting to chords and melody takes time, and the 
 
 const running = (status?: string) => status === 'queued' || status === 'processing';
 export const working = (song: Song | null) => !!song && (running(song.lyrics?.status) || running(song.harmony?.status) ||
-  Object.values(song.harmony?.stems ?? {}).some(part => running(part?.status)));
+  Object.values(song.harmony?.stems ?? {}).some(part => running(part?.status)) ||
+  (song.restorations ?? []).some(item => running(item.status)));
 export const hasMusic = (part?: HarmonyPart) => !!part && (part.chords.length > 0 || part.notes.length > 0 || !!part.hits?.length);
 export const regenerateLabel = (name: string) =>
   name === 'other' ? 'Regenerate chords' : name === 'drums' ? 'Regenerate drum score' : 'Regenerate chords & melody';
@@ -28,6 +29,7 @@ export function useSongTasks(initial: Song | null) {
   const [chordsLoadError, setChordsLoadError] = useState('');
   const [startingChords, setStartingChords] = useState(false);
   const [startingParts, setStartingParts] = useState<string[]>([]);
+  const [startingClean, setStartingClean] = useState<string[]>([]);
   const [partLoadErrors, setPartLoadErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
   const alive = useRef(true);
@@ -93,6 +95,9 @@ export function useSongTasks(initial: Song | null) {
   const findingLyrics = startingLyrics || (!!song?.lyrics && song.lyrics.status !== 'failed' && !lyricsLoadError);
   const findingChords = startingChords || (!!song?.harmony && song.harmony.status !== 'failed' && !chordsLoadError);
   const regenerating = (name: string) => startingParts.includes(name) || running(song?.harmony?.stems?.[name]?.status);
+  // The same rules as the website: a stem is cleaning from the tap until its restoration fails.
+  const cleaning = (name: string) => startingClean.includes(name) ||
+    !!song?.restorations?.some(item => item.stem === name && item.status !== 'failed');
 
   const start = async (begin: () => void, end: () => void, operation: () => Promise<unknown>, what: string) => {
     begin(); setError('');
@@ -102,7 +107,14 @@ export function useSongTasks(initial: Song | null) {
   };
 
   return {
-    song, lyrics, grid, parts, error, findingLyrics, findingChords, regenerating,
+    song, lyrics, grid, parts, error, findingLyrics, findingChords, regenerating, cleaning,
+    cleanFailure: (name: string) => cleaning(name) ? undefined
+      : song?.restorations?.find(item => item.stem === name && item.status === 'failed')?.error,
+    clean(name: StemName) {
+      if (cleaning(name) || !jobId) return;
+      void start(() => setStartingClean(names => [...names, name]), () => setStartingClean(names => names.filter(item => item !== name)),
+        () => createRestoration(jobId, name), `cleaning ${name}`);
+    },
     lyricsFailure: findingLyrics || lyrics ? undefined : lyricsLoadError || song?.lyrics?.error,
     chordsFailure: findingChords || parts ? undefined : chordsLoadError || song?.harmony?.error,
     partFailure(name: string) {

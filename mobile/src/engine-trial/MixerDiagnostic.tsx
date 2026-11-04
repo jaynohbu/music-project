@@ -135,7 +135,7 @@ export default function MixerDiagnostic() {
     <StemScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
       <ScorePreview />
       {messages.slice(0, 6).map((message, index) => <Text key={index} selectable>{message}</Text>)}
-      {player && <MixerControls mixer={player} peaks={peaks} title="Mixer controls test" />}
+      {player && <MixerControls mixer={player} peaks={peaks} />}
     </StemScrollView>
   </View></ConfirmationProvider></SafeAreaProvider>;
 }

@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import { PanResponder, Pressable, StyleSheet, Text, View, type GestureResponderEvent, type PanResponderGestureState } from 'react-native';
+import { PanResponder, Pressable, StyleSheet, Text, TextInput, View, type GestureResponderEvent, type PanResponderGestureState } from 'react-native';
 import Svg, { Path, Rect } from 'react-native-svg';
 
 // Visual parity with the website mixer (web/src/styles.css: marker rail, waveform, console faders).
@@ -214,7 +214,8 @@ export function LampSwitch({ label, on, onPress, disabled, accessibilityLabel }:
   </Pressable>;
 }
 
-export type IconName = 'play' | 'pause' | 'stop' | 'mute' | 'muteAll' | 'solo' | 'loop';
+export type IconName = 'play' | 'pause' | 'stop' | 'mute' | 'muteAll' | 'solo' | 'loop'
+  | 'moveEarlier' | 'moveLater' | 'previous' | 'next' | 'remove' | 'reload' | 'reset' | 'edit' | 'add' | 'save' | 'close';
 
 function Icon({ name, color }: { name: IconName; color: string }) {
   const line = { stroke: color, strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, fill: 'none' };
@@ -230,29 +231,52 @@ function Icon({ name, color }: { name: IconName; color: string }) {
       <Rect x={3} y={14} width={5} height={7} rx={1.5} fill={color} /><Rect x={16} y={14} width={5} height={7} rx={1.5} fill={color} /></>}
     {name === 'loop' && <><Path d="M4 12V9.5A3.5 3.5 0 0 1 7.5 6H19M16 3l3 3-3 3" {...line} />
       <Path d="M20 12v2.5a3.5 3.5 0 0 1-3.5 3.5H5M8 21l-3-3 3-3" {...line} /></>}
+    {name === 'moveEarlier' && <Path d="M20 12H4M10 6l-6 6 6 6" {...line} strokeWidth={2.4} />}
+    {name === 'moveLater' && <Path d="M4 12h16M14 6l6 6-6 6" {...line} strokeWidth={2.4} />}
+    {name === 'previous' && <><Rect x={4} y={5} width={2.5} height={14} rx={1} fill={color} /><Path d="M19.5 5v14L8 12z" fill={color} /></>}
+    {name === 'next' && <><Rect x={17.5} y={5} width={2.5} height={14} rx={1} fill={color} /><Path d="M4.5 5v14L16 12z" fill={color} /></>}
+    {name === 'remove' && <Path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13M10 11v5.5M14 11v5.5" {...line} />}
+    {name === 'reload' && <Path d="M20 12a8 8 0 1 1-2.6-5.9M20 4v5h-5" {...line} />}
+    {name === 'reset' && <Path d="M4 12a8 8 0 1 0 2.6-5.9M4 4v5h5M9 12h6M12 9v6" {...line} />}
+    {name === 'edit' && <Path d="M4 20h4L19 9l-4-4L4 16zM13 7l4 4" {...line} />}
+    {name === 'add' && <Path d="M12 4.5v15M4.5 12h15" {...line} strokeWidth={2.6} />}
+    {name === 'save' && <Path d="M4.5 12.5l5 5L19.5 7" {...line} strokeWidth={2.6} />}
+    {name === 'close' && <Path d="M6 6l12 12M18 6L6 18" {...line} strokeWidth={2.4} />}
   </Svg>;
 }
 
 // A small metal key with an icon; lit blue while its switch is on, solid blue for the main action.
-export function IconButton({ icon, accessibilityLabel, onPress, disabled, on, primary }: {
-  icon: IconName; accessibilityLabel: string; onPress: () => void; disabled?: boolean; on?: boolean; primary?: boolean;
+export function IconButton({ icon, accessibilityLabel, onPress, disabled, on, primary, danger, bare }: {
+  icon: IconName; accessibilityLabel: string; onPress: () => void; disabled?: boolean; on?: boolean; primary?: boolean; danger?: boolean;
+  // Just the icon, no key: blue while on, grey otherwise.
+  bare?: boolean;
 }) {
+  if (bare) return <Pressable onPress={onPress} disabled={disabled} hitSlop={10}
+    accessibilityRole={on === undefined ? 'button' : 'switch'} accessibilityLabel={accessibilityLabel}
+    accessibilityState={on === undefined ? { disabled } : { checked: on, disabled }}
+    style={({ pressed }) => [styles.iconBare, pressed && { opacity: .5 }, disabled && { opacity: .45 }]}>
+    <Icon name={icon} color={on ? '#3459c9' : '#64748b'} />
+  </Pressable>;
   const lit = primary || on;
   return <Pressable onPress={onPress} disabled={disabled} hitSlop={4}
     accessibilityRole={on === undefined ? 'button' : 'switch'} accessibilityLabel={accessibilityLabel}
     accessibilityState={on === undefined ? { disabled } : { checked: on, disabled }}
     style={({ pressed }) => [styles.iconButton, !lit && styles.iconMetal, on && styles.iconOn, primary && styles.iconPrimary,
       pressed && { opacity: .75 }, disabled && { opacity: .45 }]}>
-    <Icon name={icon} color={lit ? 'white' : '#28384e'} />
+    <Icon name={icon} color={lit ? 'white' : danger ? '#b00020' : '#28384e'} />
   </Pressable>;
 }
 
 const styles = StyleSheet.create({
   iconButton: { width: 38, height: 38, borderRadius: 6, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#8f9db0' },
+  iconBare: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
   iconMetal: { backgroundImage: 'linear-gradient(180deg, #fbfcfe 0%, #d5dce6 100%)' },
   iconOn: { backgroundColor: '#3459c9', borderColor: '#2747a8',
     shadowColor: '#5d8dff', shadowOpacity: .9, shadowRadius: 5, shadowOffset: { width: 0, height: 0 } },
   iconPrimary: { backgroundColor: '#3459c9', borderColor: '#2747a8' },
+  inlineEdit: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  inlineInput: { flex: 1, backgroundColor: 'white', borderWidth: 1, borderColor: '#dce3ed', borderRadius: 9, paddingHorizontal: 12,
+    height: 44, color: '#192536', fontSize: 16 },
   editor: { paddingHorizontal: EDITOR_PADDING, paddingTop: 4 },
   rail: { height: RAIL, position: 'relative' },
   marker: { position: 'absolute', top: 0, width: MARKER_WIDTH, height: RAIL, alignItems: 'center', justifyContent: 'flex-end', zIndex: 2 },
@@ -291,9 +315,23 @@ const styles = StyleSheet.create({
   masterTrack: { position: 'absolute', left: 12, right: 12, height: 4, backgroundColor: '#35445a', borderRadius: 2, borderWidth: 1, borderColor: '#1d2836' },
   masterThumb: { position: 'absolute', width: 24, height: 36, borderRadius: 3, borderWidth: 1, borderColor: '#718198', backgroundImage: THUMB_SIDE,
     shadowColor: '#000', shadowOpacity: .35, shadowRadius: 2, shadowOffset: { width: 0, height: 2 } },
-  switch: { flexDirection: 'row', alignItems: 'center', gap: 7, minHeight: 44, paddingHorizontal: 10, borderRadius: 5, borderWidth: 1, borderColor: '#8f9db0',
+  switch: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, minHeight: 44, paddingHorizontal: 10, borderRadius: 5, borderWidth: 1, borderColor: '#8f9db0',
     backgroundImage: 'linear-gradient(180deg, #fbfcfe 0%, #d5dce6 100%)' },
   lamp: { width: 28, height: 18, borderRadius: 3, borderWidth: 2, borderColor: '#697b92', backgroundColor: '#8e9aab' },
   lampOn: { backgroundColor: '#a3c5ff', borderColor: '#3459c9', shadowColor: '#5d8dff', shadowOpacity: .9, shadowRadius: 5, shadowOffset: { width: 0, height: 0 } },
   switchText: { fontSize: 11, fontWeight: '800', letterSpacing: .5, color: '#28384e' },
 });
+
+// A text box with save and close keys; nothing changes until save is pressed.
+export function InlineEdit({ label, initial, placeholder, onSave, onClose }: {
+  label: string; initial: string; placeholder?: string; onSave: (value: string) => void; onClose: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  const save = () => { onSave(value); onClose(); };
+  return <View style={styles.inlineEdit}>
+    <TextInput autoFocus value={value} onChangeText={setValue} placeholder={placeholder} maxLength={200}
+      accessibilityLabel={label} returnKeyType="done" onSubmitEditing={save} style={styles.inlineInput} />
+    <IconButton primary icon="save" accessibilityLabel={`Save ${label.toLowerCase()}`} onPress={save} />
+    <IconButton icon="close" accessibilityLabel={`Close ${label.toLowerCase()} without saving`} onPress={onClose} />
+  </View>;
+}

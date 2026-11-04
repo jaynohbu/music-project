@@ -1,13 +1,14 @@
 import { Stack, useLocalSearchParams, usePreventRemove } from 'expo-router';
 import { useEffect, useReducer, useRef, useState, type ComponentRef } from 'react';
-import { AppState, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { AppState, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { randomUUID } from 'expo-crypto';
 import { getScene, listReadySongs, updateScene, type SceneEntry, type Song } from '../../api';
 import { StemScrollView } from '../../stem-scroll';
 import { MixerView } from '../../mixer-view';
+import { IconButton, InlineEdit } from '../../mixer-console';
 import type { Mixer } from '../../player';
 import { SceneStore } from '../../scene-store';
-import { BLUE, Button, GREY, INK, LINE, errorText, useConfirm } from '../../ui';
+import { BLUE, Button, ButtonRow, GREY, INK, LINE, errorText, useConfirm } from '../../ui';
 
 export default function ScenePlayer() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -23,6 +24,8 @@ function SceneEditor({ id }: { id: string }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [allowLeave, setAllowLeave] = useState(false);
   const [reload, setReload] = useState(0);
+  const [editingId, setEditingId] = useState('');
+  const [renaming, setRenaming] = useState(false);
   const mixer = useRef<Mixer | null>(null);
   const autoPlay = useRef(false);
   const tabs = useRef<ComponentRef<typeof ScrollView>>(null);
@@ -89,6 +92,14 @@ function SceneEditor({ id }: { id: string }) {
     store.update(scene => ({ ...scene, entries }));
     setActiveId(entries[Math.min(index, entries.length - 1)]?.id ?? '');
   };
+  const reloadScene = () => {
+    void (async () => {
+      if (store?.dirty && !await confirm('Reload saved scene?', 'Discard unsaved changes and stop playback?', 'Reload')) return;
+      store?.discard();
+      await mixer.current?.stop();
+      autoPlay.current = false; setError(''); setActiveId(''); setStore(null); setReload(value => value + 1);
+    })().catch(failure => setError(errorText(failure)));
+  };
   const openPicker = async () => {
     try {
       setSongs(await listReadySongs()); setSelected(new Set()); setPicker(true);
@@ -103,30 +114,21 @@ function SceneEditor({ id }: { id: string }) {
     setPicker(false);
   };
   return <StemScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
-    <Stack.Screen options={{ title: scene?.name ?? 'Scene' }} />
+    <Stack.Screen options={{ headerTitle: () => <View style={styles.headerTitle}>
+      <Text numberOfLines={1} accessibilityRole="header" style={styles.headerText}>{scene?.name || 'Scene'}</Text>
+      {scene && <IconButton bare icon="edit" accessibilityLabel="Edit scene name" on={renaming} onPress={() => setRenaming(value => !value)} />}
+    </View> }} />
     {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
     {!scene ? error ? <Button label="Retry loading scene" onPress={() => { setError(''); setReload(value => value + 1); }} />
       : <Text style={styles.description}>Loading scene…</Text> : <>
-      <Text style={styles.heading}>{scene.name}</Text>
-      <Text style={styles.label}>Scene name</Text>
-      <TextInput style={styles.input} value={scene.name} maxLength={200} accessibilityLabel="Scene name"
-        onChangeText={name => store!.update(scene => ({ ...scene, name }))} />
+      {renaming && <InlineEdit label="Scene name" initial={scene.name} onClose={() => setRenaming(false)}
+        onSave={name => { if (name.trim()) store!.update(scene => ({ ...scene, name: name.trim() })); }} />}
       <View style={styles.actions}>
-        <Text accessibilityLiveRegion="polite" style={styles.description}>{store!.status}</Text>
-        <Button label="Add songs" onPress={() => void openPicker()} />
+        <Text accessibilityLiveRegion="polite" style={[styles.description, { flex: 1 }]}>{store!.status}</Text>
+        <IconButton icon="reload" accessibilityLabel="Reload saved scene" onPress={reloadScene} />
       </View>
       {!!store!.error && <><Text accessibilityRole="alert" style={styles.error}>{store!.error}</Text>
-        <View style={styles.actions}>
-          <Button label="Retry save" onPress={() => { void store!.flush(); }} />
-          <Button kind="plain" label="Reload saved scene" onPress={() => {
-            void (async () => {
-              if (!await confirm('Reload saved scene?', 'Discard unsaved changes and stop playback?', 'Reload')) return;
-              store!.discard();
-              await mixer.current?.stop();
-              autoPlay.current = false; setError(''); setActiveId(''); setStore(null); setReload(value => value + 1);
-            })().catch(failure => setError(errorText(failure)));
-          }} />
-        </View></>}
+        <Button label="Retry save" onPress={() => { void store!.flush(); }} /></>}
       <ScrollView ref={tabs} horizontal style={styles.tabs} onLayout={event => { tabWidth.current = event.nativeEvent.layout.width; reveal(activeId); }}
         onScroll={event => { tabOffset.current = event.nativeEvent.contentOffset.x; }} scrollEventThrottle={16}>
         {scene.entries.map((item, i) => <Pressable key={item.id} style={[styles.tab, i > 0 && { marginLeft: -10 }, activeId === item.id && styles.activeTab]}
@@ -135,21 +137,32 @@ function SceneEditor({ id }: { id: string }) {
           onPress={() => void select(item.id)}>
           <Text numberOfLines={1} style={[styles.tabLabel, activeId === item.id && { color: BLUE }]}>{i + 1}. {title(item)}</Text>
         </Pressable>)}
+        <Pressable style={[styles.tab, styles.addTab, !!scene.entries.length && { marginLeft: -10 }]}
+          accessibilityRole="button" accessibilityLabel="Add songs to the scene" onPress={() => void openPicker()}>
+          <Text style={[styles.tabLabel, styles.addLabel]}>+</Text>
+        </Pressable>
       </ScrollView>
       {entry ? <>
-        <Text style={styles.label}>Scene song title (blank uses Music title)</Text>
-        <TextInput value={entry.title ?? ''} placeholder={title(entry)} style={styles.input} maxLength={200} accessibilityLabel="Scene song title"
-          onChangeText={title => store!.update(scene => ({ ...scene, entries: scene.entries.map(item =>
-            item.id === entry.id ? { ...item, title: title.trim() ? title : undefined } : item) }))} />
-        <View style={styles.actions}>
-          <Button kind="plain" label="Move earlier" disabled={index === 0} onPress={() => move(-1)} />
-          <Button kind="plain" label="Move later" disabled={index === scene.entries.length - 1} onPress={() => move(1)} />
-          <Button kind="danger" label="Remove song" onPress={() => void remove()} />
+        <View style={styles.songControls}>
+          <IconButton icon="previous" accessibilityLabel="Previous song" disabled={index <= 0}
+            onPress={() => void select(scene.entries[index - 1].id)} />
+          <View style={styles.order}>
+            <IconButton icon="moveEarlier" accessibilityLabel="Move song earlier" disabled={index === 0} onPress={() => move(-1)} />
+            <Text style={styles.position} accessibilityLabel={`Song ${index + 1} of ${scene.entries.length}`}>
+              {index + 1}<Text style={styles.positionTotal}> / {scene.entries.length}</Text>
+            </Text>
+            <IconButton icon="moveLater" accessibilityLabel="Move song later" disabled={index === scene.entries.length - 1} onPress={() => move(1)} />
+          </View>
+          <IconButton icon="next" accessibilityLabel="Next / skip song" disabled={index >= scene.entries.length - 1}
+            onPress={() => next(false)} />
+          <IconButton icon="edit" accessibilityLabel="Edit scene song title" on={editingId === entry.id}
+            onPress={() => setEditingId(current => current === entry.id ? '' : entry.id)} />
+          <IconButton danger icon="remove" accessibilityLabel="Remove song from scene" onPress={() => void remove()} />
         </View>
-        <View style={styles.actions}>
-          <Button kind="plain" label="Previous song" disabled={index <= 0} onPress={() => void select(scene.entries[index - 1].id)} />
-          <Button kind="plain" label="Next / skip song" disabled={index >= scene.entries.length - 1} onPress={() => next(false)} />
-        </View>
+        {editingId === entry.id && <InlineEdit key={entry.id} label="Scene song title" initial={entry.title ?? ''}
+          placeholder={`${title(entry)} (blank uses Music title)`} onClose={() => setEditingId('')}
+          onSave={value => store!.update(scene => ({ ...scene, entries: scene.entries.map(item =>
+            item.id === entry.id ? { ...item, title: value.trim() || undefined } : item) }))} />}
         <MixerView key={entry.id} entry={entry} jobId={entry.jobId} title={`${index + 1}. ${title(entry)}`}
           onMixer={player => { mixer.current = player; }}
           onSong={song => setSongs(current => current.some(item => item.jobId === song.jobId) ? current : [...current, song])}
@@ -169,8 +182,8 @@ function SceneEditor({ id }: { id: string }) {
           <Text style={styles.label}>{selected.has(song.jobId) ? '✓ ' : '○ '}{song.title}</Text>
         </Pressable>)}
         {!songs.length && <Text style={styles.description}>No completed songs. Upload and split one from Music first.</Text>}
-        <View style={styles.actions}><Button kind="plain" label="Cancel" onPress={() => setPicker(false)} />
-          <Button label="Add selected songs" disabled={!selected.size} onPress={add} /></View>
+        <ButtonRow><Button kind="plain" label="Cancel" onPress={() => setPicker(false)} />
+          <Button label="Add selected songs" disabled={!selected.size} onPress={add} /></ButtonRow>
       </ScrollView>
     </Modal>
   </StemScrollView>;
@@ -179,8 +192,15 @@ const styles = StyleSheet.create({
   page: { padding: 16, gap: 14 },
   heading: { color: INK, fontSize: 26, fontWeight: '700' },
   label: { color: INK, fontSize: 15, fontWeight: '600' },
-  input: { backgroundColor: 'white', borderWidth: 1, borderColor: LINE, borderRadius: 9, padding: 12, color: INK, fontSize: 16 },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
+  headerTitle: { flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: 280 },
+  headerText: { color: INK, fontSize: 17, fontWeight: '600', flexShrink: 1 },
+  addTab: { paddingVertical: 0, paddingHorizontal: 20, justifyContent: 'center' },
+  addLabel: { fontSize: 24, lineHeight: 28, fontWeight: '500' },
+  songControls: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  order: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  position: { minWidth: 56, textAlign: 'center', color: INK, fontSize: 18, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  positionTotal: { color: GREY, fontSize: 14, fontWeight: '600' },
   description: { color: GREY, fontSize: 14, lineHeight: 22 },
   error: { color: '#a52c35', backgroundColor: '#fff0f0', padding: 12, borderRadius: 8 },
   tabs: { borderBottomWidth: 1, borderBottomColor: LINE },

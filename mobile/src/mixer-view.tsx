@@ -2,14 +2,14 @@ import { useIsFocused } from 'expo-router';
 import { useEffect, useLayoutEffect, useReducer, useRef, useState, type ComponentRef } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { HARMONY_STEMS, STEM_NAMES, getSong, type LyricLine, type SceneEntry, type SceneSettings, type Song, type StemName } from './api';
-import { holdSong, songFiles, stemPaths } from './cache';
+import { addCleanedFile, holdSong, songFiles, stemPaths } from './cache';
 import { EFFECT_CONTROLS } from './effects';
 import { Mixer, defaultChannel } from './player';
 import { ChannelStrip, IconButton, LampSwitch, METAL, MasterFader, Timeline } from './mixer-console';
 import { useStemScroll } from './stem-scroll';
 import { focusedStem } from './stem-focus';
 import { stemPeaks } from './waveform';
-import { BLUE, Button, Centered, GREY, INK, LINE, errorText, useConfirm } from './ui';
+import { BLUE, Button, ButtonRow, Centered, GREY, INK, LINE, errorText, useConfirm } from './ui';
 
 import { snapshot, restore } from './mixer-settings';
 import { HarmonyStrip, LyricsEditor, LyricsStrip } from './score-view';
@@ -87,10 +87,10 @@ function MountedMixer({ jobId, title, entry, onSettings, onEnded, onReady, onSon
     <Button label="Retry loading audio" onPress={() => { setMixer(null); setFraction(null); setPeaks({}); setError(''); setAttempt(value => value + 1); }} />
   </View>;
   if (!mixer) return <Centered><Text style={styles.detail}>{fraction === null ? 'Loading song…' : `Downloading stems ${Math.round(fraction * 100)}%`}</Text></Centered>;
-  return <MixerControls mixer={mixer} song={song} peaks={peaks} title={title || song?.title || 'Untitled song'} />;
+  return <MixerControls mixer={mixer} song={song} peaks={peaks} />;
 }
 
-export function MixerControls({ mixer, title, song = null, peaks }: { mixer: Mixer; title: string; song?: Song | null; peaks?: StemPeaks }) {
+export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; song?: Song | null; peaks?: StemPeaks }) {
   const [, refresh] = useReducer(count => count + 1, 0);
   const [position, setPosition] = useState(0);
   const [open, setOpen] = useState<StemName>('vocals');
@@ -103,28 +103,64 @@ export function MixerControls({ mixer, title, song = null, peaks }: { mixer: Mix
     if (!view) { setOpen(name); return; }
     view.measureInWindow((_x, top) => { anchor.current = { name, top }; setOpen(name); });
   };
+  // While a stem is being measured or swapped open, further scroll events wait so the page cannot flicker between stems.
+  const switching = useRef(false);
+  const current = useRef(open);
   useLayoutEffect(() => {
+    current.current = open;
     const held = anchor.current;
     anchor.current = null;
-    if (held && held.name === open) stems.current[open]?.measureInWindow((_x, top) => scroll?.scrollBy(top - held.top));
+    const done = () => requestAnimationFrame(() => { switching.current = false; });
+    if (held && held.name === open) stems.current[open]?.measureInWindow((_x, top) => { scroll?.scrollBy(top - held.top); done(); });
+    else done();
   }, [open, scroll]);
-  useEffect(() => scroll?.onSettle(viewport => {
+  useEffect(() => scroll?.onScroll(viewport => {
+    if (switching.current) return;
     const names = STEM_NAMES.filter(name => stems.current[name]);
+    if (!names.length) return;
+    switching.current = true;
     Promise.all(names.map(name => new Promise<{ name: StemName; top: number; bottom: number }>(resolve =>
       stems.current[name]!.measureInWindow((_x, top, _width, height) => resolve({ name, top, bottom: top + height })))))
       .then(frames => {
         const found = focusedStem(frames, viewport);
-        if (found && found !== open) {
+        if (found && found !== current.current) {
           anchor.current = { name: found, top: frames.find(frame => frame.name === found)!.top };
           setOpen(found);
-        }
+        } else switching.current = false;
       });
-  }), [scroll, open]);
+  }), [scroll]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [editingLyrics, setEditingLyrics] = useState(false);
   const confirm = useConfirm();
   const tasks = useSongTasks(song);
+  // A cleaning that finishes while the mixer is open is downloaded and switched on, as on the website.
+  const [cleanedPeaks, setCleanedPeaks] = useState<Partial<Record<StemName, number[]>>>({});
+  const [cleanErrors, setCleanErrors] = useState<Partial<Record<StemName, string>>>({});
+  const adding = useRef(new Set<StemName>());
+  const [cleanRetry, setCleanRetry] = useState(0);
+  const finished = tasks.song?.restorations?.filter(item => item.status === 'completed' && item.playUrl).map(item => item.stem).join();
+  const jobId = song?.jobId;
+  useEffect(() => {
+    if (!jobId || !finished) return;
+    for (const name of finished.split(',') as StemName[]) {
+      if (mixer.hasCleaned(name) || adding.current.has(name)) continue;
+      adding.current.add(name);
+      (async () => {
+        const fileName = await addCleanedFile(jobId, name);
+        const path = stemPaths(jobId, { [name]: fileName })[name]!;
+        await mixer.addCleaned(name, path);
+        // Not added when the mixer closed during the download.
+        if (!mixer.hasCleaned(name)) return;
+        mixer.setChannel(name, { useCleaned: true });
+        const result = await stemPeaks(jobId, fileName, mixer.duration, () => false);
+        if (result) setCleanedPeaks(current => ({ ...current, [name]: result }));
+      })().catch(failure => {
+        adding.current.delete(name);
+        setCleanErrors(current => ({ ...current, [name]: `Could not load the cleaned version: ${errorText(failure)}` }));
+      });
+    }
+  }, [jobId, finished, mixer, cleanRetry]);
   useEffect(() => {
     const unsubscribe = mixer.subscribe(refresh);
     const timer = setInterval(() => { mixer.tick(); setPosition(mixer.position); }, 100);
@@ -156,14 +192,9 @@ export function MixerControls({ mixer, title, song = null, peaks }: { mixer: Mix
   const soloing = STEM_NAMES.some(name => mixer.channel(name).solo);
   const inside = position > mixer.sectionStart && position < mixer.sectionEnd;
   return <View style={styles.page}>
-    <View style={styles.heading}>
-      <Text style={styles.title}>{title}</Text>
-      <Button kind="plain" label="Reset song settings" onPress={() => void reset()} />
-    </View>
     {!!(error || mixer.error || tasks.error) && <Text accessibilityRole="alert" style={styles.error}>{error || mixer.error || tasks.error}</Text>}
     {editingLyrics && tasks.lyrics && <LyricsEditor lines={tasks.lyrics} duration={mixer.duration}
       onSave={saveLyrics} onClose={() => setEditingLyrics(false)} />}
-    <Text style={styles.detail}>Drag the S/E arrows to set the shared interval; drag the timeline or red playhead to scrub.</Text>
     {STEM_NAMES.map(name => {
       const channel = mixer.channel(name);
       const label = name[0].toUpperCase() + name.slice(1);
@@ -180,11 +211,23 @@ export function MixerControls({ mixer, title, song = null, peaks }: { mixer: Mix
               <Text style={[styles.versionText, channel.useCleaned === cleaned && { color: 'white' }]}>{cleaned ? 'Cleaned' : 'Original'}</Text>
             </Pressable>)}
           </View>}
+          {!mixer.hasCleaned(name) && song && (cleanErrors[name]
+            ? <Pressable onPress={() => { setCleanErrors(({ [name]: _, ...others }) => others); setCleanRetry(value => value + 1); }}
+              accessibilityRole="button" accessibilityLabel={`Load cleaned ${label}`} style={styles.taskButton}>
+              <Text style={styles.taskButtonText}>Load cleaned</Text>
+            </Pressable>
+            : <Pressable onPress={() => tasks.clean(name)} disabled={busy || tasks.cleaning(name)}
+              accessibilityRole="button" accessibilityLabel={`Clean ${label}`} accessibilityState={{ disabled: busy || tasks.cleaning(name) }}
+              style={[styles.taskButton, (busy || tasks.cleaning(name)) && { opacity: 0.5 }]}>
+              <Text style={styles.taskButtonText}>{tasks.cleaning(name) ? 'Cleaning...' : 'Clean'}</Text>
+            </Pressable>)}
         </View>
+        {!!(tasks.cleanFailure(name) || cleanErrors[name]) &&
+          <Text accessibilityRole="alert" style={[styles.error, styles.stemError]}>{tasks.cleanFailure(name) || cleanErrors[name]}</Text>}
         {song && <StemTasks name={name} label={label} cleaned={channel.useCleaned} tasks={tasks} position={position}
           disabled={busy} onEditLyrics={editLyrics} />}
         <Timeline label={label} duration={mixer.duration} start={mixer.sectionStart} end={mixer.sectionEnd} position={position}
-          peaks={channel.useCleaned ? peaks?.[name]?.cleaned : peaks?.[name]?.original}
+          peaks={channel.useCleaned ? peaks?.[name]?.cleaned ?? cleanedPeaks[name] : peaks?.[name]?.original}
           disabled={busy} onSection={(start, end) => mixer.setSection(start, end)}
           onSeek={time => void run(() => mixer.seek(time))}
           onReset={() => mixer.setSection(0, mixer.duration)} />
@@ -210,7 +253,6 @@ export function MixerControls({ mixer, title, song = null, peaks }: { mixer: Mix
               onPress={() => void run(() => mixer.isPlaying ? mixer.pause() : mixer.play())} />
             <IconButton icon="stop" disabled={busy || (!mixer.isPlaying && position === mixer.sectionStart)}
               accessibilityLabel="Stop all stems" onPress={() => void run(() => mixer.stop())} />
-            <View style={styles.transportGap} />
             <IconButton icon="mute" accessibilityLabel={`Mute ${label}`} on={channel.muted}
               onPress={() => mixer.setChannel(name, { muted: !channel.muted })} />
             <IconButton icon="muteAll" accessibilityLabel="Mute all stems" on={allMuted}
@@ -219,6 +261,7 @@ export function MixerControls({ mixer, title, song = null, peaks }: { mixer: Mix
               onPress={() => mixer.setChannel(name, { solo: !channel.solo })} />
             <IconButton icon="loop" accessibilityLabel="Loop all stems" on={mixer.loop}
               onPress={() => mixer.setLoop(!mixer.loop)} />
+            <IconButton icon="reset" accessibilityLabel="Reset song settings" onPress={() => void reset()} />
           </View>
           <MasterFader value={Math.round(mixer.volume * 100)} onChange={value => mixer.setVolume(value / 100)} />
           <ScrollView horizontal style={styles.channels} contentContainerStyle={styles.channelRow}
@@ -232,12 +275,12 @@ export function MixerControls({ mixer, title, song = null, peaks }: { mixer: Mix
                 onChange={next => mixer.setChannel(name, { [control.key]: control.key === 'volume' ? next / 100 : next })} />;
             })}
           </ScrollView>
-          <View style={styles.transport}>
+          <ButtonRow style={styles.switches}>
             <LampSwitch label="Effects bypass" accessibilityLabel={`${label} effects bypass`} on={channel.bypassed}
               onPress={() => mixer.setChannel(name, { bypassed: !channel.bypassed })} />
             <LampSwitch label="Reset" accessibilityLabel={`${label} reset`} on={false}
               onPress={() => mixer.setChannel(name, { ...defaultChannel(), useCleaned: channel.useCleaned })} />
-          </View>
+          </ButtonRow>
           <Text style={styles.consoleNote}>
             {channel.bypassed ? 'Effects bypassed. Volume, mute and solo still apply.'
               : soloing && !channel.solo ? 'Silent while another stem is soloed.'
@@ -299,8 +342,6 @@ function displayValue(key: ControlKey, value: number) {
 
 const styles = StyleSheet.create({
   page: { gap: 14 }, card: { backgroundColor: 'white', padding: 20, gap: 14, borderRadius: 12 },
-  heading: { gap: 8 },
-  title: { fontSize: 24, fontWeight: '700', color: INK },
   stem: { backgroundColor: 'white', borderRadius: 10, borderWidth: 1, borderColor: LINE, overflow: 'hidden', paddingTop: 12 },
   stemHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, minHeight: 36 },
   stemTitle: { fontSize: 16, fontWeight: '700', color: INK },
@@ -308,6 +349,7 @@ const styles = StyleSheet.create({
   version: { paddingHorizontal: 12, minHeight: 36, justifyContent: 'center' },
   versionOn: { backgroundColor: BLUE },
   versionText: { fontSize: 13, fontWeight: '700', color: BLUE },
+  stemError: { marginHorizontal: 14 },
   consoleHeading: { marginTop: 12, paddingHorizontal: 14, paddingVertical: 8, minHeight: 52, flexDirection: 'row', alignItems: 'center',
     alignContent: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, backgroundImage: METAL, borderTopWidth: 1, borderTopColor: '#a9b5c5' },
   consoleTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
@@ -320,8 +362,8 @@ const styles = StyleSheet.create({
   led: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#6d7b8e', borderWidth: 1, borderColor: '#3c4a5c' },
   ledOn: { backgroundColor: '#5cf08a', shadowColor: '#5cf08a', shadowOpacity: 1, shadowRadius: 4, shadowOffset: { width: 0, height: 0 } },
   console: { backgroundImage: METAL, borderTopWidth: 1, borderTopColor: '#a9b5c5', paddingVertical: 10, gap: 8 },
-  transport: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, paddingHorizontal: 14 },
-  transportGap: { width: 6 },
+  transport: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14 },
+  switches: { paddingHorizontal: 14 },
   channels: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: '#a9b5c5' },
   channelRow: { flexDirection: 'row' },
   consoleNote: { fontSize: 12, color: GREY, paddingHorizontal: 14 },

@@ -9,7 +9,7 @@ import {
   drumScore, editedLines, firstChange, gapAfter, lineText, lyricIndex, notePieces, positionAt, reachedIndex, scoreRests,
   type LyricRow, type NotePiece, type ScoreRest,
 } from './score';
-import { BLUE, Button, GREY, INK, LINE, formatTime } from './ui';
+import { BLUE, Button, ButtonRow, GREY, INK, LINE, formatTime } from './ui';
 
 // Matches the mixer's 100ms position timer, so the strips glide between updates.
 const GLIDE_MS = 100;
@@ -268,18 +268,18 @@ export function LyricsEditor({ lines, duration, onSave, onClose }: {
         </View>)}
       </ScrollView>
       {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
-      <View style={styles.editorFooter}>
+      <ButtonRow style={styles.editorFooter}>
         <Button kind="plain" label="Cancel" disabled={saving} onPress={cancel} />
         <Button label={saving ? 'Saving...' : 'Save lyrics'} disabled={saving} onPress={() => void save()} />
-      </View>
+      </ButtonRow>
     </KeyboardAvoidingView>
     {discarding && <View style={styles.backdrop}><View style={styles.dialog} accessibilityViewIsModal>
       <Text style={styles.dialogTitle}>Discard lyric changes?</Text>
       <Text style={styles.dialogMessage}>Discard your changes to the lyrics?</Text>
-      <View style={styles.dialogActions}>
+      <ButtonRow>
         <Button kind="plain" label="Cancel" onPress={() => setDiscarding(false)} />
         <Button label="Discard" onPress={onClose} />
-      </View>
+      </ButtonRow>
     </View></View>}
   </Modal>;
 }
@@ -315,10 +315,9 @@ const styles = StyleSheet.create({
     borderRadius: 6, backgroundColor: '#eef2fb' },
   addText: { color: BLUE, fontWeight: '700', fontSize: 14 },
   error: { backgroundColor: '#fff0f0', color: '#a52c35', padding: 12, marginHorizontal: 18, borderRadius: 8 },
-  editorFooter: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, padding: 18, paddingBottom: 34, borderTopWidth: 1, borderTopColor: LINE },
+  editorFooter: { padding: 18, paddingBottom: 34, borderTopWidth: 1, borderTopColor: LINE },
   backdrop: { ...StyleSheet.absoluteFill, backgroundColor: '#19253699', padding: 24, justifyContent: 'center' },
   dialog: { backgroundColor: 'white', borderRadius: 16, padding: 24, gap: 16 },
   dialogTitle: { fontSize: 22, fontWeight: '700', color: INK },
   dialogMessage: { fontSize: 16, lineHeight: 24, color: GREY },
-  dialogActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 12, flexWrap: 'wrap' },
 });

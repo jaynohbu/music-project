@@ -4,7 +4,7 @@ import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'rea
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { type Song, type Usage, deleteSong, getUsage, listSongs } from '../api';
 import { forgetSong } from '../cache';
-import { BACKGROUND, BLUE, Button, Centered, GREY, INK, LINE, Loading, RED, errorText, formatTime, useConfirm } from '../ui';
+import { BACKGROUND, BLUE, Button, ButtonRow, Centered, GREY, INK, LINE, Loading, RED, errorText, formatTime, useConfirm } from '../ui';
 
 const POLL_MS = 5000;
 const WORKING = new Set(['uploading', 'queued', 'processing', 'deleting']);
@@ -116,10 +116,10 @@ export default function Songs() {
               {song.status === 'failed' && !!song.error && <Text style={styles.error}>{song.error}</Text>}
             </View>
           </Pressable>
-          <View style={{ flexDirection: 'row', gap: 8 }}>
+          <ButtonRow>
             {song.status === 'completed' && <Button label="Open mixer" onPress={() => router.push({ pathname: '/song/[id]', params: { id: song.jobId } })} />}
             {(song.status === 'completed' || song.status === 'failed') && <Button kind="danger" label="Delete song" disabled={deleting} onPress={() => void remove(song)} />}
-          </View>
+          </ButtonRow>
           </View>
         )}
       />

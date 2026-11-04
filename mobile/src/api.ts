@@ -21,7 +21,7 @@ export interface Song {
   playVersion?: string;
   // Signed for one hour.
   stems?: Partial<Record<StemName, { playUrl: string; downloadUrl: string }>>;
-  restorations?: { id: string; stem: StemName; status: SongStatus; playUrl?: string; playVersion?: string }[];
+  restorations?: { id: string; stem: StemName; status: SongStatus; playUrl?: string; playVersion?: string; error?: string }[];
   lyrics?: Lyrics;
   harmony?: Harmony;
 }
@@ -47,6 +47,9 @@ export const saveLyrics = (jobId: string, lines: LyricLine[]) => request('POST',
 // Without a part, finds every harmonic stem; with one, regenerates that stem from the version being heard.
 export const createHarmony = (jobId: string, part?: { stem: string; cleaned: boolean }) =>
   request('POST', `/stems/jobs/${jobId}/harmony`, part ?? {});
+// Cleans one stem, using the other five as references, as the website does.
+export const createRestoration = (jobId: string, stem: StemName) =>
+  request('POST', `/stems/jobs/${jobId}/restorations`, { stem, references: STEM_NAMES.filter(name => name !== stem) });
 export async function fetchResult<T>(url: string, what: string): Promise<T> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`${what} request failed (HTTP ${response.status}).`);

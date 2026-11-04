@@ -2,7 +2,7 @@ import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { createScene, deleteScene, listScenes, type Scene } from '../../api';
-import { BLUE, Button, GREY, INK, LINE, errorText, useConfirm } from '../../ui';
+import { BLUE, Button, ButtonRow, GREY, INK, LINE, errorText, useConfirm } from '../../ui';
 
 export default function Scenes() {
   const [scenes, setScenes] = useState<Scene[]>([]);
@@ -47,10 +47,10 @@ export default function Scenes() {
     {scenes.map(scene => <View key={scene.id} style={styles.card}>
       <Text style={styles.title}>{scene.name}</Text>
       <Text style={styles.description}>{scene.entries.length} songs</Text>
-      <View style={styles.actions}>
+      <ButtonRow>
         <Button label="Open scene" onPress={() => router.push({ pathname: '/scenes/[id]', params: { id: scene.id } })} />
         <Button kind="danger" label="Delete scene" disabled={busy} onPress={() => void remove(scene)} />
-      </View>
+      </ButtonRow>
     </View>)}
     <Button kind="plain" label="Refresh" disabled={busy} onPress={() => void load()} />
   </ScrollView>;
@@ -65,5 +65,4 @@ const styles = StyleSheet.create({
   label: { color: INK, fontWeight: '600', fontSize: 14 },
   title: { color: INK, fontWeight: '700', fontSize: 19 },
   error: { color: '#a52c35', backgroundColor: '#fff0f0', padding: 12, borderRadius: 8 },
-  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
 });

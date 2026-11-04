@@ -212,6 +212,38 @@ async function downloadSong(song: Song, onProgress: (fraction: number) => void):
   return { original: entries[song.jobId].files, cleaned: entries[song.jobId].cleaned ?? {} };
 }
 
+// Adds a finished cleaned stem to a song that is already on the phone, without downloading the originals again.
+export async function addCleanedFile(jobId: string, stem: StemName): Promise<string> {
+  const entries = load();
+  const entry = entries[jobId];
+  if (!entry) throw new Error('This song is not on the phone. Reload the song.');
+  const fresh = await getSong(jobId);
+  const restorations = (fresh.restorations ?? []).filter(item => item.status === 'completed');
+  const item = restorations.find(restoration => restoration.stem === stem);
+  if (!item?.playUrl) throw new Error('The cleaned stem has no playback file yet. Reload the song.');
+  const directory = songDirectory(jobId);
+  const fileName = `cleaned-${stem}.${extension(item.playUrl)}`;
+  const target = new File(directory, fileName);
+  const partial = new File(directory, `.partial-${fileName}`);
+  if (partial.exists) partial.delete();
+  const file = await File.createDownloadTask(item.playUrl, partial, { sessionType: 'foreground' }).downloadAsync();
+  if (!file || toNumber(file.size) < MIN_STEM_BYTES) {
+    if (partial.exists) partial.delete();
+    throw new Error('The cleaned stem failed to download. Please try again.');
+  }
+  if (target.exists) target.delete();
+  partial.rename(fileName);
+  // The index records only the stems now on disk, so a later visit fetches any other cleaned stems it lacks.
+  const cleaned = { ...entry.cleaned, [stem]: fileName };
+  const known = restorations.filter(restoration => cleaned[restoration.stem]);
+  entries[jobId] = {
+    ...entry, cleaned, bytes: entry.bytes + toNumber(new File(directory, fileName).size),
+    cleanedVersion: JSON.stringify(known.map(restoration => [restoration.id, restoration.playVersion ?? 'wav']).sort()),
+  };
+  await save();
+  return fileName;
+}
+
 // Absolute paths in the form the audio engine reads.
 // A file stored alongside a cached song, deleted with it.
 export const songFile = (jobId: string, name: string) => new File(songDirectory(jobId), name);

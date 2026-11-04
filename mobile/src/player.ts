@@ -330,6 +330,20 @@ export class Mixer {
 
   hasCleaned(name: StemName) { return !!this.stems[name].cleaned; }
 
+  // Adds a stem's cleaned version while the mixer is open; playing stems are realigned so it starts in step.
+  addCleaned(name: StemName, path: string) {
+    return this.run(async () => {
+      if (this.closed || this.hasCleaned(name)) return;
+      const cleanedGain = stereoGain(this.context, 0);
+      cleanedGain.connect(this.stems[name].effects.input);
+      const cleaned = this.createSource(path, cleanedGain, false);
+      this.stems[name] = { ...this.stems[name], cleaned, cleanedGain };
+      if (this.playing) await this.startAt(this.position);
+      else cleaned.seekToTime(this.startPosition);
+      this.changed();
+    });
+  }
+
   setChannel(name: StemName, change: Partial<Channel>) {
     const next = { ...this.channels[name], ...change };
     if (next.useCleaned && !this.hasCleaned(name)) {

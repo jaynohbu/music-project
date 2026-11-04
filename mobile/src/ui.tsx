@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Children, createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
 export const BLUE = '#3459c9';
@@ -29,10 +29,10 @@ export function ConfirmationProvider({ children }: { children: ReactNode }) {
       <View style={styles.backdrop}><View style={styles.dialog} accessibilityViewIsModal>
         <Text style={styles.dialogTitle}>{pending?.title}</Text>
         <Text style={styles.dialogMessage}>{pending?.message}</Text>
-        <View style={styles.dialogActions}>
+        <ButtonRow>
           <Button label="Cancel" kind="plain" onPress={() => finish(false)} />
           <Button label={pending?.action ?? 'Confirm'} onPress={() => finish(true)} />
-        </View>
+        </ButtonRow>
       </View></View>
     </Modal>
   </Confirmation.Provider>;
@@ -47,9 +47,17 @@ export function Button({ label, onPress, disabled, kind = 'primary', style }: {
       style={[styles.button, styles[kind], disabled && styles.disabled, style]}
       onPress={onPress} disabled={disabled} accessibilityRole="button" accessibilityState={{ disabled: !!disabled }}
     >
-      <Text style={[styles.label, kind !== 'primary' && { color: kind === 'danger' ? RED : BLUE }]}>{label}</Text>
+      <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}
+        style={[styles.label, kind !== 'primary' && { color: kind === 'danger' ? RED : BLUE }]}>{label}</Text>
     </Pressable>
   );
+}
+
+// Lays buttons side by side, each taking an equal share of the width.
+export function ButtonRow({ children, style }: { children: ReactNode; style?: StyleProp<ViewStyle> }) {
+  return <View style={[styles.buttonRow, style]}>
+    {Children.toArray(children).map((child, i) => <View key={i} style={styles.buttonCell}>{child}</View>)}
+  </View>;
 }
 
 export function Centered({ children }: { children: ReactNode }) {
@@ -71,7 +79,9 @@ export function formatBytes(bytes: number) {
 }
 
 const styles = StyleSheet.create({
-  button: { borderRadius: 8, paddingVertical: 13, paddingHorizontal: 18, alignItems: 'center' },
+  button: { borderRadius: 8, paddingVertical: 13, paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center' },
+  buttonRow: { flexDirection: 'row', gap: 8 },
+  buttonCell: { flex: 1 },
   primary: { backgroundColor: BLUE },
   plain: { backgroundColor: '#eef2fb' },
   danger: { backgroundColor: '#fff0f0' },
@@ -82,5 +92,4 @@ const styles = StyleSheet.create({
   dialog: { backgroundColor: 'white', borderRadius: 16, padding: 24, gap: 16 },
   dialogTitle: { fontSize: 22, fontWeight: '700', color: INK },
   dialogMessage: { fontSize: 16, lineHeight: 24, color: GREY },
-  dialogActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 12, flexWrap: 'wrap' },
 });
