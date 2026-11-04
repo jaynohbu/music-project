@@ -34,6 +34,9 @@ const RAMP_SECONDS = 0.03;
 const START_DELAY = 0.2;
 // Seeking is asynchronous in the decoder; the trial waited this long before starting again.
 const SEEK_SETTLE_MS = 500;
+// A stem that reaches the end of its file stops its decoder for good in the pinned
+// library, so playback ends this far before the shortest stem runs out.
+const END_MARGIN = .5;
 const SKIP_SECONDS = 15;
 
 interface Stem {
@@ -83,8 +86,14 @@ export class Mixer {
   private readonly sources: FileSource[] = [];
   private closing: Promise<void> | null = null;
   private endPending = false;
+  // Stall check: positions at the last check. Empty after a restart, so the next
+  // check only takes a baseline once the stems have really started again.
   private lastProgress: number[] = [];
   private lastProgressAt = 0;
+  // True while startAt has the stems paused for a seek.
+  private restarting = false;
+  private playingBeforeInterruption = false;
+  private playableEnd = 0;
   private notificationShown = false;
   error = '';
   loop = false;
@@ -121,6 +130,7 @@ export class Mixer {
       const decodedDuration = Math.min(...durations);
       this.duration = durationLimit && durationLimit > 0 ? Math.min(decodedDuration, durationLimit) : decodedDuration;
       this.sectionEnd = this.duration;
+      this.playableEnd = decodedDuration - END_MARGIN;
       if (!Number.isFinite(this.duration) || !(this.duration > 0)) throw new Error('These stems could not be read. Remove the song from this phone and try again.');
       if (Math.max(...durations) - decodedDuration > .05) throw new Error(`The decoded stems are not aligned (${durations.map(d => d.toFixed(2)).join(', ')}s). Reload this song.`);
       this.applyGains();
@@ -144,7 +154,7 @@ export class Mixer {
     if (watchEnd) {
       const events = globalThis.AudioEventEmitter;
       const ended = events.addAudioEventListener('ended', () => {
-        if (this.playing && this.position >= this.sectionEnd - .1) this.finish();
+        if (this.playing && this.position >= this.stopAt - .1) this.finish();
       });
       const position = events.addAudioEventListener('positionChanged', () => this.tick());
       native.onEnded = ended; native.onPositionChanged = position;
@@ -189,8 +199,12 @@ export class Mixer {
     AudioManager.observeAudioInterruptions(true);
     const subscriptions = [
       AudioManager.addSystemEventListener('interruption', event => {
-        if (event.type === 'began') this.system(this.pause());
-        else if (event.shouldResume) this.system(this.play());
+        if (event.type === 'began') {
+          this.playingBeforeInterruption = this.playing;
+          this.system(this.pause());
+        } else if (event.shouldResume && this.playingBeforeInterruption) {
+          this.system(this.play());
+        }
       }),
       // Headphones were unplugged: stop rather than play out of the speaker.
       AudioManager.addSystemEventListener('routeChange', event => {
@@ -242,9 +256,12 @@ export class Mixer {
   get isPlaying() { return this.playing; }
 
   get position() {
-    if (!this.playing) return this.startPosition;
+    if (!this.playing || this.restarting) return this.startPosition;
     return Math.min(this.startPosition + Math.max(this.context.currentTime - this.startClock, 0), this.sectionEnd);
   }
+
+  // Where playback ends: the section end, but never past the playable end of the stems.
+  private get stopAt() { return Math.min(this.sectionEnd, this.playableEnd); }
 
   channel(name: StemName) { return this.channels[name]; }
 
@@ -252,24 +269,30 @@ export class Mixer {
 
   private async startAt(position: number) {
     const sources = this.sources;
-    for (const source of sources) source.pause();
-    for (const source of sources) source.seekToTime(position);
-    await wait(SEEK_SETTLE_MS);
-    if (this.closed) return;
-    await this.context.resume();
-    if (this.context.state !== 'running') throw new Error(`The audio engine is ${this.context.state}. Try Play again.`);
-    const when = this.context.currentTime + START_DELAY;
-    for (const source of sources) source.getFileSourceNode().start(when);
-    this.startClock = when;
     this.startPosition = position;
-    this.lastProgress = sources.map(source => source.getCurrentTime());
-    this.lastProgressAt = Date.now();
+    this.restarting = true;
+    try {
+      for (const source of sources) source.pause();
+      for (const source of sources) source.seekToTime(position);
+      await wait(SEEK_SETTLE_MS);
+      if (this.closed) return;
+      await this.context.resume();
+      if (this.context.state !== 'running') throw new Error(`The audio engine is ${this.context.state}. Try Play again.`);
+      const when = this.context.currentTime + START_DELAY;
+      for (const source of sources) source.getFileSourceNode().start(when);
+      this.startClock = when;
+    } finally {
+      this.restarting = false;
+      // The native position updates only once the seeked audio renders, so take the baseline later.
+      this.lastProgress = [];
+      this.lastProgressAt = Date.now();
+    }
   }
 
   play() {
     return this.run(async () => {
       if (this.playing) return;
-      if (this.startPosition < this.sectionStart || this.startPosition >= this.sectionEnd - .05) this.startPosition = this.sectionStart;
+      if (this.startPosition < this.sectionStart || this.startPosition >= this.stopAt - .05) this.startPosition = this.sectionStart;
       await this.startAt(this.startPosition);
       this.playing = true;
       this.notify();
@@ -289,7 +312,7 @@ export class Mixer {
 
   seek(target: number) {
     return this.run(async () => {
-      const position = Math.min(Math.max(target, this.sectionStart), this.sectionEnd);
+      const position = Math.min(Math.max(target, this.sectionStart), this.stopAt);
       if (this.playing) {
         await this.startAt(position);
       } else {
@@ -301,11 +324,12 @@ export class Mixer {
 
   // Call regularly while the screen shows the mixer; stops at the end of the song.
   tick() {
-    if (this.playing && this.position >= this.sectionEnd && !this.endPending) {
+    if (!this.playing || this.restarting) return;
+    if (this.position >= this.stopAt && !this.endPending) {
       this.finish();
-    } else if (this.playing && Date.now() - this.lastProgressAt > 2000) {
+    } else if (Date.now() - this.lastProgressAt > 2000) {
       const progress = this.sources.map(source => source.getCurrentTime());
-      if (progress.some((position, index) => Math.abs(position - this.lastProgress[index]) < .01)) {
+      if (this.lastProgress.length && progress.some((position, index) => Math.abs(position - this.lastProgress[index]) < .01)) {
         this.system(this.run(async () => { throw new Error('Audio did not advance. Reload the song and try again.'); }));
       }
       this.lastProgress = progress;

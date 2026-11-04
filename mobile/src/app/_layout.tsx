@@ -7,6 +7,10 @@ import { SessionProvider, useSession } from '../session';
 import { ThemeBackground, ThemeProvider, useTheme } from '../theme';
 import { ConfirmationProvider, Loading } from '../ui';
 
+// On iOS 26 the back swipe works from anywhere on the screen, so dragging a mixer
+// slider to the right left the screen. These screens use the back button instead.
+const noSwipeBack = { gestureEnabled: false, fullScreenGestureEnabled: false };
+
 function RootNavigator() {
   const { state } = useSession();
   const pathname = usePathname();
@@ -23,9 +27,9 @@ function RootNavigator() {
       <Stack.Protected guard={ready}>
         <Stack.Screen name="index" options={{ title: 'Sorituh · Music' }} />
         <Stack.Screen name="scenes/index" options={{ title: 'Sorituh · Scenes' }} />
-        <Stack.Screen name="scenes/[id]" options={{ title: 'Scene' }} />
+        <Stack.Screen name="scenes/[id]" options={{ title: 'Scene', ...noSwipeBack }} />
         <Stack.Screen name="upload" options={{ title: 'Add a song', presentation: 'modal' }} />
-        <Stack.Screen name="song/[id]" options={{ title: '' }} />
+        <Stack.Screen name="song/[id]" options={{ title: '', ...noSwipeBack }} />
         <Stack.Screen name="settings" options={{ title: 'Settings' }} />
       </Stack.Protected>
       <Stack.Protected guard={!ready}>
