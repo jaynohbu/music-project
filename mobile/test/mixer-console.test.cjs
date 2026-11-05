@@ -28,7 +28,13 @@ function harness() {
   } }).outputText;
   const palette = new Proxy({}, { get: () => '#123456' });
   const theme = { useStyles: make => make(palette), useTheme: () => palette };
-  const mocks = { react, 'react-native': native, 'react/jsx-runtime': { jsx: element, jsxs: element, Fragment: 'Fragment' }, './theme': theme };
+  // The screens' text comes from the English language file.
+  const english = { exports: {} };
+  new Function('module', 'exports', ts.transpileModule(fs.readFileSync(path.join(__dirname, '../src/locales/en.ts'), 'utf8'),
+    { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText)(english, english.exports);
+  const t = (key, values = {}) => english.exports.default[key].replace(/\{(\w+)\}/g, (match, name) => name in values ? String(values[name]) : match);
+  const mocks = { react, 'react-native': native, 'react/jsx-runtime': { jsx: element, jsxs: element, Fragment: 'Fragment' }, './theme': theme,
+    './language': { useT: () => t } };
   const module = { exports: {} };
   new Function('require', 'module', 'exports', code)(name => mocks[name], module, module.exports);
   return {

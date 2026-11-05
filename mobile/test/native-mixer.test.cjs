@@ -480,7 +480,7 @@ test('autosave serializes in-flight edits and uses the returned revision', async
   store.update(scene => ({ ...scene, name: 'C' }));
   release(); assert.equal(await saved, true);
   assert.deepEqual(requests.map(request => [request.revision, request.patch.name]), [[1, 'B'], [2, 'C']]);
-  assert.equal(store.dirty, false); assert.equal(store.status, 'Saved');
+  assert.equal(store.dirty, false); assert.equal(store.status, 'saved');
 });
 
 test('autosave conflict keeps local edits and revision for explicit retry/reload', async () => {

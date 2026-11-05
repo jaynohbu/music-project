@@ -1,4 +1,6 @@
 import { Children, createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { t } from './i18n';
+import { useT } from './language';
 import { type Theme, useStyles, useTheme } from './theme';
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
@@ -10,12 +12,12 @@ export function useConfirm() {
   return confirm;
 }
 export function ConfirmationProvider({ children }: { children: ReactNode }) {
-  const styles = useStyles(makeStyles);
+  const styles = useStyles(makeStyles), translate = useT();
   const [pending, setPending] = useState<{ title: string; message: string; action: string } | null>(null);
   const resolve = useRef<((result: boolean) => void) | null>(null);
   useEffect(() => () => { resolve.current?.(false); }, []);
   const finish = (result: boolean) => { resolve.current?.(result); resolve.current = null; setPending(null); };
-  const confirm: Confirm = (title, message, action = 'Confirm') => {
+  const confirm: Confirm = (title, message, action = translate('common.confirm')) => {
     resolve.current?.(false);
     setPending({ title, message, action });
     return new Promise<boolean>(done => { resolve.current = done; });
@@ -26,8 +28,8 @@ export function ConfirmationProvider({ children }: { children: ReactNode }) {
         <Text style={styles.dialogTitle}>{pending?.title}</Text>
         <Text style={styles.dialogMessage}>{pending?.message}</Text>
         <ButtonRow>
-          <Button label="Cancel" kind="plain" onPress={() => finish(false)} />
-          <Button label={pending?.action ?? 'Confirm'} onPress={() => finish(true)} />
+          <Button label={translate('common.cancel')} kind="plain" onPress={() => finish(false)} />
+          <Button label={pending?.action ?? translate('common.confirm')} onPress={() => finish(true)} />
         </ButtonRow>
       </View></View>
     </Modal>
@@ -68,7 +70,7 @@ export function Loading() {
 }
 
 export const errorText = (failure: unknown) =>
-  failure instanceof Error ? failure.message : 'Something went wrong. Please try again.';
+  failure instanceof Error ? failure.message : t('common.genericError');
 
 export function formatTime(seconds: number) {
   const whole = Math.max(Math.floor(seconds), 0);

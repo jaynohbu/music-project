@@ -2,6 +2,7 @@
 import { AudioManager, AudioRecorder, FileDirectory, FileFormat, type GainNode } from 'react-native-audio-api';
 import { Follower, OnsetDetector, instrument as findInstrument, type FollowStatus, type InstrumentId, type TempoPoint } from './live-follow';
 import { discardRecording, saveTake, takePath, takeSubDirectory, type LiveTake } from './live-take';
+import { t } from './i18n';
 import type { Mixer } from './player';
 
 export type FollowStrength = 'loose' | 'normal' | 'tight';
@@ -19,7 +20,7 @@ const IDLE_MS = 50;
 
 export interface LiveStatus extends FollowStatus { seconds: number; level: number; notes: number }
 
-const recordingError = (message: string) => new Error(`Recording failed: ${message}`);
+const recordingError = (message: string) => new Error(t('live.recordingFailed', { error: message }));
 
 export async function microphoneAllowed() {
   let status = await AudioManager.checkRecordingPermissions();
@@ -56,7 +57,7 @@ export class LiveSession {
     mixer: Mixer; jobId: string; beats: number[]; strength: FollowStrength; monitor: boolean; previous: LiveTake | null;
     instrument: InstrumentId; replace: boolean;
   }) {
-    if (!await microphoneAllowed()) throw new Error('Sorituh needs the microphone to hear your instrument. Allow it in Settings > Sorituh > Microphone.');
+    if (!await microphoneAllowed()) throw new Error(t('live.micDenied'));
     const strength = STRENGTHS.find(item => item.id === options.strength)?.value ?? 0.5;
     const session = new LiveSession(options.mixer, options.jobId, options.beats, strength, options.previous, options.instrument, options.replace);
     try { await session.begin(options.monitor); }
@@ -95,7 +96,7 @@ export class LiveSession {
     if (started.status === 'error') throw recordingError(started.message);
     this.recordStart = mixer.contextTime;
     await mixer.play();
-    if (!mixer.isPlaying) throw new Error(mixer.error || 'The song did not start.');
+    if (!mixer.isPlaying) throw new Error(mixer.error || t('live.notStarted'));
     this.points.push({ at: mixer.startTime - this.recordStart, pos: mixer.positionAt(mixer.startTime), rate: mixer.rate });
     this.idleTimer = setInterval(() => {
       const changed = this.follower.idle(this.mixer.contextTime - this.recordStart);

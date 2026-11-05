@@ -2,6 +2,7 @@ import * as Application from 'expo-application';
 import * as Crypto from 'expo-crypto';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
+import { t } from './i18n';
 
 export const API_URL = 'https://api.tunesbasis.com/api';
 const COGNITO_URL = 'https://cognito-idp.us-west-2.amazonaws.com/';
@@ -44,9 +45,9 @@ async function cognito(target: string, body: object) {
   const result = await response.json().catch(() => ({}));
   if (!response.ok) {
     if (String(result.__type).endsWith('NotAuthorizedException')) {
-      throw new RejectedError(result.message ?? 'Sign-in was rejected.');
+      throw new RejectedError(result.message ?? t('auth.rejected'));
     }
-    throw new Error(result.message ?? 'Sign-in failed. Please try again.');
+    throw new Error(result.message ?? t('auth.failed'));
   }
   return result;
 }
@@ -58,7 +59,7 @@ export async function signIn(email: string, password: string): Promise<Session> 
   });
   const tokens = result.AuthenticationResult;
   if (!tokens?.IdToken || !tokens.AccessToken || !tokens.RefreshToken) {
-    throw new Error('Sign-in did not return a session.');
+    throw new Error(t('auth.noSession'));
   }
   return {
     idToken: tokens.IdToken, accessToken: tokens.AccessToken, refreshToken: tokens.RefreshToken,
@@ -73,7 +74,7 @@ export async function refresh(session: Session): Promise<Session> {
     AuthParameters: { REFRESH_TOKEN: session.refreshToken },
   });
   const tokens = result.AuthenticationResult;
-  if (!tokens?.IdToken || !tokens.AccessToken) throw new Error('Sign-in did not return a session.');
+  if (!tokens?.IdToken || !tokens.AccessToken) throw new Error(t('auth.noSession'));
   return {
     idToken: tokens.IdToken, accessToken: tokens.AccessToken,
     refreshToken: tokens.RefreshToken ?? session.refreshToken,
@@ -115,14 +116,14 @@ export async function signInDevice(email: string, code?: string): Promise<Sessio
   const password = await devicePassword(deviceId);
   const session = await fetch(`${API_URL}/accounts/session`, { method: 'POST' });
   const sessionBody = await session.json();
-  if (!session.ok) throw new Error(sessionBody.message ?? 'The account service is unavailable.');
+  if (!session.ok) throw new Error(sessionBody.message ?? t('auth.unavailable'));
   const response = await fetch(`${API_URL}/accounts/device`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Account-Session': sessionBody.token },
     body: JSON.stringify({ email, deviceId, password, code }),
   });
   const result = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(result?.message ?? 'The account service is unavailable.');
+  if (!response.ok) throw new Error(result?.message ?? t('auth.unavailable'));
   await SecureStore.setItemAsync(EMAIL_KEY, email);
   if (result.status !== 'ready') return null;
   await SecureStore.setItemAsync(PASSWORD_KEY, password);

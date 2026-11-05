@@ -10,6 +10,7 @@ import { AudioFileSourceNode } from 'react-native-audio-api/lib/module/Audio/Aud
 import type { AudioFileSourceNode as FileSource } from 'react-native-audio-api/lib/typescript/Audio/AudioFileSourceNode';
 import { STEM_NAMES, type StemName } from './api';
 import { applyEffects, createEffects, defaults, stereoGain, type EffectNodes, type Effects } from './effects';
+import { t, type TextKey } from './i18n';
 import { MAX_RATE, MIN_RATE, rateAt, songPositionAt, takeTimeAt, type TempoPoint } from './live-follow';
 
 export interface Channel extends Omit<Effects, 'volume'> {
@@ -131,7 +132,7 @@ export class Mixer {
     const context = new AudioContext({ sampleRate: 44100 });
     try {
       await context.resume();
-      if (context.state !== 'running') throw new Error(`The audio engine is ${context.state}. Reload the song and try again.`);
+      if (context.state !== 'running') throw new Error(t('player.engineState', { state: context.state }));
       const mixer = new Mixer(context, paths, title, artist, cleaned, durationLimit);
       Mixer.active = mixer;
       return mixer;
@@ -155,8 +156,8 @@ export class Mixer {
       this.duration = durationLimit && durationLimit > 0 ? Math.min(decodedDuration, durationLimit) : decodedDuration;
       this.sectionEnd = this.duration;
       this.playableEnd = decodedDuration - END_MARGIN;
-      if (!Number.isFinite(this.duration) || !(this.duration > 0)) throw new Error('These stems could not be read. Remove the song from this phone and try again.');
-      if (Math.max(...durations) - decodedDuration > .05) throw new Error(`The decoded stems are not aligned (${durations.map(d => d.toFixed(2)).join(', ')}s). Reload this song.`);
+      if (!Number.isFinite(this.duration) || !(this.duration > 0)) throw new Error(t('player.unreadable'));
+      if (Math.max(...durations) - decodedDuration > .05) throw new Error(t('player.misaligned', { details: durations.map(d => d.toFixed(2)).join(', ') }));
       this.applyGains();
       this.listen();
     } catch (failure) {
@@ -176,7 +177,7 @@ export class Mixer {
     const native = this.context.context.createFileSource({
       source: path, loop: false, volume: 1, playbackRate: this.speed, preservesPitch: true,
     });
-    if (!native) throw new Error('The audio engine is unavailable.');
+    if (!native) throw new Error(t('player.unavailable'));
     const source: FileSource = new AudioFileSourceNode(this.context, native);
     // attach()/dispose() in pinned 0.13.6 leave JS listeners registered. Own and
     // remove the native event subscriptions so changing Scene tabs releases audio.
@@ -261,7 +262,7 @@ export class Mixer {
       try { await step(); }
       catch (failure) {
         this.playing = false;
-        this.error = failure instanceof Error ? failure.message : 'Playback failed. Please reload this song.';
+        this.error = failure instanceof Error ? failure.message : t('player.failed');
         this.pauseAll();
         this.changed();
         throw failure;
@@ -328,7 +329,7 @@ export class Mixer {
       await wait(SEEK_SETTLE_MS);
       if (this.closed) return;
       await this.context.resume();
-      if (this.context.state !== 'running') throw new Error(`The audio engine is ${this.context.state}. Try Play again.`);
+      if (this.context.state !== 'running') throw new Error(t('player.engineStatePlay', { state: this.context.state }));
       const when = this.context.currentTime + START_DELAY;
       for (const source of sources) source.getFileSourceNode().start(when);
       this.startClock = when;
@@ -382,7 +383,7 @@ export class Mixer {
     } else if (Date.now() - this.lastProgressAt > 2000) {
       const progress = this.sources.map(source => source.getCurrentTime());
       if (this.lastProgress.length && progress.some((position, index) => Math.abs(position - this.lastProgress[index]) < .01)) {
-        this.system(this.run(async () => { throw new Error('Audio did not advance. Reload the song and try again.'); }));
+        this.system(this.run(async () => { throw new Error(t('player.stalled')); }));
       }
       this.lastProgress = progress;
       this.lastProgressAt = Date.now();
@@ -539,7 +540,7 @@ export class Mixer {
   setChannel(name: StemName, change: Partial<Channel>) {
     const next = { ...this.channels[name], ...change };
     if (next.useCleaned && !this.hasCleaned(name)) {
-      this.error = `The saved cleaned ${name} stem is no longer available. Playing the original instead.`;
+      this.error = t('player.cleanedMissing', { stem: t(`stem.${name}` as TextKey) });
       next.useCleaned = false;
     }
     this.channels = { ...this.channels, [name]: next };

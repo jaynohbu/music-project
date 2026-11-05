@@ -7,6 +7,7 @@ import { StemScrollView } from '../../stem-scroll';
 import { MixerView } from '../../mixer-view';
 import { IconButton, InlineEdit } from '../../mixer-console';
 import type { Mixer } from '../../player';
+import { useT } from '../../language';
 import { SceneStore } from '../../scene-store';
 import { Button, ButtonRow, errorText, useConfirm } from '../../ui';
 import { type Theme, useStyles, useTheme } from '../../theme';
@@ -16,7 +17,7 @@ export default function ScenePlayer() {
   return <SceneEditor key={id} id={id} />;
 }
 function SceneEditor({ id }: { id: string }) {
-  const styles = useStyles(makeStyles), theme = useTheme();
+  const styles = useStyles(makeStyles), theme = useTheme(), t = useT();
   const [, render] = useReducer(value => value + 1, 0);
   const [store, setStore] = useState<SceneStore | null>(null);
   const [activeId, setActiveId] = useState('');
@@ -53,7 +54,7 @@ function SceneEditor({ id }: { id: string }) {
   usePreventRemove(!!store?.dirty && !allowLeave, ({ repeat }) => {
     void (async () => {
       if (!await store!.flush()) {
-        if (!await confirm('Leave without saving?', 'Scene changes could not be saved. Stay to retry, or discard them and leave.', 'Leave')) return;
+        if (!await confirm(t('scene.leaveTitle'), t('scene.leaveMessage'), t('scene.leave'))) return;
         store!.discard();
       }
       setAllowLeave(true); repeat();
@@ -61,7 +62,7 @@ function SceneEditor({ id }: { id: string }) {
   });
   const scene = store?.scene, entry = scene?.entries.find(item => item.id === activeId);
   const index = scene?.entries.findIndex(item => item.id === activeId) ?? -1;
-  const title = (item: SceneEntry) => item.title || songs.find(song => song.jobId === item.jobId)?.title || 'Song';
+  const title = (item: SceneEntry) => item.title || songs.find(song => song.jobId === item.jobId)?.title || t('scene.song');
   const select = async (next: string, play = false) => {
     try { await mixer.current?.stop(); }
     catch (failure) { setError(errorText(failure)); return; }
@@ -87,7 +88,7 @@ function SceneEditor({ id }: { id: string }) {
     store.update(scene => ({ ...scene, entries }));
   };
   const remove = async () => {
-    if (!store || !entry || !await confirm('Remove song?', `Remove "${title(entry)}" and its settings from this scene? The Music song is not deleted.`, 'Remove')) return;
+    if (!store || !entry || !await confirm(t('scene.removeTitle'), t('scene.removeMessage', { title: title(entry) }), t('common.remove'))) return;
     await mixer.current?.stop().catch(failure => setError(errorText(failure)));
     const entries = store.scene.entries.filter(item => item.id !== entry.id);
     autoPlay.current = false;
@@ -96,7 +97,7 @@ function SceneEditor({ id }: { id: string }) {
   };
   const reloadScene = () => {
     void (async () => {
-      if (store?.dirty && !await confirm('Reload saved scene?', 'Discard unsaved changes and stop playback?', 'Reload')) return;
+      if (store?.dirty && !await confirm(t('scene.reloadTitle'), t('scene.reloadMessage'), t('scene.reload'))) return;
       store?.discard();
       await mixer.current?.stop();
       autoPlay.current = false; setError(''); setActiveId(''); setStore(null); setReload(value => value + 1);
@@ -110,27 +111,27 @@ function SceneEditor({ id }: { id: string }) {
   const add = () => {
     if (!store) return;
     const entries = songs.filter(song => selected.has(song.jobId)).map(song => ({ id: randomUUID(), jobId: song.jobId, title: song.title }));
-    if (store.scene.entries.length + entries.length > 99) { setError('A scene can have up to 99 songs.'); setPicker(false); return; }
+    if (store.scene.entries.length + entries.length > 99) { setError(t('scene.tooMany')); setPicker(false); return; }
     store.update(scene => ({ ...scene, entries: [...scene.entries, ...entries] }));
     if (!activeId) setActiveId(entries[0]?.id ?? '');
     setPicker(false);
   };
   return <StemScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
     <Stack.Screen options={{ headerTitle: () => <View style={styles.headerTitle}>
-      <Text numberOfLines={1} accessibilityRole="header" style={styles.headerText}>{scene?.name || 'Scene'}</Text>
-      {scene && <IconButton bare icon="edit" accessibilityLabel="Edit scene name" on={renaming} onPress={() => setRenaming(value => !value)} />}
+      <Text numberOfLines={1} accessibilityRole="header" style={styles.headerText}>{scene?.name || t('title.scene')}</Text>
+      {scene && <IconButton bare icon="edit" accessibilityLabel={t('scene.editName')} on={renaming} onPress={() => setRenaming(value => !value)} />}
     </View> }} />
     {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
-    {!scene ? error ? <Button label="Retry loading scene" onPress={() => { setError(''); setReload(value => value + 1); }} />
-      : <Text style={styles.description}>Loading scene…</Text> : <>
-      {renaming && <InlineEdit label="Scene name" initial={scene.name} onClose={() => setRenaming(false)}
+    {!scene ? error ? <Button label={t('scene.retryLoad')} onPress={() => { setError(''); setReload(value => value + 1); }} />
+      : <Text style={styles.description}>{t('scene.loading')}</Text> : <>
+      {renaming && <InlineEdit label={t('scene.name')} initial={scene.name} onClose={() => setRenaming(false)}
         onSave={name => { if (name.trim()) store!.update(scene => ({ ...scene, name: name.trim() })); }} />}
       <View style={styles.actions}>
-        <Text accessibilityLiveRegion="polite" style={[styles.description, { flex: 1 }]}>{store!.status}</Text>
-        <IconButton icon="reload" accessibilityLabel="Reload saved scene" onPress={reloadScene} />
+        <Text accessibilityLiveRegion="polite" style={[styles.description, { flex: 1 }]}>{t(`scene.status.${store!.status}`)}</Text>
+        <IconButton icon="reload" accessibilityLabel={t('scene.reloadSaved')} onPress={reloadScene} />
       </View>
       {!!store!.error && <><Text accessibilityRole="alert" style={styles.error}>{store!.error}</Text>
-        <Button label="Retry save" onPress={() => { void store!.flush(); }} /></>}
+        <Button label={t('scene.retrySave')} onPress={() => { void store!.flush(); }} /></>}
       <ScrollView ref={tabs} horizontal style={styles.tabs} onLayout={event => { tabWidth.current = event.nativeEvent.layout.width; reveal(activeId); }}
         onScroll={event => { tabOffset.current = event.nativeEvent.contentOffset.x; }} scrollEventThrottle={16}>
         {scene.entries.map((item, i) => <Pressable key={item.id} style={[styles.tab, i > 0 && { marginLeft: -10 }, activeId === item.id && styles.activeTab]}
@@ -140,29 +141,29 @@ function SceneEditor({ id }: { id: string }) {
           <Text numberOfLines={1} style={[styles.tabLabel, activeId === item.id && { color: theme.accent }]}>{i + 1}. {title(item)}</Text>
         </Pressable>)}
         <Pressable style={[styles.tab, styles.addTab, !!scene.entries.length && { marginLeft: -10 }]}
-          accessibilityRole="button" accessibilityLabel="Add songs to the scene" onPress={() => void openPicker()}>
+          accessibilityRole="button" accessibilityLabel={t('scene.addSongs')} onPress={() => void openPicker()}>
           <Text style={[styles.tabLabel, styles.addLabel]}>+</Text>
         </Pressable>
       </ScrollView>
       {entry ? <>
         <View style={styles.songControls}>
-          <IconButton icon="previous" accessibilityLabel="Previous song" disabled={index <= 0}
+          <IconButton icon="previous" accessibilityLabel={t('scene.previous')} disabled={index <= 0}
             onPress={() => void select(scene.entries[index - 1].id)} />
           <View style={styles.order}>
-            <IconButton icon="moveEarlier" accessibilityLabel="Move song earlier" disabled={index === 0} onPress={() => move(-1)} />
-            <Text style={styles.position} accessibilityLabel={`Song ${index + 1} of ${scene.entries.length}`}>
+            <IconButton icon="moveEarlier" accessibilityLabel={t('scene.earlier')} disabled={index === 0} onPress={() => move(-1)} />
+            <Text style={styles.position} accessibilityLabel={t('scene.position', { index: index + 1, total: scene.entries.length })}>
               {index + 1}<Text style={styles.positionTotal}> / {scene.entries.length}</Text>
             </Text>
-            <IconButton icon="moveLater" accessibilityLabel="Move song later" disabled={index === scene.entries.length - 1} onPress={() => move(1)} />
+            <IconButton icon="moveLater" accessibilityLabel={t('scene.later')} disabled={index === scene.entries.length - 1} onPress={() => move(1)} />
           </View>
-          <IconButton icon="next" accessibilityLabel="Next / skip song" disabled={index >= scene.entries.length - 1}
+          <IconButton icon="next" accessibilityLabel={t('scene.next')} disabled={index >= scene.entries.length - 1}
             onPress={() => next(false)} />
-          <IconButton icon="edit" accessibilityLabel="Edit scene song title" on={editingId === entry.id}
+          <IconButton icon="edit" accessibilityLabel={t('scene.editTitle')} on={editingId === entry.id}
             onPress={() => setEditingId(current => current === entry.id ? '' : entry.id)} />
-          <IconButton danger icon="remove" accessibilityLabel="Remove song from scene" onPress={() => void remove()} />
+          <IconButton danger icon="remove" accessibilityLabel={t('scene.removeSong')} onPress={() => void remove()} />
         </View>
-        {editingId === entry.id && <InlineEdit key={entry.id} label="Scene song title" initial={entry.title ?? ''}
-          placeholder={`${title(entry)} (blank uses Music title)`} onClose={() => setEditingId('')}
+        {editingId === entry.id && <InlineEdit key={entry.id} label={t('scene.songTitle')} initial={entry.title ?? ''}
+          placeholder={t('scene.titlePlaceholder', { title: title(entry) })} onClose={() => setEditingId('')}
           onSave={value => store!.update(scene => ({ ...scene, entries: scene.entries.map(item =>
             item.id === entry.id ? { ...item, title: value.trim() || undefined } : item) }))} />}
         <MixerView key={entry.id} entry={entry} jobId={entry.jobId} title={`${index + 1}. ${title(entry)}`}
@@ -173,19 +174,19 @@ function SceneEditor({ id }: { id: string }) {
           onReady={player => {
             if (autoPlay.current) { autoPlay.current = false; void player.play().catch(failure => setError(errorText(failure))); }
           }} />
-      </> : <Text style={styles.description}>This scene is empty. Add a song to get started.</Text>}
+      </> : <Text style={styles.description}>{t('scene.empty')}</Text>}
     </>}
     <Modal visible={picker} animationType="slide" onRequestClose={() => setPicker(false)}>
       <ScrollView contentContainerStyle={styles.picker}>
-        <Text style={styles.heading}>Add songs</Text>
+        <Text style={styles.heading}>{t('scene.pickerTitle')}</Text>
         {songs.map(song => <Pressable key={song.jobId} style={styles.choice}
           accessibilityRole="checkbox" accessibilityState={{ checked: selected.has(song.jobId) }}
           onPress={() => setSelected(current => { const next = new Set(current); if (next.has(song.jobId)) next.delete(song.jobId); else next.add(song.jobId); return next; })}>
           <Text style={styles.label}>{selected.has(song.jobId) ? '✓ ' : '○ '}{song.title}</Text>
         </Pressable>)}
-        {!songs.length && <Text style={styles.description}>No completed songs. Upload and split one from Music first.</Text>}
-        <ButtonRow><Button kind="plain" label="Cancel" onPress={() => setPicker(false)} />
-          <Button label="Add selected songs" disabled={!selected.size} onPress={add} /></ButtonRow>
+        {!songs.length && <Text style={styles.description}>{t('scene.noSongs')}</Text>}
+        <ButtonRow><Button kind="plain" label={t('common.cancel')} onPress={() => setPicker(false)} />
+          <Button label={t('scene.addSelected')} disabled={!selected.size} onPress={add} /></ButtonRow>
       </ScrollView>
     </Modal>
   </StemScrollView>;

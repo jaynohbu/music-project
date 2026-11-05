@@ -4,6 +4,8 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { HARMONY_STEMS, STEM_NAMES, getSong, type LyricLine, type SceneEntry, type SceneSettings, type Song, type StemName } from './api';
 import { addCleanedFile, holdSong, songFiles, stemPaths } from './cache';
 import { EFFECT_CONTROLS } from './effects';
+import { t as text } from './i18n';
+import { useT } from './language';
 import { LivePanel } from './live-panel';
 import { Mixer, defaultChannel } from './player';
 import { ChannelStrip, IconButton, LampSwitch, MasterFader, Timeline } from './mixer-console';
@@ -15,7 +17,7 @@ import { Button, ButtonRow, Centered, errorText, useConfirm } from './ui';
 import { snapshot, restore } from './mixer-settings';
 import { HarmonyStrip, LyricsEditor, LyricsStrip } from './score-view';
 import { LYRICS_REPLAY_LEAD, firstChange } from './score';
-import { CHORDS_NOTE, LYRICS_NOTE, hasMusic, regenerateLabel, useSongTasks } from './song-tasks';
+import { hasMusic, regenerateLabel, useSongTasks } from './song-tasks';
 import { type Theme, useStyles, useTheme } from './theme';
 
 interface MixerProps {
@@ -29,7 +31,7 @@ export function MixerView(props: MixerProps) {
   return focused ? <MountedMixer {...props} /> : null;
 }
 function MountedMixer({ jobId, title, entry, onSettings, onEnded, onReady, onSong, onMixer }: MixerProps) {
-  const styles = useStyles(makeStyles);
+  const styles = useStyles(makeStyles), t = useT();
   const [mixer, setMixer] = useState<Mixer | null>(null);
   const [song, setSong] = useState<Song | null>(null);
   const [fraction, setFraction] = useState<number | null>(null);
@@ -42,7 +44,7 @@ function MountedMixer({ jobId, title, entry, onSettings, onEnded, onReady, onSon
     callbacks.current = { onSettings, onEnded, onReady, onSong, onMixer, title };
     initial.current = entry?.settings;
   }, [onSettings, onEnded, onReady, onSong, onMixer, entry?.settings, title]);
-  useEffect(() => { mixer?.setTitle(title || song?.title || 'Untitled song'); }, [mixer, title, song?.title]);
+  useEffect(() => { mixer?.setTitle(title || song?.title || t('common.untitledSong')); }, [mixer, title, song?.title, t]);
   useEffect(() => {
     let cancelled = false, player: Mixer | null = null;
     let unsubscribe: (() => void) | undefined, unend: (() => void) | undefined;
@@ -53,7 +55,7 @@ function MountedMixer({ jobId, title, entry, onSettings, onEnded, onReady, onSon
       setSong(found); callbacks.current.onSong?.(found);
       const files = await songFiles(found, progress => { if (!cancelled) setFraction(progress); });
       if (cancelled) return;
-      player = await Mixer.create(stemPaths(jobId, files.original), callbacks.current.title || found.title || 'Untitled song', found.author,
+      player = await Mixer.create(stemPaths(jobId, files.original), callbacks.current.title || found.title || text('common.untitledSong'), found.author,
         stemPaths(jobId, files.cleaned), found.duration);
       if (cancelled) { await player.close(); return; }
       if (initial.current) restore(player, initial.current);
@@ -87,9 +89,9 @@ function MountedMixer({ jobId, title, entry, onSettings, onEnded, onReady, onSon
   }, [jobId, attempt]);
   if (error) return <View style={styles.card}>
     <Text accessibilityRole="alert" style={styles.error}>{error}</Text>
-    <Button label="Retry loading audio" onPress={() => { setMixer(null); setFraction(null); setPeaks({}); setError(''); setAttempt(value => value + 1); }} />
+    <Button label={t('mixer.retryLoad')} onPress={() => { setMixer(null); setFraction(null); setPeaks({}); setError(''); setAttempt(value => value + 1); }} />
   </View>;
-  if (!mixer) return <Centered><Text style={styles.detail}>{fraction === null ? 'Loading song…' : `Downloading stems ${Math.round(fraction * 100)}%`}</Text></Centered>;
+  if (!mixer) return <Centered><Text style={styles.detail}>{fraction === null ? t('mixer.loading') : t('mixer.downloading', { percent: Math.round(fraction * 100) })}</Text></Centered>;
   return <MixerControls mixer={mixer} song={song} peaks={peaks} />;
 }
 
@@ -97,7 +99,7 @@ function MountedMixer({ jobId, title, entry, onSettings, onEnded, onReady, onSon
 let liveShown = false;
 
 export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; song?: Song | null; peaks?: StemPeaks }) {
-  const styles = useStyles(makeStyles), theme = useTheme();
+  const styles = useStyles(makeStyles), theme = useTheme(), t = useT();
   const [, refresh] = useReducer(count => count + 1, 0);
   const [position, setPosition] = useState(0);
   const [open, setOpen] = useState<StemName>('vocals');
@@ -168,7 +170,7 @@ export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; son
         if (result) setCleanedPeaks(current => ({ ...current, [name]: result }));
       })().catch(failure => {
         adding.current.delete(name);
-        setCleanErrors(current => ({ ...current, [name]: `Could not load the cleaned version: ${errorText(failure)}` }));
+        setCleanErrors(current => ({ ...current, [name]: text('mixer.cleanLoadFailed', { error: errorText(failure) }) }));
       });
     }
   }, [jobId, finished, mixer, cleanRetry]);
@@ -185,7 +187,7 @@ export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; son
     finally { setBusy(false); }
   };
   const reset = async () => {
-    if (!await confirm('Reset song settings?', 'Reset all effects, mute/solo, master volume, selection and loop? The song title stays unchanged.', 'Reset song')) return;
+    if (!await confirm(t('mixer.resetTitle'), t('mixer.resetMessage'), t('mixer.resetSong'))) return;
     await run(async () => { await mixer.stop(); mixer.reset(); });
   };
   const editLyrics = () => void run(async () => { await mixer.pause(); setEditingLyrics(true); });
@@ -207,37 +209,37 @@ export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; son
     {editingLyrics && tasks.lyrics && <LyricsEditor lines={tasks.lyrics} duration={mixer.duration}
       onSave={saveLyrics} onClose={() => setEditingLyrics(false)} />}
     {song && <View style={styles.liveToggle}>
-      <LampSwitch label="Live input" on={liveOpen} disabled={recording} onPress={toggleLive}
-        accessibilityLabel="Show live input to play along with your instrument" />
-      {!liveOpen && mixer.hasTake && <Text style={styles.liveNote}>Your take plays with the band.</Text>}
+      <LampSwitch label={t('mixer.liveInput')} on={liveOpen} disabled={recording} onPress={toggleLive}
+        accessibilityLabel={t('mixer.liveInputHint')} />
+      {!liveOpen && mixer.hasTake && <Text style={styles.liveNote}>{t('mixer.takePlays')}</Text>}
     </View>}
     {song && <LivePanel key={song.jobId} open={liveOpen} mixer={mixer} song={song} tasks={tasks} position={position} onRecording={setRecording} />}
     {STEM_NAMES.map(name => {
       const channel = mixer.channel(name);
-      const label = name[0].toUpperCase() + name.slice(1);
+      const label = t(`stem.${name}`);
       const expanded = open === name;
       const replaced = mixer.replacedStem === name;
       const live = mixer.isPlaying && !channel.muted && !replaced && !(soloing && !channel.solo);
       return <View key={name} style={styles.stem} ref={view => { stems.current[name] = view; }}>
         <View style={styles.stemHeader}>
           <Text style={styles.stemTitle}>{label}</Text>
-          {mixer.hasCleaned(name) && <View style={styles.versions} accessibilityRole="radiogroup" accessibilityLabel={`${label} version`}>
+          {mixer.hasCleaned(name) && <View style={styles.versions} accessibilityRole="radiogroup" accessibilityLabel={t('mixer.version', { stem: label })}>
             {([false, true] as const).map(cleaned => <Pressable key={String(cleaned)} accessibilityRole="radio"
               accessibilityState={{ checked: channel.useCleaned === cleaned }}
               onPress={() => mixer.setChannel(name, { useCleaned: cleaned })}
               style={[styles.version, channel.useCleaned === cleaned && styles.versionOn]}>
-              <Text style={[styles.versionText, channel.useCleaned === cleaned && { color: theme.onAccent }]}>{cleaned ? 'Cleaned' : 'Original'}</Text>
+              <Text style={[styles.versionText, channel.useCleaned === cleaned && { color: theme.onAccent }]}>{cleaned ? t('mixer.cleaned') : t('mixer.original')}</Text>
             </Pressable>)}
           </View>}
           {!mixer.hasCleaned(name) && song && (cleanErrors[name]
             ? <Pressable onPress={() => { setCleanErrors(({ [name]: _, ...others }) => others); setCleanRetry(value => value + 1); }}
-              accessibilityRole="button" accessibilityLabel={`Load cleaned ${label}`} style={styles.taskButton}>
-              <Text style={styles.taskButtonText}>Load cleaned</Text>
+              accessibilityRole="button" accessibilityLabel={t('mixer.loadCleanedFor', { stem: label })} style={styles.taskButton}>
+              <Text style={styles.taskButtonText}>{t('mixer.loadCleaned')}</Text>
             </Pressable>
             : <Pressable onPress={() => tasks.clean(name)} disabled={locked || tasks.cleaning(name)}
-              accessibilityRole="button" accessibilityLabel={`Clean ${label}`} accessibilityState={{ disabled: busy || tasks.cleaning(name) }}
+              accessibilityRole="button" accessibilityLabel={t('mixer.cleanFor', { stem: label })} accessibilityState={{ disabled: busy || tasks.cleaning(name) }}
               style={[styles.taskButton, (busy || tasks.cleaning(name)) && { opacity: 0.5 }]}>
-              <Text style={styles.taskButtonText}>{tasks.cleaning(name) ? 'Cleaning...' : 'Clean'}</Text>
+              <Text style={styles.taskButtonText}>{tasks.cleaning(name) ? t('mixer.cleaning') : t('mixer.clean')}</Text>
             </Pressable>)}
         </View>
         {!!(tasks.cleanFailure(name) || cleanErrors[name]) &&
@@ -250,61 +252,59 @@ export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; son
           onSeek={time => void run(() => mixer.seek(time))}
           onReset={() => mixer.setSection(0, mixer.duration)} />
         <Pressable onPress={() => { if (!expanded) openStem(name); }} style={styles.consoleHeading}
-          accessibilityRole="button" accessibilityLabel={`${label} mixer controls`} accessibilityState={{ expanded }}>
+          accessibilityRole="button" accessibilityLabel={t('mixer.controlsFor', { stem: label })} accessibilityState={{ expanded }}>
           <View style={styles.consoleTitleRow}>
             <Text style={styles.consoleChevron}>{expanded ? '▾' : '▸'}</Text>
-            <Text style={styles.consoleTitle}>Mixer</Text>
-            {!expanded && <Text style={styles.consoleAction}>Show controls</Text>}
+            <Text style={styles.consoleTitle}>{t('mixer.mixer')}</Text>
+            {!expanded && <Text style={styles.consoleAction}>{t('mixer.showControls')}</Text>}
           </View>
           <View style={styles.consoleStatus}>
             <Text style={styles.statusText}>{Math.round(channel.volume * 100)}%</Text>
-            {channel.muted && <Text style={styles.statusState}>Muted</Text>}
-            {channel.solo && <Text style={styles.statusState}>Solo</Text>}
-            {replaced && <Text style={styles.statusState}>Your part</Text>}
+            {channel.muted && <Text style={styles.statusState}>{t('mixer.muted')}</Text>}
+            {channel.solo && <Text style={styles.statusState}>{t('mixer.solo')}</Text>}
+            {replaced && <Text style={styles.statusState}>{t('mixer.yourPart')}</Text>}
             <View style={[styles.led, live && styles.ledOn]} />
-            <Text style={styles.statusText}>{channel.bypassed ? 'FX off' : 'FX on'}</Text>
+            <Text style={styles.statusText}>{channel.bypassed ? t('mixer.fxOff') : t('mixer.fxOn')}</Text>
           </View>
         </Pressable>
         {expanded && <View style={styles.console}>
           <View style={styles.transport}>
             <IconButton primary icon={mixer.isPlaying ? 'pause' : 'play'} disabled={locked}
-              accessibilityLabel={`${mixer.isPlaying ? 'Pause' : inside ? 'Resume' : 'Play'} all stems`}
+              accessibilityLabel={t(mixer.isPlaying ? 'mixer.pauseAll' : inside ? 'mixer.resumeAll' : 'mixer.playAll')}
               onPress={() => void run(() => mixer.isPlaying ? mixer.pause() : mixer.play())} />
             <IconButton icon="stop" disabled={locked || (!mixer.isPlaying && position === mixer.sectionStart)}
-              accessibilityLabel="Stop all stems" onPress={() => void run(() => mixer.stop())} />
-            <IconButton icon="mute" accessibilityLabel={`Mute ${label}`} on={channel.muted}
+              accessibilityLabel={t('mixer.stopAll')} onPress={() => void run(() => mixer.stop())} />
+            <IconButton icon="mute" accessibilityLabel={t('mixer.muteStem', { stem: label })} on={channel.muted}
               onPress={() => mixer.setChannel(name, { muted: !channel.muted })} />
-            <IconButton icon="muteAll" accessibilityLabel="Mute all stems" on={allMuted}
+            <IconButton icon="muteAll" accessibilityLabel={t('mixer.muteAll')} on={allMuted}
               onPress={() => STEM_NAMES.forEach(stem => mixer.setChannel(stem, { muted: !allMuted }))} />
-            <IconButton icon="solo" accessibilityLabel={`Solo ${label}`} on={channel.solo}
+            <IconButton icon="solo" accessibilityLabel={t('mixer.soloStem', { stem: label })} on={channel.solo}
               onPress={() => mixer.setChannel(name, { solo: !channel.solo })} />
-            <IconButton icon="loop" accessibilityLabel="Loop all stems" on={mixer.loop}
+            <IconButton icon="loop" accessibilityLabel={t('mixer.loopAll')} on={mixer.loop}
               onPress={() => mixer.setLoop(!mixer.loop)} />
-            <IconButton icon="reset" accessibilityLabel="Reset song settings" onPress={() => void reset()} />
+            <IconButton icon="reset" accessibilityLabel={t('mixer.resetSettings')} onPress={() => void reset()} />
           </View>
           <MasterFader value={Math.round(mixer.volume * 100)} onChange={value => mixer.setVolume(value / 100)} />
           <ScrollView horizontal style={styles.channels} contentContainerStyle={styles.channelRow}
-            accessibilityLabel={`${label} faders; scroll horizontally`}>
+            accessibilityLabel={t('mixer.faders', { stem: label })}>
             {EFFECT_CONTROLS.map(control => {
               const value = control.key === 'volume' ? Math.round(channel.volume * 100) : channel[control.key];
               const disabled = channel.bypassed && control.key !== 'volume';
-              return <ChannelStrip key={control.key} label={control.label} display={displayValue(control.key, value)}
+              return <ChannelStrip key={control.key} label={t(`effect.${control.key}`)} display={displayValue(control.key, value, t('mixer.center'))}
                 value={value} min={control.min} max={control.max} step={control.step} disabled={disabled}
-                note={disabled ? 'Bypassed' : UNITS[control.key]}
+                note={disabled ? t('mixer.bypassed') : UNITS[control.key]}
                 onChange={next => mixer.setChannel(name, { [control.key]: control.key === 'volume' ? next / 100 : next })} />;
             })}
           </ScrollView>
           <ButtonRow style={styles.switches}>
-            <LampSwitch label="Effects bypass" accessibilityLabel={`${label} effects bypass`} on={channel.bypassed}
+            <LampSwitch label={t('mixer.bypass')} accessibilityLabel={t('mixer.bypassFor', { stem: label })} on={channel.bypassed}
               onPress={() => mixer.setChannel(name, { bypassed: !channel.bypassed })} />
-            <LampSwitch label="Reset" accessibilityLabel={`${label} reset`} on={false}
+            <LampSwitch label={t('common.reset')} accessibilityLabel={t('mixer.resetFor', { stem: label })} on={false}
               onPress={() => mixer.setChannel(name, { ...defaultChannel(), useCleaned: channel.useCleaned })} />
           </ButtonRow>
           <Text style={styles.consoleNote}>
-            {replaced ? 'Silent while you play this part. Turn it back on in the Live panel.'
-              : channel.bypassed ? 'Effects bypassed. Volume, mute and solo still apply.'
-              : soloing && !channel.solo ? 'Silent while another stem is soloed.'
-                : 'All effects apply to this stem. Reset restores its faders and buttons only.'}
+            {t(replaced ? 'mixer.noteReplaced' : channel.bypassed ? 'mixer.noteBypassed'
+              : soloing && !channel.solo ? 'mixer.noteSoloed' : 'mixer.noteDefault')}
           </Text>
         </View>}
       </View>;
@@ -317,21 +317,21 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
   name: StemName; label: string; cleaned: boolean; tasks: ReturnType<typeof useSongTasks>; position: number;
   disabled: boolean; onEditLyrics: () => void;
 }) {
-  const styles = useStyles(makeStyles);
+  const styles = useStyles(makeStyles), t = useT();
   const vocals = name === 'vocals', harmonic = HARMONY_STEMS.includes(name);
   if (!vocals && !harmonic) return null;
   const parts = tasks.parts, part = parts?.[name];
   const regenerating = harmonic && tasks.regenerating(name);
   const action = vocals
-    ? tasks.lyrics ? { label: 'Edit lyrics', onPress: onEditLyrics }
-      : tasks.findingLyrics ? { label: 'Finding lyrics...' } : { label: 'Lyrics', onPress: tasks.findLyrics }
-    : !parts ? tasks.findingChords ? { label: 'Finding notes...' }
-      : { label: name === 'drums' ? 'Drum score' : 'Chords & melody', onPress: tasks.findChords,
-        hint: 'Find chords and melody for guitar, piano, other and bass, and the drum score' }
-      : regenerating ? { label: 'Regenerating...' }
-        : { label: regenerateLabel(name), onPress: () => tasks.regenerate(name, cleaned), hint: `${regenerateLabel(name)} for ${label} only` };
+    ? tasks.lyrics ? { label: t('tasks.editLyrics'), onPress: onEditLyrics }
+      : tasks.findingLyrics ? { label: t('tasks.findingLyrics') } : { label: t('tasks.lyrics'), onPress: tasks.findLyrics }
+    : !parts ? tasks.findingChords ? { label: t('tasks.findingNotes') }
+      : { label: t(name === 'drums' ? 'tasks.drumScore' : 'tasks.chordsMelody'), onPress: tasks.findChords, hint: t('tasks.findHint') }
+      : regenerating ? { label: t('tasks.regenerating') }
+        : { label: regenerateLabel(name), onPress: () => tasks.regenerate(name, cleaned),
+          hint: t('tasks.regenerateFor', { action: regenerateLabel(name), stem: label }) };
   const failure = vocals ? tasks.lyricsFailure : tasks.chordsFailure ?? tasks.partFailure(name);
-  const note = vocals ? !tasks.lyrics && tasks.findingLyrics && LYRICS_NOTE : (parts ? regenerating : tasks.findingChords) && CHORDS_NOTE;
+  const note = vocals ? !tasks.lyrics && tasks.findingLyrics && t('tasks.lyricsNote') : (parts ? regenerating : tasks.findingChords) && t('tasks.chordsNote');
   return <View>
     <View style={styles.taskRow}>
       <Pressable onPress={action.onPress} disabled={!action.onPress || disabled} accessibilityRole="button"
@@ -344,11 +344,11 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
     {!!note && <Text accessibilityRole="text" style={styles.taskNote}>{note}</Text>}
     {vocals && tasks.lyrics && (tasks.lyrics.length
       ? <LyricsStrip lines={tasks.lyrics} time={position} />
-      : <Text style={styles.taskHint}>No lyrics were found in this stem.</Text>)}
+      : <Text style={styles.taskHint}>{t('tasks.noLyrics')}</Text>)}
     {harmonic && parts && (name === 'drums' && !part && !regenerating
-      ? <Text style={styles.taskHint}>Press Regenerate drum score to write this song&apos;s drums.</Text>
+      ? <Text style={styles.taskHint}>{t('tasks.pressDrums')}</Text>
       : hasMusic(part) && tasks.grid ? <HarmonyStrip part={part!} stem={name} grid={tasks.grid} time={position} />
-        : part ? <Text style={styles.taskHint}>No clear chords or notes were found in this stem.</Text> : null)}
+        : part ? <Text style={styles.taskHint}>{t('tasks.noChords')}</Text> : null)}
   </View>;
 }
 
@@ -356,8 +356,8 @@ type ControlKey = (typeof EFFECT_CONTROLS)[number]['key'];
 const UNITS: Record<ControlKey, string> = {
   volume: '%', preGain: '%', compression: '%', distortion: '%', bass: 'dB', mid: 'dB', treble: 'dB', pan: 'L / R', reverb: '%',
 };
-function displayValue(key: ControlKey, value: number) {
-  if (key === 'pan') return value === 0 ? 'Center' : `${Math.abs(value)}${value < 0 ? 'L' : 'R'}`;
+function displayValue(key: ControlKey, value: number, center: string) {
+  if (key === 'pan') return value === 0 ? center : `${Math.abs(value)}${value < 0 ? 'L' : 'R'}`;
   return UNITS[key] === 'dB' ? `${value} dB` : `${value}%`;
 }
 

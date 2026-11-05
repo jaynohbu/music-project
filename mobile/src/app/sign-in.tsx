@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useT } from '../language';
 import { useSession } from '../session';
 import { Button, errorText } from '../ui';
 import { type Theme, useStyles, useTheme } from '../theme';
 
 export default function SignIn() {
-  const styles = useStyles(makeStyles), theme = useTheme();
+  const styles = useStyles(makeStyles), theme = useTheme(), t = useT();
   const { state, email, setEmail, retry, continueWith, changeEmail } = useSession();
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
@@ -35,29 +36,29 @@ export default function SignIn() {
         <Text style={styles.brand}>Sorituh</Text>
         {state.name === 'offline' && <>
           <Text style={styles.text}>{state.message}</Text>
-          <Button label="Try again" onPress={retry} />
+          <Button label={t('common.tryAgain')} onPress={retry} />
         </>}
         {state.name === 'email' && <>
-          <Text style={styles.text}>{state.notice ?? 'Enter your email to get started.'}</Text>
+          <Text style={styles.text}>{state.notice ?? t('signIn.start')}</Text>
           <TextInput
-            style={styles.input} placeholderTextColor={theme.muted} value={email} onChangeText={setEmail} placeholder="Email"
+            style={styles.input} placeholderTextColor={theme.muted} value={email} onChangeText={setEmail} placeholder={t('signIn.email')}
             autoCapitalize="none" autoComplete="email" autoCorrect={false} keyboardType="email-address"
             textContentType="emailAddress" editable={!busy} maxLength={254}
           />
           {!!error && <Text style={styles.error} accessibilityRole="alert">{error}</Text>}
-          <Button label={busy ? 'Please wait...' : 'Continue'} disabled={busy || !email.trim()} onPress={sendCode} />
+          <Button label={busy ? t('common.pleaseWait') : t('signIn.continue')} disabled={busy || !email.trim()} onPress={sendCode} />
         </>}
         {state.name === 'code' && <>
-          <Text style={styles.text}>This email already has an account. Enter the six-digit code we sent to {email}.</Text>
+          <Text style={styles.text}>{t('signIn.codePrompt', { email })}</Text>
           <TextInput
-            style={styles.input} placeholderTextColor={theme.muted} value={code} onChangeText={setCode} placeholder="Six-digit code"
+            style={styles.input} placeholderTextColor={theme.muted} value={code} onChangeText={setCode} placeholder={t('signIn.code')}
             keyboardType="number-pad" autoComplete="one-time-code" textContentType="oneTimeCode"
             editable={!busy} maxLength={6}
           />
           {!!error && <Text style={styles.error} accessibilityRole="alert">{error}</Text>}
-          <Button label={busy ? 'Please wait...' : 'Sign in'} disabled={busy || code.length !== 6} onPress={verify} />
-          <Button kind="plain" label="Send a new code" disabled={busy} onPress={sendCode} />
-          <Button kind="plain" label="Use a different email" disabled={busy}
+          <Button label={busy ? t('common.pleaseWait') : t('signIn.signIn')} disabled={busy || code.length !== 6} onPress={verify} />
+          <Button kind="plain" label={t('signIn.newCode')} disabled={busy} onPress={sendCode} />
+          <Button kind="plain" label={t('signIn.otherEmail')} disabled={busy}
             onPress={() => { setError(''); changeEmail(); }} />
         </>}
       </KeyboardAvoidingView>

@@ -4,6 +4,7 @@ import {
 } from './auth';
 import { setTokenSource } from './api';
 import { clearCache } from './cache';
+import { t } from './i18n';
 
 export type SessionState =
   | { name: 'loading' }
@@ -76,7 +77,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       if (failure instanceof RejectedError) {
         setState({ name: 'email', notice: failure.message });
       } else {
-        setState({ name: 'offline', message: failure instanceof Error ? failure.message : 'Unable to connect.' });
+        setState({ name: 'offline', message: failure instanceof Error ? failure.message : t('session.offline') });
       }
     }
   }, [restore, ready]);
@@ -87,7 +88,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const token = useCallback(async () => {
     const current = session.current;
-    if (!current) throw new Error('Sign in to continue.');
+    if (!current) throw new Error(t('session.signInFirst'));
     if (current.expiresAt - Date.now() > EARLY_MS) return current.idToken;
     pending.current ??= refresh(current)
       .catch(async failure => {
@@ -96,7 +97,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         const restored = await restore();
         if (!restored) {
           session.current = null;
-          setState({ name: 'email', notice: 'Your session expired. Sign in again.' });
+          setState({ name: 'email', notice: t('session.expired') });
           throw failure;
         }
         return restored;

@@ -4,15 +4,17 @@ import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { MAX_UPLOAD_BYTES, UPLOAD_EXTENSIONS, type Upload, createUpload, startSplit, toNumber } from '../api';
+import type { TextKey } from '../i18n';
+import { useT } from '../language';
 import { Button, errorText, formatBytes } from '../ui';
 import { type Theme, ThemeBackground, useStyles, useTheme } from '../theme';
 
 // Stores that sell songs as DRM-free files, for songs the user does not already have.
 const STORES = [
-  { name: 'Amazon Digital Music', url: 'https://www.amazon.com/MP3-Music-Download/b?node=163856011', note: 'Buy songs and albums and download them as MP3. Separate from Amazon Music subscriptions.' },
-  { name: 'Bandcamp', url: 'https://bandcamp.com', note: 'Lots of independent music. After buying, choose MP3 320 kbps, WAV, FLAC and more.' },
-  { name: '7digital', url: 'https://us.7digital.com', note: 'A download store selling MP3 and high-resolution files.' },
-];
+  { name: 'Amazon Digital Music', url: 'https://www.amazon.com/MP3-Music-Download/b?node=163856011', note: 'store.amazon' },
+  { name: 'Bandcamp', url: 'https://bandcamp.com', note: 'store.bandcamp' },
+  { name: '7digital', url: 'https://us.7digital.com', note: 'store.7digital' },
+] satisfies { name: string; url: string; note: TextKey }[];
 
 interface Picked { file: File; name: string; bytes: number }
 
@@ -24,7 +26,7 @@ type Step =
   | { name: 'retry'; jobId: string };
 
 export default function UploadSong() {
-  const styles = useStyles(makeStyles), theme = useTheme();
+  const styles = useStyles(makeStyles), theme = useTheme(), t = useT();
   const [picked, setPicked] = useState<Picked | null>(null);
   const [title, setTitle] = useState('');
   const [step, setStep] = useState<Step>({ name: 'choose' });
@@ -42,13 +44,13 @@ export default function UploadSong() {
     if (result.canceled) return;
     const asset = result.assets[0];
     if (!UPLOAD_EXTENSIONS.test(asset.name)) {
-      setError('Choose a WAV, MP3, M4A, FLAC, OGG or AAC file.');
+      setError(t('upload.badType'));
       return;
     }
     const file = new File(asset.uri);
     const bytes = toNumber(file.size);
     if (bytes > MAX_UPLOAD_BYTES) {
-      setError(`This file is ${formatBytes(bytes)}. Files can be up to 55 MB.`);
+      setError(t('upload.tooBig', { size: formatBytes(bytes) }));
       return;
     }
     setPicked({ file, name: asset.name, bytes });
@@ -92,18 +94,15 @@ export default function UploadSong() {
     // A modal sits over the song list, so it brings its own backdrop instead of the transparent screen.
     <ThemeBackground><KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.fill}>
     <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
-      <Text style={styles.text}>
-        Choose an audio file up to 55 MB and 15 minutes long. It is split into vocals, guitar, bass, piano, drums
-        and other.
-      </Text>
+      <Text style={styles.text}>{t('upload.intro')}</Text>
       {picked
         ? <Text style={styles.file} numberOfLines={2}>{picked.name} · {formatBytes(picked.bytes)}</Text>
         : null}
       {step.name === 'choose' && <Button kind={picked ? 'plain' : 'primary'}
-        label={picked ? 'Choose another file' : 'Choose a file'} onPress={() => void choose()} />}
+        label={picked ? t('upload.chooseAnother') : t('upload.choose')} onPress={() => void choose()} />}
       {picked && (
         <TextInput
-          style={styles.input} placeholderTextColor={theme.muted} value={title} onChangeText={setTitle} placeholder="Title"
+          style={styles.input} placeholderTextColor={theme.muted} value={title} onChangeText={setTitle} placeholder={t('upload.title')}
           maxLength={200} editable={step.name === 'choose'}
         />
       )}
@@ -113,17 +112,17 @@ export default function UploadSong() {
           <View style={[styles.bar, { width: `${Math.round(step.fraction * 100)}%` }]} />
         </View>
       )}
-      {picked && step.name === 'choose' && <Button label="Upload and split" onPress={() => void send()} />}
-      {busy && <Text style={styles.text}>{step.name === 'uploading' ? 'Uploading...' : 'Starting the split...'}</Text>}
-      {step.name === 'retry' && <Button label="Try again" onPress={() => void split(step.jobId)} />}
+      {picked && step.name === 'choose' && <Button label={t('upload.send')} onPress={() => void send()} />}
+      {busy && <Text style={styles.text}>{step.name === 'uploading' ? t('upload.uploading') : t('upload.starting')}</Text>}
+      {step.name === 'retry' && <Button label={t('common.tryAgain')} onPress={() => void split(step.jobId)} />}
       {!picked && <View style={styles.stores}>
-        <Text style={styles.storesTitle}>Need a song file?</Text>
-        <Text style={styles.note}>Buy a download from one of these stores, save it to Files, then choose it above. Songs from streaming subscriptions cannot be used.</Text>
-        {STORES.map(store => <Pressable key={store.name} accessibilityRole="link" accessibilityHint="Opens in your browser"
+        <Text style={styles.storesTitle}>{t('upload.storesTitle')}</Text>
+        <Text style={styles.note}>{t('upload.storesNote')}</Text>
+        {STORES.map(store => <Pressable key={store.name} accessibilityRole="link" accessibilityHint={t('upload.opensBrowser')}
           onPress={() => void Linking.openURL(store.url).catch(failure => setError(errorText(failure)))}
           style={({ pressed }) => [styles.store, pressed && { opacity: .7 }]}>
           <Text style={styles.storeName}>{store.name} ↗</Text>
-          <Text style={styles.note}>{store.note}</Text>
+          <Text style={styles.note}>{t(store.note)}</Text>
         </Pressable>)}
       </View>}
     </ScrollView>

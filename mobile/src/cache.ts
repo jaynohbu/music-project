@@ -2,6 +2,7 @@
 // of truth, so anything here can be deleted and fetched again.
 import { Directory, File, Paths } from 'expo-file-system';
 import { STEM_NAMES, type Song, type StemName, getSong, toNumber } from './api';
+import { t } from './i18n';
 
 const MAX_SONGS = 20;
 const MAX_BYTES = 2_000_000_000;
@@ -84,7 +85,7 @@ export function cacheSize() {
 }
 
 export function clearCache() {
-  if (inUse.size) throw new Error('Audio is still open or downloading. Close the mixer, wait for downloads to finish, then try again.');
+  if (inUse.size) throw new Error(t('cache.inUse'));
   if (root.exists) root.delete();
   index = null;
 }
@@ -145,7 +146,7 @@ async function downloadSong(song: Song, onProgress: (fraction: number) => void):
   // Signed links last an hour, so get fresh ones for the download.
   const stems = fresh.stems;
   if (fresh.status !== 'completed' || !stems || STEM_NAMES.some(name => !stems[name])) {
-    throw new Error('This song is not ready to play.');
+    throw new Error(t('cache.notReady'));
   }
   const freshVersion = fresh.playVersion ?? 'wav';
   const estimate = (fresh.duration ?? 900) * (freshVersion === 'wav' ? RATE.wav : RATE.aac) * (1 + restorations.length / 6);
@@ -156,7 +157,7 @@ async function downloadSong(song: Song, onProgress: (fraction: number) => void):
     evict(0, 0);
     await save();
     if (free() < estimate + DISK_MARGIN) {
-      throw new Error('There is not enough free space on this phone to play this song.');
+      throw new Error(t('cache.noSpace'));
     }
   }
 
@@ -165,7 +166,7 @@ async function downloadSong(song: Song, onProgress: (fraction: number) => void):
   const assets = [
     ...STEM_NAMES.map(stem => ({ stem, name: stem, url: stems[stem]!.playUrl, cleaned: false })),
     ...restorations.map(item => {
-      if (!item.playUrl) throw new Error('A cleaned stem has no playback file. Reload the song.');
+      if (!item.playUrl) throw new Error(t('cache.noCleanedFile'));
       return { stem: item.stem, name: `cleaned-${item.stem}`, url: item.playUrl, cleaned: true };
     }),
   ];
@@ -193,7 +194,7 @@ async function downloadSong(song: Song, onProgress: (fraction: number) => void):
         },
       });
       const file = await task.downloadAsync();
-      if (!file || toNumber(file.size) < MIN_STEM_BYTES) throw new Error('A stem failed to download. Please try again.');
+      if (!file || toNumber(file.size) < MIN_STEM_BYTES) throw new Error(t('cache.stemFailed'));
       if (asset.cleaned) cleaned[asset.stem] = fileName; else files[asset.stem] = fileName;
     }));
     const failure = results.find(result => result.status === 'rejected');
@@ -216,11 +217,11 @@ async function downloadSong(song: Song, onProgress: (fraction: number) => void):
 export async function addCleanedFile(jobId: string, stem: StemName): Promise<string> {
   const entries = load();
   const entry = entries[jobId];
-  if (!entry) throw new Error('This song is not on the phone. Reload the song.');
+  if (!entry) throw new Error(t('cache.notOnPhone'));
   const fresh = await getSong(jobId);
   const restorations = (fresh.restorations ?? []).filter(item => item.status === 'completed');
   const item = restorations.find(restoration => restoration.stem === stem);
-  if (!item?.playUrl) throw new Error('The cleaned stem has no playback file yet. Reload the song.');
+  if (!item?.playUrl) throw new Error(t('cache.cleanedNotYet'));
   const directory = songDirectory(jobId);
   const fileName = `cleaned-${stem}.${extension(item.playUrl)}`;
   const target = new File(directory, fileName);
@@ -229,7 +230,7 @@ export async function addCleanedFile(jobId: string, stem: StemName): Promise<str
   const file = await File.createDownloadTask(item.playUrl, partial, { sessionType: 'foreground' }).downloadAsync();
   if (!file || toNumber(file.size) < MIN_STEM_BYTES) {
     if (partial.exists) partial.delete();
-    throw new Error('The cleaned stem failed to download. Please try again.');
+    throw new Error(t('cache.cleanedFailed'));
   }
   if (target.exists) target.delete();
   partial.rename(fileName);

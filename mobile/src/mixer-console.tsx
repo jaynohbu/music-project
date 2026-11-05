@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { PanResponder, Pressable, StyleSheet, Text, TextInput, View, type GestureResponderEvent, type PanResponderGestureState } from 'react-native';
 import Svg, { Path, Rect } from 'react-native-svg';
+import { useT } from './language';
 import { type Theme, useStyles, useTheme } from './theme';
 
 // Visual parity with the website mixer (web/src/styles.css: marker rail, waveform, console faders).
@@ -43,7 +44,7 @@ export function Timeline({ label, duration, start, end, position, peaks, disable
   label: string; duration: number; start: number; end: number; position: number; peaks?: number[]; disabled?: boolean;
   onSection: (start: number, end: number) => void; onSeek: (time: number) => void; onReset: () => void;
 }) {
-  const styles = useStyles(makeStyles), { start: START, end: END, playhead: PLAYHEAD, waveBar, waveBarDim } = useTheme();
+  const styles = useStyles(makeStyles), { start: START, end: END, playhead: PLAYHEAD, waveBar, waveBarDim } = useTheme(), t = useT();
   const [width, setWidth] = useState(0);
   const [scrub, setScrub] = useState<number | null>(null);
   const origin = useRef({ value: 0, x: 0 });
@@ -79,7 +80,7 @@ export function Timeline({ label, duration, start, end, position, peaks, disable
   };
   const adjustable = (kind: 'start' | 'end' | 'playhead', value: number, min: number, max: number) => ({
     accessible: true, accessibilityRole: 'adjustable' as const,
-    accessibilityValue: { min: Math.round(min), max: Math.round(max), now: Math.round(value), text: `${value.toFixed(2)} seconds` },
+    accessibilityValue: { min: Math.round(min), max: Math.round(max), now: Math.round(value), text: t('console.seconds', { value: value.toFixed(2) }) },
     accessibilityActions: [{ name: 'increment' as const }, { name: 'decrement' as const }],
     onAccessibilityAction: (event: { nativeEvent: { actionName: string } }) =>
       nudge(kind, event.nativeEvent.actionName === 'increment' ? 1 : -1),
@@ -90,19 +91,19 @@ export function Timeline({ label, duration, start, end, position, peaks, disable
   return <View style={styles.editor}>
     <View style={styles.rail} onLayout={event => setWidth(event.nativeEvent.layout.width)}>
       {width > 0 && <>
-        <View {...startDrag.panHandlers} {...adjustable('start', start, 0, end)} accessibilityLabel={`${label} start marker`}
+        <View {...startDrag.panHandlers} {...adjustable('start', start, 0, end)} accessibilityLabel={t('console.startMarker', { label })}
           style={[styles.marker, { left: toX(start) - MARKER_WIDTH / 2 }]} hitSlop={6}>
           <Text style={[styles.markerLetter, { color: START }]}>S</Text>
           <View style={[styles.arrow, { borderTopColor: START }]} />
         </View>
-        <View {...endDrag.panHandlers} {...adjustable('end', end, start, duration)} accessibilityLabel={`${label} end marker`}
+        <View {...endDrag.panHandlers} {...adjustable('end', end, start, duration)} accessibilityLabel={t('console.endMarker', { label })}
           style={[styles.marker, { left: toX(end) - MARKER_WIDTH / 2 }]} hitSlop={6}>
           <Text style={[styles.markerLetter, { color: END }]}>E</Text>
           <View style={[styles.arrow, { borderTopColor: END }]} />
         </View>
       </>}
     </View>
-    <View style={styles.wave} {...waveDrag.panHandlers} accessibilityLabel={`${label} timeline; drag to scrub all stems`}>
+    <View style={styles.wave} {...waveDrag.panHandlers} accessibilityLabel={t('console.timeline', { label })}>
       <View pointerEvents="none" style={StyleSheet.absoluteFill}>
         {ticks.map(tick => <View key={tick} style={[styles.tick, { left: `${tick * 100}%` }]} />)}
         {peaks?.length ? <Svg width="100%" height="100%" viewBox={`0 0 ${peaks.length * 6} ${WAVE}`} preserveAspectRatio="none">
@@ -121,16 +122,16 @@ export function Timeline({ label, duration, start, end, position, peaks, disable
       </View>
     </View>
     {width > 0 && <View {...handleDrag.panHandlers} {...adjustable('playhead', shown, start, end)}
-      accessibilityLabel={`${label} playhead`} hitSlop={8}
+      accessibilityLabel={t('console.playhead', { label })} hitSlop={8}
       style={[styles.playheadHandle, { left: EDITOR_PADDING + toX(shown) - 22 }]}>
       <View style={styles.grip} />
     </View>}
     <View style={styles.times}>
       <View style={styles.timeStart}>
         <Pressable onPress={onReset} disabled={!changed} accessibilityRole="button"
-          accessibilityLabel={`${label} reset loop interval to the whole song`}
+          accessibilityLabel={t('console.resetLoop', { label })}
           style={[styles.resetButton, !changed && { opacity: .45 }]}>
-          <Text style={styles.resetText}>Reset</Text>
+          <Text style={styles.resetText}>{t('common.reset')}</Text>
         </Pressable>
         <Text style={[styles.timeText, { color: START }]}>Start {start.toFixed(2)}s</Text>
       </View>
@@ -180,8 +181,9 @@ export function ChannelStrip({ label, display, value, min, max, step, disabled, 
   </View>;
 }
 
-export function MasterFader({ value, onChange, label = 'Master' }: { value: number; onChange: (value: number) => void; label?: string }) {
-  const styles = useStyles(makeStyles);
+export function MasterFader({ value, onChange, label }: { value: number; onChange: (value: number) => void; label?: string }) {
+  const styles = useStyles(makeStyles), t = useT();
+  label ??= t('console.master');
   const [width, setWidth] = useState(0);
   const origin = useRef(0);
   const thumb = 24, travel = Math.max(1, width - thumb);
@@ -194,7 +196,7 @@ export function MasterFader({ value, onChange, label = 'Master' }: { value: numb
   return <View style={styles.master}>
     <Text style={styles.stripName}>{label.toUpperCase()}</Text>
     <View style={styles.masterWell} onLayout={event => setWidth(event.nativeEvent.layout.width)} {...drag.panHandlers}
-      accessible accessibilityRole="adjustable" accessibilityLabel={`${label} volume`}
+      accessible accessibilityRole="adjustable" accessibilityLabel={t('console.volume', { label })}
       accessibilityValue={{ min: 0, max: 100, now: value, text: `${value}%` }}
       accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
       onAccessibilityAction={event => onChange(clamp(value + (event.nativeEvent.actionName === 'increment' ? 5 : -5), 0, 100))}>
@@ -332,13 +334,13 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 export function InlineEdit({ label, initial, placeholder, onSave, onClose }: {
   label: string; initial: string; placeholder?: string; onSave: (value: string) => void; onClose: () => void;
 }) {
-  const styles = useStyles(makeStyles), theme = useTheme();
+  const styles = useStyles(makeStyles), theme = useTheme(), t = useT();
   const [value, setValue] = useState(initial);
   const save = () => { onSave(value); onClose(); };
   return <View style={styles.inlineEdit}>
     <TextInput autoFocus value={value} onChangeText={setValue} placeholder={placeholder} maxLength={200}
       accessibilityLabel={label} returnKeyType="done" onSubmitEditing={save} style={styles.inlineInput} placeholderTextColor={theme.muted} />
-    <IconButton primary icon="save" accessibilityLabel={`Save ${label.toLowerCase()}`} onPress={save} />
-    <IconButton icon="close" accessibilityLabel={`Close ${label.toLowerCase()} without saving`} onPress={onClose} />
+    <IconButton primary icon="save" accessibilityLabel={t('console.save', { label })} onPress={save} />
+    <IconButton icon="close" accessibilityLabel={t('console.close', { label })} onPress={onClose} />
   </View>;
 }

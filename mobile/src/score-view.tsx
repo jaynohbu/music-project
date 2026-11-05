@@ -10,6 +10,7 @@ import {
   type LyricRow, type NotePiece, type ScoreRest,
 } from './score';
 import { Button, ButtonRow, formatTime } from './ui';
+import { useT } from './language';
 import { type Theme, useStyles, useTheme } from './theme';
 
 // Matches the mixer's 100ms position timer, so the strips glide between updates.
@@ -34,7 +35,7 @@ const Word = memo(function Word({ text, state, onCenter }: { text: string; state
 
 // The words flow past, and the one being sung glides into the middle.
 export function LyricsStrip({ lines, time }: { lines: LyricLine[]; time: number }) {
-  const styles = useStyles(makeStyles);
+  const styles = useStyles(makeStyles), t = useT();
   const words = useMemo(() => lines.flatMap(line => line.words), [lines]);
   const [width, setWidth] = useState(0);
   const [centers, setCenters] = useState<number[]>([]);
@@ -73,7 +74,7 @@ export function LyricsStrip({ lines, time }: { lines: LyricLine[]; time: number 
   const active = index >= 0 && time < words[index].end + HELD_AFTER_WORD ? index : -1;
   let flat = 0;
   return <View style={styles.lyrics} onLayout={event => setWidth(event.nativeEvent.layout.width)}
-    accessibilityLabel={`Lyrics: ${active >= 0 ? words[active].text : ''}`}>
+    accessibilityLabel={t('score.lyricsLabel', { text: active >= 0 ? words[active].text : '' })}>
     <Animated.View style={[styles.lyricsFlow, { opacity: ready ? 1 : 0, transform: [{ translateX: offset }] }]}>
       {lines.map((line, lineIndex) => <View key={lineIndex} style={styles.lyricsLine}
         onLayout={event => { lineLefts.current[lineIndex] = event.nativeEvent.layout.x; publish(); }}>
@@ -196,7 +197,7 @@ const Chunk = memo(function Chunk({ score, chunk, activeChord, activeNote }: {
 
 // A staff that scrolls under a fixed "now" line, the same as the website's score strip.
 export function HarmonyStrip({ part, stem, grid, time }: { part: HarmonyPart; stem: string; grid: HarmonyGrid; time: number }) {
-  const styles = useStyles(makeStyles);
+  const styles = useStyles(makeStyles), t = useT();
   const score = useMemo(() => layout(part, stem, grid), [part, stem, grid]);
   const [width, setWidth] = useState(0);
   const [offset] = useState(() => new Animated.Value(0));
@@ -211,8 +212,8 @@ export function HarmonyStrip({ part, stem, grid, time }: { part: HarmonyPart; st
   const first = chunkOf(Math.max(0, here - middle - MARGIN)), last = chunkOf(here + middle + MARGIN);
   const chunks = Array.from({ length: Math.max(0, last - first + 1) }, (_, index) => first + index);
   const clef = CLEFS[stem]?.clef;
-  const label = score.drums ? `Drum score with ${score.strokes.length} strokes`
-    : `Chords and melody: ${part.chords.map(item => item.name).slice(0, 40).join(', ')}`;
+  const label = score.drums ? t('score.drumLabel', { count: score.strokes.length })
+    : t('score.chordsLabel', { chords: part.chords.map(item => item.name).slice(0, 40).join(', ') });
   return <View style={[styles.harmony, !score.written && styles.chordsOnly]} onLayout={event => setWidth(event.nativeEvent.layout.width)}
     accessible accessibilityRole="image" accessibilityLabel={label}>
     {score.written && STAFF_LINES.map(y => <View key={y} style={[styles.staffLine, { top: y }]} />)}
@@ -234,7 +235,7 @@ export function HarmonyStrip({ part, stem, grid, time }: { part: HarmonyPart; st
 export function LyricsEditor({ lines, duration, onSave, onClose }: {
   lines: LyricLine[]; duration: number; onSave: (lines: LyricLine[]) => Promise<void>; onClose: () => void;
 }) {
-  const styles = useStyles(makeStyles);
+  const styles = useStyles(makeStyles), t = useT();
   const nextId = useRef(lines.length);
   const [rows, setRows] = useState<LyricRow[]>(() => lines.map((line, id) => ({ id, start: line.start, end: line.end, text: lineText(line), words: line.words })));
   const [saving, setSaving] = useState(false);
@@ -247,7 +248,7 @@ export function LyricsEditor({ lines, duration, onSave, onClose }: {
   const save = async () => {
     setSaving(true); setError('');
     try { await onSave(editedLines(rows)); }
-    catch (failure) { setError(`Could not save the lyrics: ${failure instanceof Error ? failure.message : String(failure)}`); setSaving(false); }
+    catch (failure) { setError(t('score.saveFailed', { error: failure instanceof Error ? failure.message : String(failure) })); setSaving(false); }
   };
   const cancel = () => {
     if (saving) return;
@@ -261,31 +262,31 @@ export function LyricsEditor({ lines, duration, onSave, onClose }: {
   return <Modal visible animationType="slide" presentationStyle="fullScreen" onRequestClose={cancel}>
     <KeyboardAvoidingView style={styles.editor} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={styles.editorHeader}>
-        <Text style={styles.editorTitle} accessibilityRole="header">Edit lyrics</Text>
-        <Text style={styles.hint}>Timing stays with each line. Clear a line to remove it.</Text>
+        <Text style={styles.editorTitle} accessibilityRole="header">{t('score.editTitle')}</Text>
+        <Text style={styles.hint}>{t('score.editHint')}</Text>
       </View>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.editorLines} keyboardShouldPersistTaps="handled">
-        {addButton(-1, 'Add a line at the beginning', '+ Add line')}
+        {addButton(-1, t('score.addFirst'), t('score.addLine'))}
         {rows.map((row, index) => <View key={row.id} style={styles.editorRow}>
           <Text style={styles.time}>{formatTime(row.start)}</Text>
           <TextInput value={row.text} editable={!saving} maxLength={2000} style={styles.input}
-            accessibilityLabel={`Line at ${formatTime(row.start)}`}
+            accessibilityLabel={t('score.lineAt', { time: formatTime(row.start) })}
             onChangeText={text => setRows(current => current.map(item => item.id === row.id ? { ...item, text } : item))} />
-          {addButton(index, `Add a line after ${formatTime(row.start)}`, '+')}
+          {addButton(index, t('score.addAfter', { time: formatTime(row.start) }), '+')}
         </View>)}
       </ScrollView>
       {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
       <ButtonRow style={styles.editorFooter}>
-        <Button kind="plain" label="Cancel" disabled={saving} onPress={cancel} />
-        <Button label={saving ? 'Saving...' : 'Save lyrics'} disabled={saving} onPress={() => void save()} />
+        <Button kind="plain" label={t('common.cancel')} disabled={saving} onPress={cancel} />
+        <Button label={saving ? t('score.saving') : t('score.save')} disabled={saving} onPress={() => void save()} />
       </ButtonRow>
     </KeyboardAvoidingView>
     {discarding && <View style={styles.backdrop}><View style={styles.dialog} accessibilityViewIsModal>
-      <Text style={styles.dialogTitle}>Discard lyric changes?</Text>
-      <Text style={styles.dialogMessage}>Discard your changes to the lyrics?</Text>
+      <Text style={styles.dialogTitle}>{t('score.discardTitle')}</Text>
+      <Text style={styles.dialogMessage}>{t('score.discardMessage')}</Text>
       <ButtonRow>
-        <Button kind="plain" label="Cancel" onPress={() => setDiscarding(false)} />
-        <Button label="Discard" onPress={onClose} />
+        <Button kind="plain" label={t('common.cancel')} onPress={() => setDiscarding(false)} />
+        <Button label={t('score.discard')} onPress={onClose} />
       </ButtonRow>
     </View></View>}
   </Modal>;

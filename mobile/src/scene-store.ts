@@ -1,4 +1,7 @@
 import type { Scene } from './api';
+import { t } from './i18n';
+
+export type SaveStatus = 'saved' | 'unsaved' | 'saving' | 'failed';
 
 export class SceneStore {
   private edits = 0;
@@ -6,7 +9,7 @@ export class SceneStore {
   private revision: number;
   private saving: Promise<boolean> | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
-  status = 'Saved';
+  status: SaveStatus = 'saved';
   error = '';
   constructor(public scene: Scene,
     private readonly write: (id: string, revision: number, patch: { name: string; entries: Scene['entries'] }) => Promise<Scene>,
@@ -14,7 +17,7 @@ export class SceneStore {
   update(update: (scene: Scene) => Scene) {
     this.scene = update(this.scene);
     this.edits++;
-    this.status = 'Unsaved changes';
+    this.status = 'unsaved';
     this.changed();
     if (this.timer) clearTimeout(this.timer);
     if (!this.error) this.timer = setTimeout(() => { void this.flush(); }, 600);
@@ -29,21 +32,21 @@ export class SceneStore {
   private async saveLoop() {
     while (this.dirty) {
       const version = this.edits, snapshot = this.scene;
-      this.status = 'Saving…'; this.changed();
+      this.status = 'saving'; this.changed();
       try {
         const result = await this.write(snapshot.id, this.revision, { name: snapshot.name, entries: snapshot.entries });
         this.revision = result.revision; this.saved = version; this.error = '';
       } catch (error) {
-        this.error = error instanceof Error ? error.message : 'Could not save this scene.';
-        this.status = 'Save failed'; this.changed(); return false;
+        this.error = error instanceof Error ? error.message : t('scene.saveError');
+        this.status = 'failed'; this.changed(); return false;
       }
     }
-    this.status = 'Saved'; this.changed(); return true;
+    this.status = 'saved'; this.changed(); return true;
   }
   reload(scene: Scene) {
     if (this.timer) clearTimeout(this.timer);
     this.scene = scene; this.revision = scene.revision; this.saved = this.edits;
-    this.status = 'Saved'; this.error = ''; this.changed();
+    this.status = 'saved'; this.error = ''; this.changed();
   }
   discard() {
     if (this.timer) clearTimeout(this.timer);

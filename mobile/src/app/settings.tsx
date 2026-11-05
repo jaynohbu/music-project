@@ -3,6 +3,8 @@ import { useCallback, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { type Usage, getUsage } from '../api';
 import { cacheSize, clearCache } from '../cache';
+import { LANGUAGES } from '../i18n';
+import { phoneLanguage, useLanguage, useT } from '../language';
 import { useSession } from '../session';
 import { THEMES, type Theme, useSetTheme, useStyles, useTheme } from '../theme';
 import { Button, errorText, formatBytes, useConfirm } from '../ui';
@@ -13,7 +15,7 @@ export default function Settings() {
   const [cache, setCache] = useState(cacheSize);
   const [error, setError] = useState('');
   const confirm = useConfirm();
-  const styles = useStyles(makeStyles);
+  const styles = useStyles(makeStyles), t = useT();
 
   useFocusEffect(useCallback(() => {
     setCache(cacheSize());
@@ -21,43 +23,45 @@ export default function Settings() {
   }, []));
 
   const confirmLogOut = async () => {
-    if (!await confirm('Sign out?', 'Songs saved on this phone are removed.', 'Sign out')) return;
+    if (!await confirm(t('settings.signOutTitle'), t('settings.signOutMessage'), t('settings.signOut'))) return;
     try { await logOut(); } catch (failure) { setError(errorText(failure)); }
   };
 
   return (
     <ScrollView contentContainerStyle={styles.page}>
       {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
-      <Text style={styles.section} accessibilityRole="header">Theme</Text>
+      <Text style={styles.section} accessibilityRole="header">{t('settings.theme')}</Text>
       <ThemePicker />
-      <Text style={styles.section} accessibilityRole="header">Account</Text>
-      <Row label="Email" value={email} />
+      <Text style={styles.section} accessibilityRole="header">{t('settings.language')}</Text>
+      <LanguagePicker />
+      <Text style={styles.section} accessibilityRole="header">{t('settings.account')}</Text>
+      <Row label={t('settings.email')} value={email} />
       {usage && <>
-        <Row label="Plan" value={usage.plan === 'premium' ? 'Premium' : 'Free'} />
-        <Row label="Splits this month" value={`${usage.splits.used} of ${usage.splits.limit}`} />
-        <Row label="Songs" value={`${usage.songs.used} of ${usage.songs.limit}`} />
+        <Row label={t('settings.plan')} value={usage.plan === 'premium' ? t('settings.premium') : t('settings.free')} />
+        <Row label={t('settings.splits')} value={t('settings.ofLimit', { used: usage.splits.used, limit: usage.splits.limit })} />
+        <Row label={t('settings.songs')} value={t('settings.ofLimit', { used: usage.songs.used, limit: usage.songs.limit })} />
       </>}
-      <Row label="Saved on this phone" value={`${cache.songs} songs · ${formatBytes(cache.bytes)}`} />
-      <Text style={styles.note}>Up to 20 songs or 2 GB are kept for playback. The oldest played go first.</Text>
-      <Button kind="plain" label="Remove saved songs" disabled={!cache.songs}
+      <Row label={t('settings.saved')} value={t('settings.savedValue', { count: cache.songs, size: formatBytes(cache.bytes) })} />
+      <Text style={styles.note}>{t('settings.cacheNote')}</Text>
+      <Button kind="plain" label={t('settings.removeSaved')} disabled={!cache.songs}
         onPress={() => {
           void (async () => {
-            if (!await confirm('Remove saved songs?', 'Remove local playback copies? Songs in your account and Scenes stay unchanged.', 'Remove')) return;
+            if (!await confirm(t('settings.removeSavedTitle'), t('settings.removeSavedMessage'), t('common.remove'))) return;
             try { clearCache(); setCache(cacheSize()); setError(''); } catch (failure) { setError(errorText(failure)); }
           })();
         }} />
-      <Button kind="danger" label="Sign out" onPress={() => void confirmLogOut()} />
+      <Button kind="danger" label={t('settings.signOut')} onPress={() => void confirmLogOut()} />
     </ScrollView>
   );
 }
 
 function ThemePicker() {
-  const styles = useStyles(makeStyles), current = useTheme(), setTheme = useSetTheme();
+  const styles = useStyles(makeStyles), current = useTheme(), setTheme = useSetTheme(), t = useT();
   return <View style={styles.themes} accessibilityRole="radiogroup">
     {THEMES.map(theme => {
       const selected = theme.id === current.id;
       return <Pressable key={theme.id} onPress={() => setTheme(theme.id)} accessibilityRole="radio"
-        accessibilityState={{ checked: selected }} accessibilityLabel={`${theme.name} theme`}
+        accessibilityState={{ checked: selected }} accessibilityLabel={t('settings.themeLabel', { name: t(`theme.${theme.id}`) })}
         style={[styles.theme, selected && styles.themeOn]}>
         <View style={[styles.swatch, { backgroundColor: theme.background, backgroundImage: theme.gradient }]}>
           {theme.image && <Image source={theme.image} resizeMode="cover" style={StyleSheet.absoluteFill} />}
@@ -66,7 +70,24 @@ function ThemePicker() {
             <View style={[styles.swatchKey, { backgroundColor: theme.accent }]} />
           </View>
         </View>
-        <Text style={[styles.themeName, selected && styles.themeNameOn]} numberOfLines={1}>{theme.name}</Text>
+        <Text style={[styles.themeName, selected && styles.themeNameOn]} numberOfLines={1}>{t(`theme.${theme.id}`)}</Text>
+      </Pressable>;
+    })}
+  </View>;
+}
+
+// Each language shows its own name; "Phone language" follows the iPhone's setting.
+function LanguagePicker() {
+  const styles = useStyles(makeStyles), { choice, setChoice, t } = useLanguage();
+  const phone = LANGUAGES.find(language => language.id === phoneLanguage())!;
+  const options = [{ id: null, name: `${t('settings.phoneLanguage')} · ${phone.name}` }, ...LANGUAGES];
+  return <View style={styles.languages} accessibilityRole="radiogroup">
+    {options.map(option => {
+      const selected = option.id === choice;
+      return <Pressable key={option.id ?? 'phone'} onPress={() => setChoice(option.id)} accessibilityRole="radio"
+        accessibilityState={{ checked: selected }} style={[styles.language, !option.id && styles.languageWide, selected && styles.themeOn]}>
+        <Text style={[styles.languageName, selected && styles.themeNameOn]} numberOfLines={1}>{option.name}</Text>
+        {selected && <Text style={styles.themeNameOn}>✓</Text>}
       </Pressable>;
     })}
   </View>;
@@ -94,6 +115,11 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   swatchKey: { width: 16, height: 10, borderRadius: 3 },
   themeName: { fontSize: 14, fontWeight: '600', color: t.muted, textAlign: 'center' },
   themeNameOn: { color: t.accent },
+  languages: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  language: { width: '48%', flexGrow: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6,
+    minHeight: 44, paddingHorizontal: 12, borderRadius: 10, borderWidth: 2, borderColor: t.line, backgroundColor: t.surface },
+  languageWide: { width: '100%' },
+  languageName: { flexShrink: 1, fontSize: 15, fontWeight: '600', color: t.ink },
   row: {
     flexDirection: 'row', justifyContent: 'space-between', gap: 12, paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.line,

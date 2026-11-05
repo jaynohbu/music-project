@@ -6,6 +6,8 @@ import type { Song } from './api';
 import { INSTRUMENTS, MAX_RATE, MIN_RATE, instrument, type InstrumentId } from './live-follow';
 import { LiveSession, STRENGTHS, type FollowStrength } from './live-session';
 import { deleteTake, loadTake, saveTake, takePath, type LiveTake } from './live-take';
+import { t as text } from './i18n';
+import { useLanguage } from './language';
 import { IconButton, LampSwitch, MasterFader } from './mixer-console';
 import type { Mixer } from './player';
 import type { useSongTasks } from './song-tasks';
@@ -14,22 +16,13 @@ import { errorText, useConfirm } from './ui';
 
 const SYNC_STEP = 0.01;
 const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
-const HINTS: Record<InstrumentId, string> = {
-  guitar: 'Plug your guitar into an audio interface',
-  bass: 'Plug your bass into an audio interface',
-  keyboard: 'Connect the keyboard’s line out to an audio interface',
-  piano: 'Put the phone near the piano or use a mic on an interface',
-  drums: 'Put the phone near the kit, or mic the snare through an interface',
-  vocals: 'Sing into a mic on an audio interface or a headset mic',
-  other: 'Use an audio interface or put the phone near your instrument',
-};
 const track = (jobId: string, take: LiveTake) => ({ path: takePath(jobId, take), duration: take.duration, latency: take.latency,
   points: take.points, volume: take.volume, muted: take.muted });
 
 export function LivePanel({ open, mixer, song, tasks, position, onRecording }: {
   open: boolean; mixer: Mixer; song: Song; tasks: ReturnType<typeof useSongTasks>; position: number; onRecording: (recording: boolean) => void;
 }) {
-  const styles = useStyles(makeStyles), theme = useTheme();
+  const styles = useStyles(makeStyles), theme = useTheme(), { t, language } = useLanguage();
   const confirm = useConfirm();
   const jobId = song.jobId;
   // The panel is keyed by song, so the saved take is read once.
@@ -47,7 +40,7 @@ export function LivePanel({ open, mixer, song, tasks, position, onRecording }: {
   const active = useRef<LiveSession | null>(null);
 
   useEffect(() => {
-    if (saved) mixer.attachTake(track(jobId, saved)).catch(failure => setError(`Your take could not be loaded: ${errorText(failure)}`));
+    if (saved) mixer.attachTake(track(jobId, saved)).catch(failure => setError(text('live.loadFailed', { error: errorText(failure) })));
   }, [saved, jobId, mixer]);
   // Leaving the screen mid-take keeps what was played.
   useEffect(() => () => { void active.current?.stop(true).catch(failure => console.warn('Live take was not saved', failure)); }, []);
@@ -68,7 +61,7 @@ export function LivePanel({ open, mixer, song, tasks, position, onRecording }: {
   };
   const record = async () => {
     if (!tasks.grid) return;
-    if (take && !await confirm('Record a new take?', 'Your current take and its tempo will be replaced when the new one is saved.', 'Record new take')) return;
+    if (take && !await confirm(t('live.newTitle'), t('live.newMessage'), t('live.newAction'))) return;
     setError(''); setStarting(true);
     try {
       const started = await LiveSession.start({ mixer, jobId, beats: tasks.grid.beats, strength, monitor, previous: take, instrument: chosen, replace });
@@ -84,7 +77,7 @@ export function LivePanel({ open, mixer, song, tasks, position, onRecording }: {
     catch (failure) { finished(null, errorText(failure)); }
   };
   const remove = async () => {
-    if (!await confirm('Delete your take?', 'Delete your recording and the tempo the band followed? The stems play at their normal speed again.', 'Delete take')) return;
+    if (!await confirm(t('live.deleteTitle'), t('live.deleteMessage'), t('live.deleteAction'))) return;
     try { await mixer.removeTake(); deleteTake(jobId); setTake(null); }
     catch (failure) { setError(errorText(failure)); }
   };
@@ -102,89 +95,89 @@ export function LivePanel({ open, mixer, song, tasks, position, onRecording }: {
   // Hidden, the panel still loads the take and keeps the band's part silenced while it plays.
   if (!open && !recording) return null;
   const status = session?.status;
-  const stemLabel = current.stem ? current.stem[0].toUpperCase() + current.stem.slice(1) : '';
+  const stemLabel = current.stem ? t(`stem.${current.stem}`) : '';
   return <View style={styles.card}>
     <View style={styles.header}>
       <View style={styles.titleBlock}>
-        <Text style={styles.title}>{current.id === 'other' ? 'Live instrument' : `Live ${current.label.toLowerCase()}`}</Text>
+        <Text style={styles.title}>{current.id === 'other' ? t('live.titleOther') : t('live.title', { instrument: t(`instrument.${current.id}`) })}</Text>
         <Text style={styles.subtitle} numberOfLines={1}>
-          {recording ? 'Recording. The band follows your tempo.'
-            : take ? `Your take · ${clock(take.duration)} · ${new Date(take.recordedAt).toLocaleDateString()}`
-              : 'Play along and the band follows you.'}
+          {recording ? t('live.recordingStatus')
+            : take ? t('live.yourTake', { length: clock(take.duration), date: new Date(take.recordedAt).toLocaleDateString(language) })
+              : t('live.intro')}
         </Text>
       </View>
-      {take && !recording && <IconButton icon="remove" danger accessibilityLabel="Delete your take" onPress={() => void remove()} />}
+      {take && !recording && <IconButton icon="remove" danger accessibilityLabel={t('live.deleteTake')} onPress={() => void remove()} />}
       <IconButton icon={recording ? 'stop' : 'record'} primary={recording} danger={!recording}
         disabled={starting || (!recording && !tasks.grid)}
-        accessibilityLabel={recording ? 'Stop recording and save the take' : take ? 'Record a new take' : 'Record a take'}
+        accessibilityLabel={t(recording ? 'live.stopSave' : take ? 'live.recordNew' : 'live.record')}
         onPress={() => void (recording ? stop() : record())} />
     </View>
     {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
     {!tasks.grid && !recording && <View style={styles.row}>
       <Text style={[styles.note, styles.grow]}>
-        {tasks.findingChords ? 'Finding the beats… The band can follow you once they are ready.' : 'The band needs the song’s beats to follow you.'}
+        {t(tasks.findingChords ? 'live.findingBeats' : 'live.needBeats')}
       </Text>
       {!tasks.findingChords && <Pressable onPress={tasks.findChords} accessibilityRole="button" style={styles.chip}>
-        <Text style={styles.chipText}>Find beats</Text>
+        <Text style={styles.chipText}>{t('live.findBeats')}</Text>
       </Pressable>}
     </View>}
     {recording && status && <View style={styles.readout} accessibilityLiveRegion="polite">
       <View style={[styles.recLamp, status.seconds % 1 < .5 && styles.recLampOn]} />
       <Text style={styles.readoutText}>{clock(status.seconds)}</Text>
-      <Text style={styles.readoutText}>Band {status.rate.toFixed(2)}×</Text>
-      <Text style={styles.readoutText}>{status.locked ? `Beat ${Math.max(1, Math.round(status.beat) + 1)}` : status.notes ? 'Listening…' : 'Waiting for you'}</Text>
-      <View style={styles.meter} accessibilityLabel="Input level">
+      <Text style={styles.readoutText}>{t('live.band', { rate: status.rate.toFixed(2) })}</Text>
+      <Text style={styles.readoutText}>{status.locked ? t('live.beat', { beat: Math.max(1, Math.round(status.beat) + 1) }) : t(status.notes ? 'live.listening' : 'live.waiting')}</Text>
+      <View style={styles.meter} accessibilityLabel={t('live.level')}>
         <View style={[styles.meterFill, { width: `${Math.max(0, Math.min(100, (status.level + 60) / 60 * 100))}%` }]} />
       </View>
     </View>}
-    {!recording && <View style={styles.row} accessibilityRole="radiogroup" accessibilityLabel="Your instrument">
+    {!recording && <View style={styles.row} accessibilityRole="radiogroup" accessibilityLabel={t('live.yourInstrument')}>
       {INSTRUMENTS.map(item => <Pressable key={item.id} onPress={() => choose(item.id)} accessibilityRole="radio"
         accessibilityState={{ checked: chosen === item.id }} style={[styles.pick, chosen === item.id && styles.segmentOn]}>
-        <Text style={[styles.segmentText, chosen === item.id && { color: theme.onAccent }]}>{item.label}</Text>
+        <Text style={[styles.segmentText, chosen === item.id && { color: theme.onAccent }]}>{t(`instrument.${item.id}`)}</Text>
       </Pressable>)}
     </View>}
     {!recording && !!current.stem && <View style={styles.row}>
-      <LampSwitch label={`Band ${current.stem} off`} on={replace} onPress={toggleReplace}
-        accessibilityLabel={`Silence the band's ${current.stem} stem while you play`} />
-      <Text style={[styles.note, styles.grow]}>{replace ? `${stemLabel} stem is off while your part plays.` : `${stemLabel} stem plays with you.`}</Text>
+      <LampSwitch label={t('live.bandOff', { stem: stemLabel })} on={replace} onPress={toggleReplace}
+        accessibilityLabel={t('live.silenceHint', { stem: stemLabel })} />
+      <Text style={[styles.note, styles.grow]}>{t(replace ? 'live.stemOff' : 'live.stemOn', { stem: stemLabel })}</Text>
     </View>}
     {!recording && !!tasks.grid && <View style={styles.row}>
-      <Text style={styles.label}>Follow</Text>
-      <View style={styles.segments} accessibilityRole="radiogroup" accessibilityLabel="How closely the band follows">
+      <Text style={styles.label}>{t('live.follow')}</Text>
+      <View style={styles.segments} accessibilityRole="radiogroup" accessibilityLabel={t('live.followHint')}>
         {STRENGTHS.map(item => <Pressable key={item.id} onPress={() => setStrength(item.id)} accessibilityRole="radio"
           accessibilityState={{ checked: strength === item.id }} style={[styles.segment, strength === item.id && styles.segmentOn]}>
-          <Text style={[styles.segmentText, strength === item.id && { color: theme.onAccent }]}>{item.label}</Text>
+          <Text style={[styles.segmentText, strength === item.id && { color: theme.onAccent }]}>{t(`follow.${item.id}`)}</Text>
         </Pressable>)}
       </View>
-      <LampSwitch label="Hear input" on={monitor} onPress={() => setMonitor(value => !value)}
-        accessibilityLabel="Hear your instrument through the phone while recording" />
+      <LampSwitch label={t('live.hear')} on={monitor} onPress={() => setMonitor(value => !value)}
+        accessibilityLabel={t('live.hearHint')} />
     </View>}
     {take && !recording && <>
       <TempoLine take={take} duration={mixer.duration} position={position} />
       <View style={styles.row}>
-        <IconButton icon="mute" on={take.muted} accessibilityLabel="Mute your take" onPress={() => update({ muted: !take.muted })} />
+        <IconButton icon="mute" on={take.muted} accessibilityLabel={t('live.mute')} onPress={() => update({ muted: !take.muted })} />
         <View style={styles.grow}>
-          <MasterFader label="Take" value={Math.round(take.volume * 100)} onChange={value => update({ volume: value / 100 })} />
+          <MasterFader label={t('live.take')} value={Math.round(take.volume * 100)} onChange={value => update({ volume: value / 100 })} />
         </View>
       </View>
       <View style={styles.row}>
-        <Text style={styles.label}>Sync</Text>
+        <Text style={styles.label}>{t('live.sync')}</Text>
         <Pressable onPress={() => update({ latency: Math.max(-0.3, take.latency - SYNC_STEP) })} accessibilityRole="button"
-          accessibilityLabel="Play your take earlier" style={styles.chip}><Text style={styles.chipText}>Earlier</Text></Pressable>
+          accessibilityLabel={t('live.earlierHint')} style={styles.chip}><Text style={styles.chipText}>{t('live.earlier')}</Text></Pressable>
         <Text style={styles.readoutValue}>{Math.round(take.latency * 1000)} ms</Text>
         <Pressable onPress={() => update({ latency: Math.min(0.5, take.latency + SYNC_STEP) })} accessibilityRole="button"
-          accessibilityLabel="Play your take later" style={styles.chip}><Text style={styles.chipText}>Later</Text></Pressable>
+          accessibilityLabel={t('live.laterHint')} style={styles.chip}><Text style={styles.chipText}>{t('live.later')}</Text></Pressable>
       </View>
     </>}
     {!recording && <Text style={styles.note}>
-      {HINTS[current.id]} and use wired headphones; Bluetooth adds delay. The band catches up within a beat or two.
+      {t(`live.hint.${current.id}`)} {t('live.headphones')}
     </Text>}
   </View>;
 }
 
 // The band's speed across the song while the take was recorded, with a line at normal speed.
 function TempoLine({ take, duration, position }: { take: LiveTake; duration: number; position: number }) {
-  const styles = useStyles(makeStyles), theme = useTheme();
+  const styles = useStyles(makeStyles), theme = useTheme(), { t } = useLanguage();
   const [width, setWidth] = useState(0);
   const height = 56;
   const x = (pos: number) => Math.max(0, Math.min(1, pos / duration)) * width;
@@ -202,7 +195,7 @@ function TempoLine({ take, duration, position }: { take: LiveTake; duration: num
   const fastest = Math.max(...points.map(point => point.rate)), slowest = Math.min(...points.map(point => point.rate));
   return <View>
     <View style={styles.tempo} onLayout={event => setWidth(event.nativeEvent.layout.width)}
-      accessibilityLabel={`Tempo of your take: from ${slowest.toFixed(2)} to ${fastest.toFixed(2)} times the original speed`}>
+      accessibilityLabel={t('live.tempoLabel', { slow: slowest.toFixed(2), fast: fastest.toFixed(2) })}>
       {!!width && <Svg width={width} height={height}>
         <Line x1={0} x2={width} y1={y(1)} y2={y(1)} stroke={theme.waveLine} strokeWidth={1} strokeDasharray="4 4" />
         <Path d={path} stroke={theme.waveBar} strokeWidth={2} fill="none" strokeLinejoin="round" />
@@ -210,7 +203,7 @@ function TempoLine({ take, duration, position }: { take: LiveTake; duration: num
       </Svg>}
     </View>
     <View style={styles.tempoLegend}>
-      <Text style={styles.legend}>Tempo the band followed</Text>
+      <Text style={styles.legend}>{t('live.tempoLegend')}</Text>
       <Text style={styles.legend}>{slowest.toFixed(2)}× – {fastest.toFixed(2)}×</Text>
     </View>
   </View>;

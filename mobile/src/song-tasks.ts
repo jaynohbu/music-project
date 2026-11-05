@@ -3,12 +3,11 @@ import {
   createHarmony, createLyrics, createRestoration, fetchResult, getSong, saveLyrics as sendLyrics,
   type HarmonyGrid, type HarmonyPart, type LyricLine, type Song, type StemName,
 } from './api';
+import { t, type TextKey } from './i18n';
 import { errorText } from './ui';
 
 // The same interval and wording as the website (web/src/stem-pages.ts).
 const POLL_MS = 4000;
-export const LYRICS_NOTE = 'Converting voice to text takes time. The timing may not match well at first but improves when reloaded. You can edit the text later.';
-export const CHORDS_NOTE = 'Converting to chords and melody takes time, and the result is not the same as the original.';
 
 const running = (status?: string) => status === 'queued' || status === 'processing';
 export const working = (song: Song | null) => !!song && (running(song.lyrics?.status) || running(song.harmony?.status) ||
@@ -16,7 +15,8 @@ export const working = (song: Song | null) => !!song && (running(song.lyrics?.st
   (song.restorations ?? []).some(item => running(item.status)));
 export const hasMusic = (part?: HarmonyPart) => !!part && (part.chords.length > 0 || part.notes.length > 0 || !!part.hits?.length);
 export const regenerateLabel = (name: string) =>
-  name === 'other' ? 'Regenerate chords' : name === 'drums' ? 'Regenerate drum score' : 'Regenerate chords & melody';
+  t(name === 'other' ? 'tasks.regenChords' : name === 'drums' ? 'tasks.regenDrums' : 'tasks.regenChordsMelody');
+export const stemName = (name: string) => t(`stem.${name}` as TextKey);
 
 // Finds, loads and saves a song's lyrics and score, polling the song while the API works on them.
 export function useSongTasks(initial: Song | null) {
@@ -61,7 +61,7 @@ export function useSongTasks(initial: Song | null) {
     loading.current.lyrics = true;
     fetchResult<{ lines: LyricLine[] }>(lyricsUrl, 'Lyrics')
       .then(({ lines }) => { if (alive.current) setLyrics(lines); })
-      .catch(failure => { if (alive.current) setLyricsLoadError(`Could not load the lyrics: ${errorText(failure)}`); })
+      .catch(failure => { if (alive.current) setLyricsLoadError(t('tasks.loadLyricsFailed', { error: errorText(failure) })); })
       .finally(() => { loading.current.lyrics = false; });
   }, [lyricsUrl, lyrics, lyricsLoadError]);
 
@@ -71,7 +71,7 @@ export function useSongTasks(initial: Song | null) {
     loading.current.chords = true;
     fetchResult<HarmonyGrid & { stems: Record<string, HarmonyPart> }>(chordsUrl, 'Chords')
       .then(({ stems, beats, firstBar }) => { if (alive.current) { setGrid({ beats, firstBar }); setParts(stems); } })
-      .catch(failure => { if (alive.current) setChordsLoadError(`Could not load the chords: ${errorText(failure)}`); })
+      .catch(failure => { if (alive.current) setChordsLoadError(t('tasks.loadChordsFailed', { error: errorText(failure) })); })
       .finally(() => { loading.current.chords = false; });
   }, [chordsUrl, parts, chordsLoadError]);
 
@@ -87,7 +87,7 @@ export function useSongTasks(initial: Song | null) {
         .then(({ stems }) => { if (alive.current) setParts(current => current && { ...current, [name]: stems[name] }); })
         .catch(failure => {
           loadedParts.current.delete(name);
-          if (alive.current) setPartLoadErrors(errors => ({ ...errors, [name]: `Could not load the regenerated notes: ${errorText(failure)}` }));
+          if (alive.current) setPartLoadErrors(errors => ({ ...errors, [name]: t('tasks.loadPartFailed', { error: errorText(failure) }) }));
         });
     }
   }, [hasParts, regenerated, partLoadErrors]);
@@ -99,10 +99,10 @@ export function useSongTasks(initial: Song | null) {
   const cleaning = (name: string) => startingClean.includes(name) ||
     !!song?.restorations?.some(item => item.stem === name && item.status !== 'failed');
 
-  const start = async (begin: () => void, end: () => void, operation: () => Promise<unknown>, what: string) => {
+  const start = async (begin: () => void, end: () => void, operation: () => Promise<unknown>, failed: (error: string) => string) => {
     begin(); setError('');
     try { await operation(); await refresh(); }
-    catch (failure) { if (alive.current) setError(`Could not start ${what}: ${errorText(failure)}`); }
+    catch (failure) { if (alive.current) setError(failed(errorText(failure))); }
     finally { if (alive.current) end(); }
   };
 
@@ -113,7 +113,7 @@ export function useSongTasks(initial: Song | null) {
     clean(name: StemName) {
       if (cleaning(name) || !jobId) return;
       void start(() => setStartingClean(names => [...names, name]), () => setStartingClean(names => names.filter(item => item !== name)),
-        () => createRestoration(jobId, name), `cleaning ${name}`);
+        () => createRestoration(jobId, name), error => t('tasks.startCleanFailed', { stem: stemName(name), error }));
     },
     lyricsFailure: findingLyrics || lyrics ? undefined : lyricsLoadError || song?.lyrics?.error,
     chordsFailure: findingChords || parts ? undefined : chordsLoadError || song?.harmony?.error,
@@ -125,19 +125,19 @@ export function useSongTasks(initial: Song | null) {
     findLyrics() {
       if (findingLyrics || !jobId) return;
       setLyricsLoadError('');
-      void start(() => setStartingLyrics(true), () => setStartingLyrics(false), () => createLyrics(jobId), 'finding lyrics');
+      void start(() => setStartingLyrics(true), () => setStartingLyrics(false), () => createLyrics(jobId), error => t('tasks.startLyricsFailed', { error }));
     },
     findChords() {
       if (findingChords || !jobId) return;
       setChordsLoadError('');
-      void start(() => setStartingChords(true), () => setStartingChords(false), () => createHarmony(jobId), 'finding chords');
+      void start(() => setStartingChords(true), () => setStartingChords(false), () => createHarmony(jobId), error => t('tasks.startChordsFailed', { error }));
     },
     // Uses the version being heard, since the same audio would give the same notes.
     regenerate(name: string, cleaned: boolean) {
       if (regenerating(name) || !jobId) return;
       setPartLoadErrors(({ [name]: _, ...others }) => others);
       void start(() => setStartingParts(names => [...names, name]), () => setStartingParts(names => names.filter(item => item !== name)),
-        () => createHarmony(jobId, { stem: name, cleaned }), `regenerating ${name}`);
+        () => createHarmony(jobId, { stem: name, cleaned }), error => t('tasks.startRegenFailed', { stem: stemName(name), error }));
     },
     async saveLyrics(lines: LyricLine[]) {
       if (!jobId) return;

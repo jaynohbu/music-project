@@ -1,15 +1,16 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useT } from './language';
 import { type Theme, useStyles, useTheme } from './theme';
 
 export type MainRoute = '/' | '/scenes' | '/settings';
 export function AppHeader({ pathname, navigate }: { pathname: string; navigate: (path: MainRoute) => void }) {
-  const styles = useStyles(makeStyles), theme = useTheme();
+  const styles = useStyles(makeStyles), theme = useTheme(), t = useT();
   return <SafeAreaView edges={['top', 'left', 'right']} style={styles.header}>
     <Text style={styles.brand}>Sorituh</Text>
     <View style={styles.row}>
       {([
-        { label: 'Music', path: '/' }, { label: 'Scenes', path: '/scenes' }, { label: 'Settings', path: '/settings' },
+        { label: t('nav.music'), path: '/' }, { label: t('nav.scenes'), path: '/scenes' }, { label: t('nav.settings'), path: '/settings' },
       ] as const).map(item => {
         const selected = item.path === '/' ? pathname === '/' || pathname.startsWith('/song') : pathname.startsWith(item.path);
         return <Pressable key={item.path} onPress={() => navigate(item.path)} style={[styles.tab, selected && styles.selected]}

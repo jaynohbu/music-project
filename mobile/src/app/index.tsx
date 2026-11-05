@@ -4,19 +4,16 @@ import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'rea
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { type Song, type Usage, deleteSong, getUsage, listSongs } from '../api';
 import { forgetSong } from '../cache';
+import { useLanguage } from '../language';
 import { deleteTake } from '../live-take';
 import { Button, ButtonRow, Centered, Loading, errorText, formatTime, useConfirm } from '../ui';
 import { type Theme, useStyles, useTheme } from '../theme';
 
 const POLL_MS = 5000;
 const WORKING = new Set(['uploading', 'queued', 'processing', 'deleting']);
-const STATUS: Record<Song['status'], string> = {
-  uploading: 'Uploading', queued: 'Waiting to split', processing: 'Splitting',
-  completed: '', failed: 'Failed', deleting: 'Deleting',
-};
 
 export default function Songs() {
-  const styles = useStyles(makeStyles), theme = useTheme();
+  const styles = useStyles(makeStyles), theme = useTheme(), { t, language } = useLanguage();
   const [songs, setSongs] = useState<Song[] | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
   const [usage, setUsage] = useState<Usage | null>(null);
@@ -67,7 +64,7 @@ export default function Songs() {
   };
 
   const remove = async (song: Song) => {
-    if (!await confirm('Delete this song?', `Permanently delete "${song.title ?? 'Untitled song'}", its stems, and its entries in every scene?`, 'Delete song')) return;
+    if (!await confirm(t('songs.deleteTitle'), t('songs.deleteMessage', { title: song.title ?? t('common.untitledSong') }), t('songs.delete'))) return;
     setDeleting(true);
     try { await deleteSong(song.jobId); forgetSong(song.jobId); deleteTake(song.jobId); await load(); }
     catch (failure) { setError(errorText(failure)); }
@@ -75,7 +72,7 @@ export default function Songs() {
   };
   if (!songs) {
     return error
-      ? <Centered><Text style={styles.error}>{error}</Text><Button label="Try again" onPress={() => void load()} /></Centered>
+      ? <Centered><Text style={styles.error}>{error}</Text><Button label={t('common.tryAgain')} onPress={() => void load()} /></Centered>
       : <Loading />;
   }
 
@@ -92,36 +89,36 @@ export default function Songs() {
           setRefreshing(false);
         }} />}
         ListHeaderComponent={<View style={{ gap: 8, paddingBottom: 12 }}>
-          <Text style={{ fontSize: 30, fontWeight: '700', color: theme.ink }}>Music</Text>
-          <Text style={styles.detail}>Your split songs. Open a mixer, or arrange songs in Scenes.</Text>
+          <Text style={{ fontSize: 30, fontWeight: '700', color: theme.ink }}>{t('songs.heading')}</Text>
+          <Text style={styles.detail}>{t('songs.intro')}</Text>
           {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
         </View>}
-        ListEmptyComponent={<Text style={styles.empty}>No songs yet. Add one to split it into six stems.</Text>}
-        ListFooterComponent={cursor ? <Button kind="plain" label="Show more" onPress={() => void more()} /> : undefined}
+        ListEmptyComponent={<Text style={styles.empty}>{t('songs.empty')}</Text>}
+        ListFooterComponent={cursor ? <Button kind="plain" label={t('songs.more')} onPress={() => void more()} /> : undefined}
         renderItem={({ item: song }) => (
           <View style={styles.row}>
           <Pressable
             style={styles.rowText}
             disabled={song.status !== 'completed'}
             onPress={() => router.push({ pathname: '/song/[id]', params: { id: song.jobId } })}
-            accessibilityRole="button" accessibilityLabel={`Open mixer for ${song.title || 'Untitled song'}`}
+            accessibilityRole="button" accessibilityLabel={t('songs.openFor', { title: song.title || t('common.untitledSong') })}
           >
             <View style={styles.rowText}>
-              <Text style={styles.title} numberOfLines={1}>{song.title || 'Untitled song'}</Text>
+              <Text style={styles.title} numberOfLines={1}>{song.title || t('common.untitledSong')}</Text>
               <Text style={styles.detail} numberOfLines={2}>
                 {[
-                  STATUS[song.status],
-                  song.author && `By ${song.author}`,
+                  song.status !== 'completed' && t(`songs.status.${song.status}`),
+                  song.author && t('songs.by', { author: song.author }),
                   song.duration && formatTime(song.duration),
-                  new Date(song.createdAt).toLocaleDateString(),
+                  new Date(song.createdAt).toLocaleDateString(language),
                 ].filter(Boolean).join(' · ')}
               </Text>
               {song.status === 'failed' && !!song.error && <Text style={styles.error}>{song.error}</Text>}
             </View>
           </Pressable>
           <ButtonRow>
-            {song.status === 'completed' && <Button label="Open mixer" onPress={() => router.push({ pathname: '/song/[id]', params: { id: song.jobId } })} />}
-            {(song.status === 'completed' || song.status === 'failed') && <Button kind="danger" label="Delete song" disabled={deleting} onPress={() => void remove(song)} />}
+            {song.status === 'completed' && <Button label={t('songs.open')} onPress={() => router.push({ pathname: '/song/[id]', params: { id: song.jobId } })} />}
+            {(song.status === 'completed' || song.status === 'failed') && <Button kind="danger" label={t('songs.delete')} disabled={deleting} onPress={() => void remove(song)} />}
           </ButtonRow>
           </View>
         )}
@@ -129,10 +126,10 @@ export default function Songs() {
       <View style={styles.footer}>
         {usage && (
           <Text style={styles.detail}>
-            Splits this month {usage.splits.used}/{usage.splits.limit} · Songs {usage.songs.used}/{usage.songs.limit}
+            {t('songs.usage', { splits: usage.splits.used, splitLimit: usage.splits.limit, songs: usage.songs.used, songLimit: usage.songs.limit })}
           </Text>
         )}
-        <Button label="Add a song" disabled={!!full} onPress={() => router.push('/upload')} />
+        <Button label={t('songs.add')} disabled={!!full} onPress={() => router.push('/upload')} />
       </View>
     </SafeAreaView>
   );

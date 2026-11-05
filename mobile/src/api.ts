@@ -1,6 +1,7 @@
 import { File, UploadType } from 'expo-file-system';
 import { API_URL } from './auth';
 import type { Effects } from './effects';
+import { t } from './i18n';
 
 // The mixer shows stems in the website's order (web/src/services.ts).
 export const STEM_NAMES = ['vocals', 'guitar', 'bass', 'piano', 'drums', 'other'] as const;
@@ -94,7 +95,7 @@ let tokenSource: (() => Promise<string>) | null = null;
 export const setTokenSource = (source: () => Promise<string>) => { tokenSource = source; };
 
 async function request<T>(method: string, path: string, body?: object): Promise<T> {
-  if (!tokenSource) throw new Error('Sign in to continue.');
+  if (!tokenSource) throw new Error(t('session.signInFirst'));
   const response = await fetch(`${API_URL}${path}`, {
     method,
     headers: {
@@ -106,11 +107,11 @@ async function request<T>(method: string, path: string, body?: object): Promise<
   const text = await response.text();
   let result: T & { message?: string; code?: string };
   try { result = text ? JSON.parse(text) : {} as T; }
-  catch { throw new ApiError('The service returned an invalid response. Please try again.', response.status); }
+  catch { throw new ApiError(t('api.invalidResponse'), response.status); }
   if (!response.ok) {
     const message = response.status === 401
-      ? 'Your session expired. Sign in again.'
-      : result?.message ?? 'The service is unavailable. Please try again.';
+      ? t('session.expired')
+      : result?.message ?? t('api.unavailable');
     throw new ApiError(message, response.status, result?.code);
   }
   return result as T;
@@ -166,7 +167,7 @@ export async function createUpload(
     },
   });
   const promise = task.uploadAsync().then(result => {
-    if (result.status < 200 || result.status >= 300) throw new Error('The upload failed. Please try again.');
+    if (result.status < 200 || result.status >= 300) throw new Error(t('upload.failed'));
   });
   return { job, upload: { promise, cancel: () => task.cancel() } };
 }

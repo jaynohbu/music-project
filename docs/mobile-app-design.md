@@ -377,6 +377,17 @@ The staff uses `react-native-svg`. It draws in four-bar chunks and mounts only t
 
 `react-native-svg` is a native module, so this needs a new native build. Builds 93fc2cf2 and earlier do not include it.
 
+### Languages
+
+Settings → Language offers 12 languages: English, 한국어, 日本語, 简体中文, Filipino, Tiếng Việt, Bahasa Indonesia, Français, Deutsch, Español, Português and Italiano. "Phone language" is the default. It follows the iPhone's language (via `expo-localization`) and falls back to English. The choice is saved in `language.json` in the app's documents.
+
+- `src/locales/en.ts` is the source. Each key's text may hold `{name}` placeholders. Every other file is typed as `Strings`, so `npx tsc --noEmit` fails if a language is missing a key.
+- `src/i18n.ts` holds the language list, phone-language matching and the global `t()`, which is used for errors raised outside screens. `src/language.tsx` provides `useT()` and `useLanguage()` for screens, so they redraw when the language changes.
+- Data lists (instruments, effects, follow strengths, themes) keep English labels. Screens look up `stem.*`, `effect.*`, `instrument.*`, `follow.*` and `theme.*` keys by id.
+- To add text: add a key to `en.ts`, then add the same key to the other 11 files.
+- Known limits: messages written by the server and iOS system prompts (such as the microphone permission) stay in English. The translations are machine-made and should be reviewed by native speakers.
+- `expo-localization` is a native module, so this needs a new native build.
+
 ## Constraints
 
 - **iOS cannot be built on this Mac.** Expo SDK 58 needs Swift 6.2 (Xcode 26); the Mac has Xcode 16.2 on macOS 14.5. Use EAS and a physical iPhone, as in App deployment. Yanji's submit settings suggest an Apple Developer account exists, but its status has not been checked, and an old Yanji `build.log` shows a "no team" failure.
