@@ -34,6 +34,7 @@
         "react-native-audio-api",
         {
           "iosBackgroundMode": true,
+          "iosMicrophonePermission": "Sorituh records your instrument when you play along live, so the band can follow your tempo.",
           "androidForegroundService": true,
           "androidFSTypes": [
             "mediaPlayback"

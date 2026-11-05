@@ -354,6 +354,10 @@ The user approved a replacement iPhone staging build: [`b7d97010-a0da-440f-99f9-
 - The bundled diagnostic stems are opposite-polarity pairs, so playing all six cancels to silence and makes mute/solo misleading. The controls test now uses only the non-cancelling "a" stems and logs per-stem levels for all-on, mute and solo, which confirmed mute and solo work. Real songs are unaffected.
 - iPhone staging build 93fc2cf2 includes the scrolling fix.
 
+### Live follow
+
+Playing along with an instrument while the stems follow the player's tempo, and saving the take with its tempo log, is described in [live-follow.md](./live-follow.md).
+
 ### Lyrics and score (악보)
 
 The app now has the website's lyrics and score in each stem card, between the header and the timeline:

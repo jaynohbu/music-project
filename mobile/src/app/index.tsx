@@ -4,6 +4,7 @@ import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'rea
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { type Song, type Usage, deleteSong, getUsage, listSongs } from '../api';
 import { forgetSong } from '../cache';
+import { deleteTake } from '../live-take';
 import { Button, ButtonRow, Centered, Loading, errorText, formatTime, useConfirm } from '../ui';
 import { type Theme, useStyles, useTheme } from '../theme';
 
@@ -68,7 +69,7 @@ export default function Songs() {
   const remove = async (song: Song) => {
     if (!await confirm('Delete this song?', `Permanently delete "${song.title ?? 'Untitled song'}", its stems, and its entries in every scene?`, 'Delete song')) return;
     setDeleting(true);
-    try { await deleteSong(song.jobId); forgetSong(song.jobId); await load(); }
+    try { await deleteSong(song.jobId); forgetSong(song.jobId); deleteTake(song.jobId); await load(); }
     catch (failure) { setError(errorText(failure)); }
     finally { setDeleting(false); }
   };

@@ -180,7 +180,7 @@ export function ChannelStrip({ label, display, value, min, max, step, disabled, 
   </View>;
 }
 
-export function MasterFader({ value, onChange }: { value: number; onChange: (value: number) => void }) {
+export function MasterFader({ value, onChange, label = 'Master' }: { value: number; onChange: (value: number) => void; label?: string }) {
   const styles = useStyles(makeStyles);
   const [width, setWidth] = useState(0);
   const origin = useRef(0);
@@ -192,9 +192,9 @@ export function MasterFader({ value, onChange }: { value: number; onChange: (val
     move: (_, g) => onChange(fromX(origin.current + g.dx)),
   });
   return <View style={styles.master}>
-    <Text style={styles.stripName}>MASTER</Text>
+    <Text style={styles.stripName}>{label.toUpperCase()}</Text>
     <View style={styles.masterWell} onLayout={event => setWidth(event.nativeEvent.layout.width)} {...drag.panHandlers}
-      accessible accessibilityRole="adjustable" accessibilityLabel="Master volume"
+      accessible accessibilityRole="adjustable" accessibilityLabel={`${label} volume`}
       accessibilityValue={{ min: 0, max: 100, now: value, text: `${value}%` }}
       accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
       onAccessibilityAction={event => onChange(clamp(value + (event.nativeEvent.actionName === 'increment' ? 5 : -5), 0, 100))}>
@@ -218,7 +218,7 @@ export function LampSwitch({ label, on, onPress, disabled, accessibilityLabel }:
 }
 
 export type IconName = 'play' | 'pause' | 'stop' | 'mute' | 'muteAll' | 'solo' | 'loop'
-  | 'moveEarlier' | 'moveLater' | 'previous' | 'next' | 'remove' | 'reload' | 'reset' | 'edit' | 'add' | 'save' | 'close';
+  | 'moveEarlier' | 'moveLater' | 'previous' | 'next' | 'remove' | 'reload' | 'reset' | 'edit' | 'add' | 'save' | 'close' | 'record';
 
 function Icon({ name, color }: { name: IconName; color: string }) {
   const line = { stroke: color, strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, fill: 'none' };
@@ -245,6 +245,7 @@ function Icon({ name, color }: { name: IconName; color: string }) {
     {name === 'add' && <Path d="M12 4.5v15M4.5 12h15" {...line} strokeWidth={2.6} />}
     {name === 'save' && <Path d="M4.5 12.5l5 5L19.5 7" {...line} strokeWidth={2.6} />}
     {name === 'close' && <Path d="M6 6l12 12M18 6L6 18" {...line} strokeWidth={2.4} />}
+    {name === 'record' && <Path d="M12 5a7 7 0 1 1 0 14a7 7 0 1 1 0-14z" fill={color} />}
   </Svg>;
 }
 

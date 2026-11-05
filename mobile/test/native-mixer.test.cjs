@@ -31,9 +31,10 @@ function fixture() {
   class Context {
     state = 'suspended'; currentTime = 0; sampleRate = 44100;
     destination = new Node(); nodes = []; files = []; failResume = false; badDuration = false;
-    context = { createFileSource: ({ source }) => {
-      const file = { source, duration: source.includes('bad') ? 0 : 240, currentTime: 0, starts: [], disposed: false,
-        pause() {}, seekToTime(value) { this.currentTime = value; },
+    context = { createFileSource: ({ source, playbackRate, preservesPitch }) => {
+      const file = { source, duration: source.includes('bad') ? 0 : source.includes('take') ? 60 : 240, currentTime: 0, starts: [], disposed: false,
+        rate: playbackRate, preservesPitch, paused: 0,
+        pause() { this.paused++; }, seekToTime(value) { this.currentTime = value; },
         start(when) { this.starts.push(when); }, disconnect() {}, volume: 1,
       };
       this.files.push(file); return file;
@@ -61,7 +62,7 @@ function fixture() {
     pause() { this.native.pause(); }
     seekToTime(value) { this.native.seekToTime(value); }
     setVolume(value) { this.native.volume = value; }
-    setPlaybackRate() {}
+    setPlaybackRate(value) { this.native.rate = value; }
     play() {}
     dispose() { this.native.disposed = true; }
   }
@@ -292,12 +293,61 @@ test('closing during Play prevents scheduled starts and releases native listener
   assert.equal(f.events.size, 0); assert.equal(mixer.isPlaying, false);
 });
 
+test('stems stretch to a new speed with pitch kept, and the position follows the speed', async () => {
+  const f = fixture(), mixer = await f.load('player').Mixer.create(f.paths, 'Rate');
+  const context = f.contexts.at(-1);
+  assert.ok(context.files.every(file => file.preservesPitch && file.rate === 1));
+  await mixer.play();
+  context.currentTime = 2.2; // two seconds after the scheduled start
+  assert.ok(Math.abs(mixer.position - 2) < 1e-9);
+  mixer.setRate(1.2);
+  assert.ok(context.files.every(file => file.rate === 1.2));
+  context.currentTime = 4.2;
+  assert.ok(Math.abs(mixer.position - 4.4) < 1e-9, `${mixer.position}`);
+  mixer.setRate(9);
+  assert.equal(mixer.rate, 1.3, 'speed stays in the follow range');
+  await mixer.close();
+});
+
+test('a take plays from the matching point and the stems follow its tempo log', async () => {
+  const f = fixture(), mixer = await f.load('player').Mixer.create(f.paths, 'Take');
+  const context = f.contexts.at(-1);
+  // Recorded with the band starting 0.5 s in, at normal speed until 10 s, then 10% faster.
+  const points = [{ at: 0.5, pos: 0, rate: 1 }, { at: 10, pos: 9.5, rate: 1.1 }];
+  await mixer.attachTake({ path: '/audio/take.m4a', duration: 60, latency: 0.03, points, volume: 0.8, muted: false });
+  assert.ok(mixer.hasTake);
+  await mixer.seek(20);
+  await mixer.play();
+  const take = context.files.find(file => file.source.includes('take'));
+  const expected = 10 + (20 - 9.5) / 1.1 + 0.03;
+  assert.ok(Math.abs(take.currentTime - expected) < 1e-9, `take seeked to ${take.currentTime}`);
+  assert.equal(take.rate, 1, 'the recording itself is never stretched');
+  assert.ok(context.files.filter(file => !file.source.includes('take')).every(file => Math.abs(file.rate - 1.1) < 1e-9));
+  assert.deepEqual(take.starts, [context.files[0].starts.at(-1)]);
+  // Back at the top, the take starts where the band came in during the recording.
+  await mixer.seek(0);
+  const early = context.files.filter(file => file.source.includes('take')).at(-1);
+  assert.notEqual(early, take, 'a take source is reopened on every start');
+  assert.ok(take.disposed);
+  assert.ok(Math.abs(early.currentTime - 0.53) < 1e-9, `${early.currentTime}`);
+  assert.equal(mixer.rate, 1);
+  mixer.setTakeLevel({ muted: true });
+  assert.deepEqual(mixer.takeLevel, { volume: 0.8, muted: true });
+  await mixer.removeTake();
+  assert.ok(!mixer.hasTake);
+  assert.ok(early.disposed);
+  assert.equal(mixer.rate, 1);
+  await mixer.close();
+});
+
 test('stalled native audio produces a visible error instead of pretending to Play', async () => {
   const f = fixture(), mixer = await f.load('player').Mixer.create(f.paths, 'Stall');
   await mixer.play();
   const realNow = Date.now;
   try {
     Date.now = () => realNow() + 2500;
+    mixer.tick(); // the first check after a start only takes a baseline
+    Date.now = () => realNow() + 5000;
     mixer.tick();
     await new Promise(resolve => setImmediate(resolve));
     assert.match(mixer.error, /Audio did not advance/);

@@ -4,6 +4,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { HARMONY_STEMS, STEM_NAMES, getSong, type LyricLine, type SceneEntry, type SceneSettings, type Song, type StemName } from './api';
 import { addCleanedFile, holdSong, songFiles, stemPaths } from './cache';
 import { EFFECT_CONTROLS } from './effects';
+import { LivePanel } from './live-panel';
 import { Mixer, defaultChannel } from './player';
 import { ChannelStrip, IconButton, LampSwitch, MasterFader, Timeline } from './mixer-console';
 import { useStemScroll } from './stem-scroll';
@@ -133,6 +134,8 @@ export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; son
       });
   }), [scroll]);
   const [busy, setBusy] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const locked = busy || recording;
   const [error, setError] = useState('');
   const [editingLyrics, setEditingLyrics] = useState(false);
   const confirm = useConfirm();
@@ -170,7 +173,7 @@ export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; son
     return () => { clearInterval(timer); unsubscribe(); };
   }, [mixer]);
   const run = async (operation: () => Promise<void>) => {
-    if (busy) return;
+    if (locked) return;
     setBusy(true); setError('');
     try { await operation(); setPosition(mixer.position); }
     catch (failure) { setError(errorText(failure)); }
@@ -198,6 +201,7 @@ export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; son
     {!!(error || mixer.error || tasks.error) && <Text accessibilityRole="alert" style={styles.error}>{error || mixer.error || tasks.error}</Text>}
     {editingLyrics && tasks.lyrics && <LyricsEditor lines={tasks.lyrics} duration={mixer.duration}
       onSave={saveLyrics} onClose={() => setEditingLyrics(false)} />}
+    {song && <LivePanel key={song.jobId} mixer={mixer} song={song} tasks={tasks} position={position} onRecording={setRecording} />}
     {STEM_NAMES.map(name => {
       const channel = mixer.channel(name);
       const label = name[0].toUpperCase() + name.slice(1);
@@ -219,7 +223,7 @@ export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; son
               accessibilityRole="button" accessibilityLabel={`Load cleaned ${label}`} style={styles.taskButton}>
               <Text style={styles.taskButtonText}>Load cleaned</Text>
             </Pressable>
-            : <Pressable onPress={() => tasks.clean(name)} disabled={busy || tasks.cleaning(name)}
+            : <Pressable onPress={() => tasks.clean(name)} disabled={locked || tasks.cleaning(name)}
               accessibilityRole="button" accessibilityLabel={`Clean ${label}`} accessibilityState={{ disabled: busy || tasks.cleaning(name) }}
               style={[styles.taskButton, (busy || tasks.cleaning(name)) && { opacity: 0.5 }]}>
               <Text style={styles.taskButtonText}>{tasks.cleaning(name) ? 'Cleaning...' : 'Clean'}</Text>
@@ -228,10 +232,10 @@ export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; son
         {!!(tasks.cleanFailure(name) || cleanErrors[name]) &&
           <Text accessibilityRole="alert" style={[styles.error, styles.stemError]}>{tasks.cleanFailure(name) || cleanErrors[name]}</Text>}
         {song && <StemTasks name={name} label={label} cleaned={channel.useCleaned} tasks={tasks} position={position}
-          disabled={busy} onEditLyrics={editLyrics} />}
+          disabled={locked} onEditLyrics={editLyrics} />}
         <Timeline label={label} duration={mixer.duration} start={mixer.sectionStart} end={mixer.sectionEnd} position={position}
           peaks={channel.useCleaned ? peaks?.[name]?.cleaned ?? cleanedPeaks[name] : peaks?.[name]?.original}
-          disabled={busy} onSection={(start, end) => mixer.setSection(start, end)}
+          disabled={locked} onSection={(start, end) => mixer.setSection(start, end)}
           onSeek={time => void run(() => mixer.seek(time))}
           onReset={() => mixer.setSection(0, mixer.duration)} />
         <Pressable onPress={() => { if (!expanded) openStem(name); }} style={styles.consoleHeading}
@@ -251,10 +255,10 @@ export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; son
         </Pressable>
         {expanded && <View style={styles.console}>
           <View style={styles.transport}>
-            <IconButton primary icon={mixer.isPlaying ? 'pause' : 'play'} disabled={busy}
+            <IconButton primary icon={mixer.isPlaying ? 'pause' : 'play'} disabled={locked}
               accessibilityLabel={`${mixer.isPlaying ? 'Pause' : inside ? 'Resume' : 'Play'} all stems`}
               onPress={() => void run(() => mixer.isPlaying ? mixer.pause() : mixer.play())} />
-            <IconButton icon="stop" disabled={busy || (!mixer.isPlaying && position === mixer.sectionStart)}
+            <IconButton icon="stop" disabled={locked || (!mixer.isPlaying && position === mixer.sectionStart)}
               accessibilityLabel="Stop all stems" onPress={() => void run(() => mixer.stop())} />
             <IconButton icon="mute" accessibilityLabel={`Mute ${label}`} on={channel.muted}
               onPress={() => mixer.setChannel(name, { muted: !channel.muted })} />

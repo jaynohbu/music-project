@@ -2,7 +2,7 @@
 // driven by one audio context so they stay sample-aligned (design doc, Audio engine).
 import {
   AudioContext, AudioManager, MediaElementAudioSourceNode, PlaybackNotificationManager,
-  type AudioParam, type GainNode,
+  type AudioParam, type GainNode, type RecorderAdapterNode,
 } from 'react-native-audio-api';
 // @ts-expect-error Not part of the public API, so the library is pinned (design doc).
 // It is the only way to start every stem at one shared time.
@@ -10,6 +10,7 @@ import { AudioFileSourceNode } from 'react-native-audio-api/lib/module/Audio/Aud
 import type { AudioFileSourceNode as FileSource } from 'react-native-audio-api/lib/typescript/Audio/AudioFileSourceNode';
 import { STEM_NAMES, type StemName } from './api';
 import { applyEffects, createEffects, defaults, stereoGain, type EffectNodes, type Effects } from './effects';
+import { MAX_RATE, MIN_RATE, rateAt, songPositionAt, takeTimeAt, type TempoPoint } from './live-follow';
 
 export interface Channel extends Omit<Effects, 'volume'> {
   volume: number; // 0 to 1
@@ -38,6 +39,23 @@ const SEEK_SETTLE_MS = 500;
 // library, so playback ends this far before the shortest stem runs out.
 const END_MARGIN = .5;
 const SKIP_SECONDS = 15;
+// While a take plays, the stems' speed is checked this often against its tempo log.
+const FOLLOW_MS = 25;
+// Any drift from the log is closed over this long, and never by more than FOLLOW_NUDGE.
+const FOLLOW_CATCH_UP = 0.5;
+const FOLLOW_NUDGE = 0.05;
+
+// The player's recorded take: played next to the stems, which follow its tempo log.
+export interface TakeTrack {
+  path: string;
+  duration: number;
+  latency: number;
+  points: TempoPoint[];
+  volume: number;
+  muted: boolean;
+}
+
+interface OpenSource { source: FileSource; routed: MediaElementAudioSourceNode }
 
 interface Stem {
   source: FileSource;
@@ -95,6 +113,12 @@ export class Mixer {
   private playingBeforeInterruption = false;
   private playableEnd = 0;
   private notificationShown = false;
+  // Song seconds per second; stems are time-stretched with their pitch kept.
+  private speed = 1;
+  private take: (TakeTrack & { gain: GainNode; open?: OpenSource; clock: number; offset: number; startTimer?: ReturnType<typeof setTimeout> }) | null = null;
+  // While recording a new take, the old one stays silent and the live follower sets the speed.
+  private takeSuspended = false;
+  private followTimer: ReturnType<typeof setInterval> | null = null;
   error = '';
   loop = false;
   sectionStart = 0;
@@ -143,12 +167,17 @@ export class Mixer {
   }
 
   private createSource(path: string, target: GainNode, watchEnd: boolean): FileSource {
+    const opened = this.openSource(path, target, watchEnd);
+    this.sources.push(opened.source);
+    return opened.source;
+  }
+
+  private openSource(path: string, target: GainNode, watchEnd: boolean): OpenSource {
     const native = this.context.context.createFileSource({
-      source: path, loop: false, volume: 1, playbackRate: 1, preservesPitch: false,
+      source: path, loop: false, volume: 1, playbackRate: this.speed, preservesPitch: true,
     });
     if (!native) throw new Error('The audio engine is unavailable.');
     const source: FileSource = new AudioFileSourceNode(this.context, native);
-    this.sources.push(source);
     // attach()/dispose() in pinned 0.13.6 leave JS listeners registered. Own and
     // remove the native event subscriptions so changing Scene tabs releases audio.
     if (watchEnd) {
@@ -176,7 +205,7 @@ export class Mixer {
     };
     const routed = new MediaElementAudioSourceNode(this.context, { mediaElement });
     routed.connect(target);
-    return source;
+    return { source, routed };
   }
 
   private createStem(path: string, cleanedPath?: string): Stem {
@@ -233,7 +262,7 @@ export class Mixer {
       catch (failure) {
         this.playing = false;
         this.error = failure instanceof Error ? failure.message : 'Playback failed. Please reload this song.';
-        for (const source of this.sources) source.pause();
+        this.pauseAll();
         this.changed();
         throw failure;
       }
@@ -255,9 +284,30 @@ export class Mixer {
 
   get isPlaying() { return this.playing; }
 
-  get position() {
+  get position() { return this.positionAt(this.context.currentTime); }
+
+  // The song position heard at an audio-clock time; times just in the past use the current speed.
+  positionAt(time: number) {
     if (!this.playing || this.restarting) return this.startPosition;
-    return Math.min(this.startPosition + Math.max(this.context.currentTime - this.startClock, 0), this.sectionEnd);
+    return Math.min(this.startPosition + this.speed * Math.max(time - this.startClock, 0), this.sectionEnd);
+  }
+
+  get contextTime() { return this.context.currentTime; }
+  // The audio-clock time the stems started, or will start, playing.
+  get startTime() { return this.startClock; }
+  get rate() { return this.speed; }
+
+  // Changes how fast the stems play without changing their pitch.
+  setRate(value: number) {
+    const rate = Math.min(MAX_RATE, Math.max(MIN_RATE, value));
+    if (!Number.isFinite(rate) || Math.abs(rate - this.speed) < 1e-4) return;
+    const now = this.context.currentTime;
+    if (this.playing && !this.restarting && now > this.startClock) {
+      this.startPosition = this.positionAt(now);
+      this.startClock = now;
+    }
+    this.speed = rate;
+    for (const source of this.sources) source.setPlaybackRate(rate);
   }
 
   // Where playback ends: the section end, but never past the playable end of the stems.
@@ -272,8 +322,9 @@ export class Mixer {
     this.startPosition = position;
     this.restarting = true;
     try {
-      for (const source of sources) source.pause();
+      this.pauseAll();
       for (const source of sources) source.seekToTime(position);
+      const takeStart = this.prepareTake(position);
       await wait(SEEK_SETTLE_MS);
       if (this.closed) return;
       await this.context.resume();
@@ -281,6 +332,7 @@ export class Mixer {
       const when = this.context.currentTime + START_DELAY;
       for (const source of sources) source.getFileSourceNode().start(when);
       this.startClock = when;
+      this.startTake(takeStart, when);
     } finally {
       this.restarting = false;
       // The native position updates only once the seeked audio renders, so take the baseline later.
@@ -303,7 +355,7 @@ export class Mixer {
     return this.run(async () => {
       if (!this.playing) return;
       const position = this.position;
-      for (const source of this.sources) source.pause();
+      this.pauseAll();
       this.playing = false;
       this.startPosition = position;
       this.notify();
@@ -342,7 +394,7 @@ export class Mixer {
     this.endPending = true;
     void this.run(async () => {
       if (!this.playing) return;
-      for (const source of this.sources) source.pause();
+      this.pauseAll();
       this.playing = false;
       this.startPosition = this.sectionStart;
       const looping = this.loop;
@@ -350,6 +402,121 @@ export class Mixer {
       this.notify();
       if (!looping) for (const listener of this.endedListeners) listener();
     }).catch(error => console.warn('Song completion failed', error)).finally(() => { this.endPending = false; });
+  }
+
+  private pauseAll() {
+    for (const source of this.sources) source.pause();
+    this.closeTakeSource();
+  }
+
+  // The take is reopened on every start: a file source that reached its end cannot play again.
+  private closeTakeSource() {
+    const take = this.take;
+    if (!take) return;
+    clearTimeout(take.startTimer);
+    if (take.open) {
+      take.open.source.pause();
+      take.open.routed.disconnect();
+      take.open.source.dispose();
+      take.open = undefined;
+    }
+  }
+
+  // Opens and seeks the take for a start at a song position; returns the take time it starts from.
+  private prepareTake(position: number) {
+    const take = this.take;
+    if (!take || this.takeSuspended) return null;
+    const offset = takeTimeAt(take.points, position) + take.latency;
+    if (offset >= take.duration) return null;
+    take.open = this.openSource(take.path, take.gain, false);
+    take.open.source.setPlaybackRate(1);
+    if (offset > 0) take.open.source.seekToTime(offset);
+    this.setRate(rateAt(take.points, offset - take.latency));
+    return offset;
+  }
+
+  private startTake(offset: number | null, when: number) {
+    const take = this.take;
+    if (!take?.open || offset === null) return;
+    take.clock = when; take.offset = offset;
+    // Before the recording began, the stems play alone until the take's first sample is due.
+    take.open.source.getFileSourceNode().start(when + Math.max(0, -offset));
+    this.startFollowing();
+  }
+
+  // Keeps the stems on the take's tempo log while the take plays.
+  private startFollowing() {
+    if (this.followTimer) return;
+    this.followTimer = setInterval(() => {
+      const take = this.take;
+      if (!take || this.takeSuspended || !this.playing || this.restarting) return;
+      const now = this.context.currentTime;
+      if (now <= this.startClock) return;
+      const at = take.offset + (now - take.clock) - take.latency;
+      const drift = (songPositionAt(take.points, at) - this.positionAt(now)) / FOLLOW_CATCH_UP;
+      const target = rateAt(take.points, at) + Math.max(-FOLLOW_NUDGE, Math.min(FOLLOW_NUDGE, drift));
+      if (Math.abs(target - this.speed) > 0.002) this.setRate(target);
+    }, FOLLOW_MS);
+  }
+
+  private stopFollowing() {
+    if (this.followTimer) clearInterval(this.followTimer);
+    this.followTimer = null;
+  }
+
+  get hasTake() { return !!this.take; }
+  get takeLevel() { return this.take ? { volume: this.take.volume, muted: this.take.muted } : null; }
+
+  // Plays a recorded take with the stems following its tempo; replaces any take already attached.
+  attachTake(track: TakeTrack) {
+    return this.run(async () => {
+      this.detach();
+      const gain = stereoGain(this.context, track.muted ? 0 : track.volume);
+      gain.connect(this.master);
+      this.take = { ...track, gain, clock: 0, offset: 0 };
+      if (this.playing && !this.takeSuspended) await this.startAt(this.position);
+      this.changed();
+    });
+  }
+
+  removeTake() {
+    return this.run(async () => { this.detach(); this.changed(); });
+  }
+
+  private detach() {
+    this.closeTakeSource();
+    this.stopFollowing();
+    this.take?.gain.disconnect();
+    this.take = null;
+    if (!this.takeSuspended) this.setRate(1);
+  }
+
+  setTakeLevel(change: { volume?: number; muted?: boolean }) {
+    const take = this.take;
+    if (!take) return;
+    Object.assign(take, change);
+    ramp(take.gain.gain, take.muted ? 0 : take.volume, this.context.currentTime);
+    this.changed();
+  }
+
+  // While recording, the old take is silent and the caller drives the speed with setRate.
+  suspendTake(suspended: boolean) {
+    return this.run(async () => {
+      if (this.takeSuspended === suspended) return;
+      this.takeSuspended = suspended;
+      if (suspended) { this.closeTakeSource(); this.stopFollowing(); }
+      this.setRate(1);
+      if (!suspended && this.take && this.playing) await this.startAt(this.position);
+    });
+  }
+
+  // Routes live input to the speakers, for players without monitoring on their interface.
+  createInputMonitor(volume: number): { input: RecorderAdapterNode; gain: GainNode } {
+    const input = this.context.createRecorderAdapter();
+    const gain = stereoGain(this.context, volume);
+    input.connect(gain);
+    gain.connect(this.master);
+    return { input, gain };
   }
 
   hasCleaned(name: StemName) { return !!this.stems[name].cleaned; }
@@ -390,7 +557,7 @@ export class Mixer {
   }
   stop() {
     return this.run(async () => {
-      for (const source of this.sources) source.pause();
+      this.pauseAll();
       this.playing = false; this.startPosition = this.sectionStart;
       this.notify();
     });
@@ -441,11 +608,13 @@ export class Mixer {
     if (this.closing) return this.closing;
     this.closed = true;
     this.closing = (async () => {
-      for (const source of this.sources) source.pause();
+      this.pauseAll();
+      this.stopFollowing();
       await this.queue;
       this.playing = false;
       for (const subscription of this.subscriptions) subscription.remove();
       for (const source of this.sources) source.dispose();
+      this.closeTakeSource();
       for (const name of STEM_NAMES) clearTimeout(this.stems[name].effects.links.reverbOff);
       this.listeners.clear(); this.endedListeners.clear();
       await notification(() => PlaybackNotificationManager.hide()).catch(error => console.warn('Could not hide media controls', error));
