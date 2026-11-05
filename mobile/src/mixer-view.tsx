@@ -206,7 +206,8 @@ export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; son
       const channel = mixer.channel(name);
       const label = name[0].toUpperCase() + name.slice(1);
       const expanded = open === name;
-      const live = mixer.isPlaying && !channel.muted && !(soloing && !channel.solo);
+      const replaced = mixer.replacedStem === name;
+      const live = mixer.isPlaying && !channel.muted && !replaced && !(soloing && !channel.solo);
       return <View key={name} style={styles.stem} ref={view => { stems.current[name] = view; }}>
         <View style={styles.stemHeader}>
           <Text style={styles.stemTitle}>{label}</Text>
@@ -249,6 +250,7 @@ export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; son
             <Text style={styles.statusText}>{Math.round(channel.volume * 100)}%</Text>
             {channel.muted && <Text style={styles.statusState}>Muted</Text>}
             {channel.solo && <Text style={styles.statusState}>Solo</Text>}
+            {replaced && <Text style={styles.statusState}>Your part</Text>}
             <View style={[styles.led, live && styles.ledOn]} />
             <Text style={styles.statusText}>{channel.bypassed ? 'FX off' : 'FX on'}</Text>
           </View>
@@ -289,7 +291,8 @@ export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; son
               onPress={() => mixer.setChannel(name, { ...defaultChannel(), useCleaned: channel.useCleaned })} />
           </ButtonRow>
           <Text style={styles.consoleNote}>
-            {channel.bypassed ? 'Effects bypassed. Volume, mute and solo still apply.'
+            {replaced ? 'Silent while you play this part. Turn it back on in the Live panel.'
+              : channel.bypassed ? 'Effects bypassed. Volume, mute and solo still apply.'
               : soloing && !channel.solo ? 'Silent while another stem is soloed.'
                 : 'All effects apply to this stem. Reset restores its faders and buttons only.'}
           </Text>

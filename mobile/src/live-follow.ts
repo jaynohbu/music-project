@@ -1,6 +1,7 @@
-// Live follow: hears the player's strums, compares them with the song's beat map and
+// Live follow: hears the player's notes, compares them with the song's beat map and
 // works out how fast the backing stems should play so they stay with the player.
 // Pure functions and classes only, so it runs in tests without audio.
+import type { StemName } from './api';
 
 // How the backing was stretched during a take, on the take's own clock (seconds into the
 // recording). From each point on, the song advanced at `rate` song seconds per second.
@@ -64,44 +65,136 @@ function beatLength(beats: number[], beat: number) {
   return beats[index + 1] - beats[index];
 }
 
-// Finds note attacks: a sudden rise in high-passed loudness above the last few
-// milliseconds, loud enough above the background, and not right after another one.
+// Finds the moments new notes start with spectral flux: how much new sound appears across the
+// spectrum since the last frame. A ringing note fades and adds nothing; a new strum, pluck, key
+// or sung syllable adds energy at its own frequencies even when it is not louder overall.
+// `size` is the analysis frame (longer resolves low notes), `hop` the step between frames,
+// `sensitivity` how far above the recent average flux a note must rise, `low` the lowest
+// frequency listened to, `spread` how many neighbouring bins a held note may wander (vibrato,
+// bends) without counting as new, and `gap` the shortest time between two notes.
+export interface OnsetOptions { size: number; hop: number; sensitivity: number; floor: number; spread: number; low: number; gap: number; silence: number }
+export const DEFAULT_ONSETS: OnsetOptions = { size: 1024, hop: 256, sensitivity: 1.6, floor: 3, spread: 1, low: 70, gap: 0.08, silence: -60 };
+
+export type InstrumentId = 'guitar' | 'bass' | 'keyboard' | 'piano' | 'drums' | 'vocals' | 'other';
+// `stem` is the band part the instrument stands in for, silenced while the player's take is heard.
+export const INSTRUMENTS: { id: InstrumentId; label: string; stem: StemName | null; onsets: OnsetOptions }[] = [
+  { id: 'guitar', label: 'Guitar', stem: 'guitar', onsets: DEFAULT_ONSETS },
+  { id: 'bass', label: 'Bass', stem: 'bass', onsets: { ...DEFAULT_ONSETS, size: 2048, low: 30, gap: 0.1 } },
+  { id: 'keyboard', label: 'Keyboard', stem: 'piano', onsets: { ...DEFAULT_ONSETS, low: 40 } },
+  { id: 'piano', label: 'Piano', stem: 'piano', onsets: { ...DEFAULT_ONSETS, low: 40 } },
+  { id: 'drums', label: 'Drums', stem: 'drums', onsets: { ...DEFAULT_ONSETS, low: 40, gap: 0.06 } },
+  { id: 'vocals', label: 'Vocals', stem: 'vocals', onsets: { ...DEFAULT_ONSETS, low: 80, sensitivity: 1.4, gap: 0.15 } },
+  { id: 'other', label: 'Other', stem: null, onsets: { ...DEFAULT_ONSETS, low: 40 } },
+];
+export const instrument = (id: string | undefined) => INSTRUMENTS.find(item => item.id === id) ?? INSTRUMENTS[0];
+
+// In-place radix-2 FFT; `real` and `imag` have a power-of-two length.
+function fft(real: Float64Array, imag: Float64Array) {
+  const n = real.length;
+  for (let index = 1, swap = 0; index < n; index++) {
+    let bit = n >> 1;
+    for (; swap & bit; bit >>= 1) swap ^= bit;
+    swap ^= bit;
+    if (index < swap) {
+      [real[index], real[swap]] = [real[swap], real[index]];
+      [imag[index], imag[swap]] = [imag[swap], imag[index]];
+    }
+  }
+  for (let length = 2; length <= n; length <<= 1) {
+    const angle = -2 * Math.PI / length, stepReal = Math.cos(angle), stepImag = Math.sin(angle);
+    for (let start = 0; start < n; start += length) {
+      let turnReal = 1, turnImag = 0;
+      for (let offset = 0; offset < length / 2; offset++) {
+        const a = start + offset, b = a + length / 2;
+        const productReal = real[b] * turnReal - imag[b] * turnImag, productImag = real[b] * turnImag + imag[b] * turnReal;
+        real[b] = real[a] - productReal; imag[b] = imag[a] - productImag;
+        real[a] += productReal; imag[a] += productImag;
+        [turnReal, turnImag] = [turnReal * stepReal - turnImag * stepImag, turnReal * stepImag + turnImag * stepReal];
+      }
+    }
+  }
+}
+
 export class OnsetDetector {
-  private readonly hop: number;
-  private previous = 0;
-  private filled = 0;
-  private energy = 0;
-  private hopStart = 0;
-  private readonly recent: number[] = [];
-  private floor = -60;
-  private last = -Infinity;
-  constructor(private readonly sampleRate: number, private readonly options = { hop: 256, rise: 9, aboveFloor: 14, gap: 0.08, silence: -58 }) {
-    this.hop = options.hop;
+  private readonly ring: Float32Array;
+  private readonly window: Float64Array;
+  private readonly real: Float64Array;
+  private readonly imag: Float64Array;
+  private previous: Float64Array | null = null;
+  private readonly first: number;
+  private readonly last: number;
+  private written = 0;
+  private sinceFrame = 0;
+  private readonly fluxes: number[] = [];
+  // The newest frame is held back one hop so it is only reported when it is a peak.
+  private candidate: { at: number; flux: number } | null = null;
+  private lastOnset = -Infinity;
+  constructor(private readonly sampleRate: number, private readonly options: OnsetOptions = DEFAULT_ONSETS) {
+    const { size } = options;
+    this.ring = new Float32Array(size);
+    this.window = Float64Array.from({ length: size }, (_, index) => 0.5 - 0.5 * Math.cos(2 * Math.PI * index / size));
+    this.real = new Float64Array(size);
+    this.imag = new Float64Array(size);
+    this.first = Math.max(1, Math.floor(options.low * size / sampleRate));
+    this.last = Math.min(size / 2, Math.ceil(5000 * size / sampleRate));
   }
 
   // `when` is the take time of the first sample. Returns the take times of new onsets.
   push(samples: Float32Array, when: number): number[] {
     const found: number[] = [];
+    const { size, hop } = this.options;
     for (let index = 0; index < samples.length; index++) {
-      if (this.filled === 0) this.hopStart = when + index / this.sampleRate;
-      const sample = samples[index], emphasised = sample - 0.95 * this.previous;
-      this.previous = sample;
-      this.energy += emphasised * emphasised;
-      if (++this.filled < this.hop) continue;
-      const level = 10 * Math.log10(this.energy / this.hop + 1e-12);
-      this.filled = 0; this.energy = 0;
-      const before = this.recent.length ? Math.min(...this.recent) : level;
-      const { rise, aboveFloor, gap, silence } = this.options;
-      if (level - before >= rise && level - this.floor >= aboveFloor && level > silence && this.hopStart - this.last >= gap) {
-        this.last = this.hopStart;
-        found.push(this.hopStart);
-      }
-      this.recent.push(level);
-      if (this.recent.length > 4) this.recent.shift();
-      // The background level falls quickly and creeps up slowly, so notes do not raise it much.
-      this.floor = level < this.floor ? level : this.floor + 0.02;
+      this.ring[this.written % size] = samples[index];
+      this.written++;
+      if (++this.sinceFrame < hop || this.written < size) continue;
+      this.sinceFrame = 0;
+      const end = when + (index + 1) / this.sampleRate;
+      const onset = this.frame(end);
+      if (onset !== null) found.push(onset);
     }
     return found;
+  }
+
+  private frame(end: number): number | null {
+    const { size, sensitivity, gap, silence } = this.options;
+    const { real, imag, window, ring } = this;
+    let energy = 0;
+    for (let index = 0; index < size; index++) {
+      const sample = ring[(this.written + index) % size];
+      energy += sample * sample;
+      real[index] = sample * window[index];
+      imag[index] = 0;
+    }
+    fft(real, imag);
+    const magnitudes = new Float64Array(this.last - this.first);
+    for (let bin = this.first; bin < this.last; bin++) {
+      // Scaled to the sine amplitude, then log compressed so quiet and loud notes count alike
+      // while the window's faint side lobes (which move with vibrato) stay near zero.
+      magnitudes[bin - this.first] = Math.log1p(1000 * Math.hypot(real[bin], imag[bin]) * 4 / size);
+    }
+    let flux = 0;
+    const { spread, floor } = this.options, previous = this.previous;
+    if (previous) for (let bin = 0; bin < magnitudes.length; bin++) {
+      let before = previous[bin];
+      for (let near = Math.max(0, bin - spread); near <= Math.min(magnitudes.length - 1, bin + spread); near++) before = Math.max(before, previous[near]);
+      flux += Math.max(0, magnitudes[bin] - before);
+    }
+    this.previous = magnitudes;
+    const loud = 10 * Math.log10(energy / size + 1e-12) > silence;
+    // A new note fills the newest part of the frame first; this places it where it began.
+    const at = end - 0.25 * size / this.sampleRate;
+    const recent = this.fluxes.length ? this.fluxes.reduce((sum, value) => sum + value, 0) / this.fluxes.length : flux;
+    this.fluxes.push(flux);
+    if (this.fluxes.length > 24) this.fluxes.shift();
+
+    let onset: number | null = null;
+    const held = this.candidate;
+    this.candidate = null;
+    if (held && flux < held.flux) { onset = held.at; this.lastOnset = held.at; }
+    if (loud && flux > sensitivity * recent + floor && at - this.lastOnset >= gap && (!held || flux >= held.flux)) {
+      this.candidate = { at, flux };
+    }
+    return onset;
   }
 }
 

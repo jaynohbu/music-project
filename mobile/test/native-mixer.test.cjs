@@ -340,6 +340,20 @@ test('a take plays from the matching point and the stems follow its tempo log', 
   await mixer.close();
 });
 
+test('the stem a live take replaces is silent without changing its channel', async () => {
+  const f = fixture(), mixer = await f.load('player').Mixer.create(f.paths, 'Replace');
+  mixer.setChannel('bass', { volume: .7 });
+  mixer.setReplacedStem('bass');
+  assert.equal(mixer.replacedStem, 'bass');
+  assert.equal(mixer.stems.bass.gain.gain.value, 0);
+  assert.equal(mixer.channels.bass.muted, false);
+  assert.equal(mixer.channels.bass.volume, .7);
+  assert.equal(mixer.stems.guitar.gain.gain.value, .8);
+  mixer.setReplacedStem(null);
+  assert.equal(mixer.stems.bass.gain.gain.value, .7);
+  await mixer.close();
+});
+
 test('stalled native audio produces a visible error instead of pretending to Play', async () => {
   const f = fixture(), mixer = await f.load('player').Mixer.create(f.paths, 'Stall');
   await mixer.play();

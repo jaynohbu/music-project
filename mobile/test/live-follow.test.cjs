@@ -48,6 +48,72 @@ test('onset detector finds plucked notes and ignores their ringing', () => {
   found.forEach((time, index) => assert.ok(Math.abs(time - plucks[index]) < 0.012, `${time} vs ${plucks[index]}`));
 });
 
+test('the bass settings find low plucked notes', () => {
+  const rate = 44100, length = rate * 3, signal = new Float32Array(length), next = random(11);
+  const plucks = [0.4, 0.9, 1.4, 1.65, 2.4];
+  for (let index = 0; index < length; index++) signal[index] = (next() - 0.5) * 0.002;
+  for (const start of plucks) {
+    for (let index = Math.round(start * rate); index < length; index++) {
+      const time = index / rate - start;
+      // A low E string: mostly fundamental, a little second harmonic, slow decay.
+      signal[index] += 0.5 * Math.exp(-time / 0.6) * (Math.sin(2 * Math.PI * 41.2 * time) + 0.4 * Math.sin(2 * Math.PI * 82.4 * time) + 0.1 * Math.sin(2 * Math.PI * 164.8 * time));
+    }
+  }
+  const detector = new live.OnsetDetector(rate, live.instrument('bass').onsets), found = [];
+  for (let start = 0; start < length; start += 512) found.push(...detector.push(signal.subarray(start, start + 512), start / rate));
+  assert.equal(found.length, plucks.length, `found ${found.map(time => time.toFixed(3))}`);
+  found.forEach((time, index) => assert.ok(Math.abs(time - plucks[index]) < 0.02, `${time} vs ${plucks[index]}`));
+});
+
+// Renders notes that each replace the one before, like a monophonic line, over faint noise.
+function line(notes, voice, length = 3, seed = 7) {
+  const rate = 44100, signal = new Float32Array(rate * length), next = random(seed);
+  for (let index = 0; index < signal.length; index++) signal[index] = (next() - 0.5) * 0.002;
+  notes.forEach((note, number) => {
+    const stop = Math.min(signal.length, Math.round((notes[number + 1]?.at ?? length) * rate));
+    for (let index = Math.round(note.at * rate); index < stop; index++) signal[index] += voice(index / rate - note.at, note.f);
+  });
+  return signal;
+}
+
+function onsets(id, signal) {
+  const detector = new live.OnsetDetector(44100, live.instrument(id).onsets), found = [];
+  for (let start = 0; start < signal.length; start += 512) found.push(...detector.push(signal.subarray(start, start + 512), start / 44100));
+  return found;
+}
+
+const tone = (f, time, weights) => weights.reduce((sum, weight, k) => sum + weight * Math.sin(2 * Math.PI * f * (k + 1) * time), 0);
+
+test('keyboard notes are found by their change of pitch, not only by loudness', () => {
+  const notes = [0.3, 0.8, 1.3, 1.55, 2.2].map((at, index) => ({ at, f: [392, 494, 588, 440, 660][index] }));
+  // A soft organ-like attack with no level jump between legato notes.
+  const found = onsets('keyboard', line(notes, (time, f) => 0.2 * Math.min(1, time / 0.01) * tone(f, time, [1, 0.3, 0.1])));
+  assert.equal(found.length, notes.length, `found ${found.map(time => time.toFixed(3))}`);
+  found.forEach((time, index) => assert.ok(Math.abs(time - notes[index].at) < 0.02, `${time} vs ${notes[index].at}`));
+});
+
+test('a held sung note with vibrato counts once', () => {
+  // A 3% vibrato at 6 Hz, with the phase integrated so the swing stays the same.
+  const voice = (time, f) => {
+    const phase = f * time - f * 0.03 * Math.cos(2 * Math.PI * 6 * time) / (2 * Math.PI * 6);
+    return 0.2 * Math.min(1, time / 0.03) * [1, 0.5, 0.25].reduce((sum, weight, k) => sum + weight * Math.sin(2 * Math.PI * phase * (k + 1)), 0);
+  };
+  const found = onsets('vocals', line([{ at: 0.3, f: 300 }], voice));
+  assert.equal(found.length, 1, `found ${found.map(time => time.toFixed(3))}`);
+});
+
+test('noise alone gives no notes for any instrument', () => {
+  const signal = line([], () => 0, 3, 5).map((_, index, all) => all[index] * 10);
+  for (const item of live.INSTRUMENTS) assert.deepEqual(onsets(item.id, signal), [], item.id);
+});
+
+test('every instrument stands in for a band stem or none', () => {
+  const stems = ['vocals', 'guitar', 'bass', 'piano', 'drums', 'other'];
+  for (const item of live.INSTRUMENTS) assert.ok(item.stem === null || stems.includes(item.stem), item.id);
+  assert.equal(live.instrument('keyboard').stem, 'piano');
+  assert.equal(live.instrument(undefined).id, 'guitar');
+});
+
 test('beatAt continues the edge tempo outside the beat map', () => {
   const beats = [1, 1.5, 2, 2.5];
   assert.equal(live.beatAt(beats, 1.75), 1.5);

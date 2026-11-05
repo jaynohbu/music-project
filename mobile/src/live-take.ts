@@ -1,7 +1,7 @@
 // The player's own recording for a song ("user stem") and the tempo the band followed while
 // it was recorded. One per song, kept in Documents so clearing the stem cache keeps it.
 import { Directory, File, Paths } from 'expo-file-system';
-import type { TempoPoint } from './live-follow';
+import type { InstrumentId, TempoPoint } from './live-follow';
 
 export interface LiveTake {
   version: 1;
@@ -9,11 +9,14 @@ export interface LiveTake {
   file: string;
   recordedAt: number;
   duration: number;
-  // Seconds between the band being heard and the guitar reaching the recording; nudged by the user.
+  // Seconds between the band being heard and the instrument reaching the recording; nudged by the user.
   latency: number;
   points: TempoPoint[];
   volume: number;
   muted: boolean;
+  // What was played, and whether the band's matching stem is silenced while the take plays.
+  instrument: InstrumentId;
+  replace: boolean;
 }
 
 export const TAKES_FOLDER = 'takes';
@@ -32,7 +35,8 @@ export function loadTake(jobId: string): LiveTake | null {
     if (!file.exists) return null;
     const take = JSON.parse(file.textSync()) as LiveTake;
     if (take.version !== 1 || !Array.isArray(take.points) || !new File(folder(jobId), take.file).exists) return null;
-    return take;
+    // Takes recorded before instruments could be chosen were guitar.
+    return { ...take, instrument: take.instrument ?? 'guitar', replace: take.replace ?? true };
   } catch (failure) {
     console.warn('The saved live take could not be read', failure);
     return null;

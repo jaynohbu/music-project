@@ -1,6 +1,6 @@
 // Recording a live take: the player's input is saved as-is while the stems follow their tempo.
 import { AudioManager, AudioRecorder, FileDirectory, FileFormat, type GainNode } from 'react-native-audio-api';
-import { Follower, OnsetDetector, type FollowStatus, type TempoPoint } from './live-follow';
+import { Follower, OnsetDetector, instrument as findInstrument, type FollowStatus, type InstrumentId, type TempoPoint } from './live-follow';
 import { discardRecording, saveTake, takePath, takeSubDirectory, type LiveTake } from './live-take';
 import type { Mixer } from './player';
 
@@ -48,14 +48,17 @@ export class LiveSession {
   onFinished: ((take: LiveTake | null, error?: string) => void) | null = null;
 
   private constructor(private readonly mixer: Mixer, private readonly jobId: string, beats: number[], strength: number,
-    private readonly previous: LiveTake | null) {
+    private readonly previous: LiveTake | null, private readonly instrument: InstrumentId, private readonly replace: boolean) {
     this.follower = new Follower(beats, strength);
   }
 
-  static async start(options: { mixer: Mixer; jobId: string; beats: number[]; strength: FollowStrength; monitor: boolean; previous: LiveTake | null }) {
+  static async start(options: {
+    mixer: Mixer; jobId: string; beats: number[]; strength: FollowStrength; monitor: boolean; previous: LiveTake | null;
+    instrument: InstrumentId; replace: boolean;
+  }) {
     if (!await microphoneAllowed()) throw new Error('Sorituh needs the microphone to hear your instrument. Allow it in Settings > Sorituh > Microphone.');
     const strength = STRENGTHS.find(item => item.id === options.strength)?.value ?? 0.5;
-    const session = new LiveSession(options.mixer, options.jobId, options.beats, strength, options.previous);
+    const session = new LiveSession(options.mixer, options.jobId, options.beats, strength, options.previous, options.instrument, options.replace);
     try { await session.begin(options.monitor); }
     catch (failure) { await session.cleanUp(); throw failure; }
     return session;
@@ -76,7 +79,7 @@ export class LiveSession {
     const ready = this.recorder.onAudioReady({ sampleRate: SAMPLE_RATE, bufferLength: BUFFER, channelCount: 1 }, event => {
       const samples = event.buffer.getChannelData(0).subarray(0, event.numFrames);
       // The device may deliver a different rate than asked for.
-      this.detector ??= new OnsetDetector(event.buffer.sampleRate);
+      this.detector ??= new OnsetDetector(event.buffer.sampleRate, findInstrument(this.instrument).onsets);
       let peak = 0;
       for (let index = 0; index < samples.length; index++) peak = Math.max(peak, Math.abs(samples[index]));
       this.level = Math.max(20 * Math.log10(peak + 1e-9), this.level - 3);
@@ -149,7 +152,7 @@ export class LiveSession {
     }
     const take: LiveTake = {
       version: 1, file, recordedAt: Date.now(), duration: result.duration, latency: DEFAULT_LATENCY,
-      points: this.points, volume: this.previous?.volume ?? 0.9, muted: false,
+      points: this.points, volume: this.previous?.volume ?? 0.9, muted: false, instrument: this.instrument, replace: this.replace,
     };
     saveTake(this.jobId, take);
     await this.mixer.suspendTake(false);

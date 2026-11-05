@@ -3,7 +3,7 @@ import { useEffect, useReducer, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Line, Path } from 'react-native-svg';
 import type { Song } from './api';
-import { MAX_RATE, MIN_RATE } from './live-follow';
+import { INSTRUMENTS, MAX_RATE, MIN_RATE, instrument, type InstrumentId } from './live-follow';
 import { LiveSession, STRENGTHS, type FollowStrength } from './live-session';
 import { deleteTake, loadTake, saveTake, takePath, type LiveTake } from './live-take';
 import { IconButton, LampSwitch, MasterFader } from './mixer-console';
@@ -14,6 +14,15 @@ import { errorText, useConfirm } from './ui';
 
 const SYNC_STEP = 0.01;
 const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
+const HINTS: Record<InstrumentId, string> = {
+  guitar: 'Plug your guitar into an audio interface',
+  bass: 'Plug your bass into an audio interface',
+  keyboard: 'Connect the keyboard’s line out to an audio interface',
+  piano: 'Put the phone near the piano or use a mic on an interface',
+  drums: 'Put the phone near the kit, or mic the snare through an interface',
+  vocals: 'Sing into a mic on an audio interface or a headset mic',
+  other: 'Use an audio interface or put the phone near your instrument',
+};
 const track = (jobId: string, take: LiveTake) => ({ path: takePath(jobId, take), duration: take.duration, latency: take.latency,
   points: take.points, volume: take.volume, muted: take.muted });
 
@@ -26,6 +35,9 @@ export function LivePanel({ mixer, song, tasks, position, onRecording }: {
   // The panel is keyed by song, so the saved take is read once.
   const [saved] = useState(() => loadTake(jobId));
   const [take, setTake] = useState(saved);
+  // One take per song: the take's instrument is the song's, and the picker relabels it.
+  const [chosen, setChosen] = useState<InstrumentId>(saved?.instrument ?? 'guitar');
+  const [replace, setReplace] = useState(saved?.replace ?? true);
   const [session, setSession] = useState<LiveSession | null>(null);
   const [strength, setStrength] = useState<FollowStrength>('normal');
   const [monitor, setMonitor] = useState(false);
@@ -41,6 +53,13 @@ export function LivePanel({ mixer, song, tasks, position, onRecording }: {
   useEffect(() => () => { void active.current?.stop(true).catch(failure => console.warn('Live take was not saved', failure)); }, []);
   useEffect(() => session?.subscribe(refresh), [session]);
 
+  const current = instrument(chosen);
+  const recording = !!session;
+  // The band's matching part goes quiet while the player is heard: live, or through an unmuted take.
+  const replacedStem = replace && current.stem && (recording || (take && !take.muted)) ? current.stem : null;
+  useEffect(() => { mixer.setReplacedStem(replacedStem); }, [mixer, replacedStem]);
+  useEffect(() => () => mixer.setReplacedStem(null), [mixer]);
+
   const finished = (saved: LiveTake | null, failure?: string) => {
     active.current = null;
     setSession(null); onRecording(false);
@@ -52,7 +71,7 @@ export function LivePanel({ mixer, song, tasks, position, onRecording }: {
     if (take && !await confirm('Record a new take?', 'Your current take and its tempo will be replaced when the new one is saved.', 'Record new take')) return;
     setError(''); setStarting(true);
     try {
-      const started = await LiveSession.start({ mixer, jobId, beats: tasks.grid.beats, strength, monitor, previous: take });
+      const started = await LiveSession.start({ mixer, jobId, beats: tasks.grid.beats, strength, monitor, previous: take, instrument: chosen, replace });
       started.onFinished = finished;
       active.current = started;
       setSession(started); onRecording(true);
@@ -69,21 +88,23 @@ export function LivePanel({ mixer, song, tasks, position, onRecording }: {
     try { await mixer.removeTake(); deleteTake(jobId); setTake(null); }
     catch (failure) { setError(errorText(failure)); }
   };
+  const choose = (id: InstrumentId) => { setChosen(id); update({ instrument: id }); };
+  const toggleReplace = () => { setReplace(!replace); update({ replace: !replace }); };
   const update = (change: Partial<LiveTake>) => {
     if (!take) return;
     const next = { ...take, ...change };
     setTake(next);
     saveTake(jobId, next);
     if (change.latency !== undefined) void mixer.attachTake(track(jobId, next)).catch(failure => setError(errorText(failure)));
-    else mixer.setTakeLevel({ volume: next.volume, muted: next.muted });
+    else if (change.volume !== undefined || change.muted !== undefined) mixer.setTakeLevel({ volume: next.volume, muted: next.muted });
   };
 
   const status = session?.status;
-  const recording = !!session;
+  const stemLabel = current.stem ? current.stem[0].toUpperCase() + current.stem.slice(1) : '';
   return <View style={styles.card}>
     <View style={styles.header}>
       <View style={styles.titleBlock}>
-        <Text style={styles.title}>Live guitar</Text>
+        <Text style={styles.title}>{current.id === 'other' ? 'Live instrument' : `Live ${current.label.toLowerCase()}`}</Text>
         <Text style={styles.subtitle} numberOfLines={1}>
           {recording ? 'Recording. The band follows your tempo.'
             : take ? `Your take · ${clock(take.duration)} · ${new Date(take.recordedAt).toLocaleDateString()}`
@@ -114,6 +135,17 @@ export function LivePanel({ mixer, song, tasks, position, onRecording }: {
         <View style={[styles.meterFill, { width: `${Math.max(0, Math.min(100, (status.level + 60) / 60 * 100))}%` }]} />
       </View>
     </View>}
+    {!recording && <View style={styles.row} accessibilityRole="radiogroup" accessibilityLabel="Your instrument">
+      {INSTRUMENTS.map(item => <Pressable key={item.id} onPress={() => choose(item.id)} accessibilityRole="radio"
+        accessibilityState={{ checked: chosen === item.id }} style={[styles.pick, chosen === item.id && styles.segmentOn]}>
+        <Text style={[styles.segmentText, chosen === item.id && { color: theme.onAccent }]}>{item.label}</Text>
+      </Pressable>)}
+    </View>}
+    {!recording && !!current.stem && <View style={styles.row}>
+      <LampSwitch label={`Band ${current.stem} off`} on={replace} onPress={toggleReplace}
+        accessibilityLabel={`Silence the band's ${current.stem} stem while you play`} />
+      <Text style={[styles.note, styles.grow]}>{replace ? `${stemLabel} stem is off while your part plays.` : `${stemLabel} stem plays with you.`}</Text>
+    </View>}
     {!recording && !!tasks.grid && <View style={styles.row}>
       <Text style={styles.label}>Follow</Text>
       <View style={styles.segments} accessibilityRole="radiogroup" accessibilityLabel="How closely the band follows">
@@ -143,7 +175,7 @@ export function LivePanel({ mixer, song, tasks, position, onRecording }: {
       </View>
     </>}
     {!recording && <Text style={styles.note}>
-      Plug your guitar into an audio interface and use wired headphones; Bluetooth adds delay. The band catches up within a beat or two.
+      {HINTS[current.id]} and use wired headphones; Bluetooth adds delay. The band catches up within a beat or two.
     </Text>}
   </View>;
 }
@@ -197,6 +229,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   chipText: { fontSize: 13, fontWeight: '700', color: t.accent },
   segments: { flexDirection: 'row', borderWidth: 1, borderColor: t.accent, borderRadius: 6, overflow: 'hidden' },
   segment: { paddingHorizontal: 10, minHeight: 32, justifyContent: 'center' },
+  pick: { paddingHorizontal: 10, minHeight: 32, justifyContent: 'center', borderWidth: 1, borderColor: t.accent, borderRadius: 6, overflow: 'hidden' },
   segmentOn: { backgroundColor: t.accent, ...(t.accentImage && { backgroundImage: t.accentImage }) },
   segmentText: { fontSize: 12, fontWeight: '700', color: t.accent },
   readout: { flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap', backgroundColor: t.wave, borderRadius: 8, padding: 10 },

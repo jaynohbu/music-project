@@ -464,6 +464,7 @@ export class Mixer {
     this.followTimer = null;
   }
 
+  private replaced: StemName | null = null;
   get hasTake() { return !!this.take; }
   get takeLevel() { return this.take ? { volume: this.take.volume, muted: this.take.muted } : null; }
 
@@ -575,12 +576,22 @@ export class Mixer {
     this.changed();
   }
 
-  // Muted, or silent because another stem is soloed; otherwise the stem's volume.
+  // The band stem the player's own part stands in for. Silenced without touching the channel,
+  // so scenes and saved settings keep the stem as the user set it.
+  get replacedStem() { return this.replaced; }
+  setReplacedStem(name: StemName | null) {
+    if (this.replaced === name) return;
+    this.replaced = name;
+    if (!this.closed) this.applyGains();
+    this.changed();
+  }
+
+  // Muted, replaced by the player, or silent because another stem is soloed; otherwise the stem's volume.
   private applyGains() {
     const soloing = STEM_NAMES.some(name => this.channels[name].solo);
     for (const name of STEM_NAMES) {
       const { volume, muted, solo } = this.channels[name];
-      ramp(this.stems[name].gain.gain, muted || (soloing && !solo) ? 0 : volume, this.context.currentTime);
+      ramp(this.stems[name].gain.gain, muted || name === this.replaced || (soloing && !solo) ? 0 : volume, this.context.currentTime);
     }
   }
 
