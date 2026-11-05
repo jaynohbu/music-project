@@ -60,7 +60,7 @@ Seeking, looping and section start/end all work with the take, because positions
 | `mobile/src/live-take.ts` | Take storage in `Documents/takes/<jobId>/` (`take.json` + `.m4a`) |
 | `mobile/src/live-panel.tsx` | The "Live …" card at the top of the Music mixer: instrument picker, band-stem switch, recording, take controls |
 | `mobile/src/player.ts` | Mixer gains a playback rate (pitch kept), a rate-aware position, the take track, and a replaced stem that is silenced without changing its channel settings |
-| `mobile/src/mixer-view.tsx` | Shows the panel; locks transport and seek while recording; marks the replaced stem "Your part" |
+| `mobile/src/mixer-view.tsx` | The Live input switch that shows the panel; locks transport and seek while recording; marks the replaced stem "Your part" |
 | `mobile/src/mixer-console.tsx` | Adds the record icon; the master fader takes a label so it can be reused for the take |
 | `mobile/src/app/index.tsx` | Deleting a song deletes its take |
 | `mobile/app.json` | Microphone permission text (`iosMicrophonePermission`), the only native-side change |
@@ -107,6 +107,8 @@ The panel title follows the choice ("Live bass", "Live vocals", "Live instrument
 **Band stem off.** While recording, or while an unmuted take is playing, the matching stem is silenced. Turning the switch off, muting the take or deleting it brings the stem back. The stem's own volume, mute, solo and scene settings are not changed; the console shows **Your part** on it instead.
 
 ## The Live panel
+
+The card is hidden until the **Live input** switch at the top of the song's mixer is turned on. The switch is off when the app starts and keeps its setting between songs while the app is open. It cannot be turned off while recording. When hidden, a saved take still plays with the band and its matching stem stays silenced; a short note under the switch says so.
 
 - **Instrument**: Guitar, Bass, Keyboard, Piano, Drums, Vocals or Other.
 - **Band … off**: silences the band's matching stem (hidden for Other).

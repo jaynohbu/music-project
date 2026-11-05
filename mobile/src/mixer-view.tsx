@@ -93,6 +93,9 @@ function MountedMixer({ jobId, title, entry, onSettings, onEnded, onReady, onSon
   return <MixerControls mixer={mixer} song={song} peaks={peaks} />;
 }
 
+// Whether the Live input card is shown; remembered while the app is open.
+let liveShown = false;
+
 export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; song?: Song | null; peaks?: StemPeaks }) {
   const styles = useStyles(makeStyles), theme = useTheme();
   const [, refresh] = useReducer(count => count + 1, 0);
@@ -135,6 +138,8 @@ export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; son
   }), [scroll]);
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [liveOpen, setLiveOpen] = useState(liveShown);
+  const toggleLive = () => { liveShown = !liveOpen; setLiveOpen(liveShown); };
   const locked = busy || recording;
   const [error, setError] = useState('');
   const [editingLyrics, setEditingLyrics] = useState(false);
@@ -201,7 +206,12 @@ export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; son
     {!!(error || mixer.error || tasks.error) && <Text accessibilityRole="alert" style={styles.error}>{error || mixer.error || tasks.error}</Text>}
     {editingLyrics && tasks.lyrics && <LyricsEditor lines={tasks.lyrics} duration={mixer.duration}
       onSave={saveLyrics} onClose={() => setEditingLyrics(false)} />}
-    {song && <LivePanel key={song.jobId} mixer={mixer} song={song} tasks={tasks} position={position} onRecording={setRecording} />}
+    {song && <View style={styles.liveToggle}>
+      <LampSwitch label="Live input" on={liveOpen} disabled={recording} onPress={toggleLive}
+        accessibilityLabel="Show live input to play along with your instrument" />
+      {!liveOpen && mixer.hasTake && <Text style={styles.liveNote}>Your take plays with the band.</Text>}
+    </View>}
+    {song && <LivePanel key={song.jobId} open={liveOpen} mixer={mixer} song={song} tasks={tasks} position={position} onRecording={setRecording} />}
     {STEM_NAMES.map(name => {
       const channel = mixer.channel(name);
       const label = name[0].toUpperCase() + name.slice(1);
@@ -367,6 +377,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   consoleChevron: { fontSize: 13, lineHeight: 20, color: t.consoleInk },
   consoleTitle: { fontSize: 15, lineHeight: 20, fontWeight: '800', color: t.consoleInk },
   consoleAction: { fontSize: 13, lineHeight: 20, fontWeight: '600', color: t.consoleAccent },
+  liveToggle: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  liveNote: { flex: 1, fontSize: 12, color: t.muted },
   consoleStatus: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   statusText: { fontSize: 12, lineHeight: 20, color: t.consoleInk, fontWeight: '600' },
   statusState: { fontSize: 11, color: 'white', backgroundColor: '#28384e', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 3, overflow: 'hidden' },

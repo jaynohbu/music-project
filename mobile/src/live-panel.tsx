@@ -26,8 +26,8 @@ const HINTS: Record<InstrumentId, string> = {
 const track = (jobId: string, take: LiveTake) => ({ path: takePath(jobId, take), duration: take.duration, latency: take.latency,
   points: take.points, volume: take.volume, muted: take.muted });
 
-export function LivePanel({ mixer, song, tasks, position, onRecording }: {
-  mixer: Mixer; song: Song; tasks: ReturnType<typeof useSongTasks>; position: number; onRecording: (recording: boolean) => void;
+export function LivePanel({ open, mixer, song, tasks, position, onRecording }: {
+  open: boolean; mixer: Mixer; song: Song; tasks: ReturnType<typeof useSongTasks>; position: number; onRecording: (recording: boolean) => void;
 }) {
   const styles = useStyles(makeStyles), theme = useTheme();
   const confirm = useConfirm();
@@ -99,6 +99,8 @@ export function LivePanel({ mixer, song, tasks, position, onRecording }: {
     else if (change.volume !== undefined || change.muted !== undefined) mixer.setTakeLevel({ volume: next.volume, muted: next.muted });
   };
 
+  // Hidden, the panel still loads the take and keeps the band's part silenced while it plays.
+  if (!open && !recording) return null;
   const status = session?.status;
   const stemLabel = current.stem ? current.stem[0].toUpperCase() + current.stem.slice(1) : '';
   return <View style={styles.card}>
