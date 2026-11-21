@@ -222,6 +222,7 @@ const fil: Strings = {
   'tasks.lyrics': 'Lyrics',
   'tasks.editLyrics': 'I-edit ang lyrics',
   'tasks.findingLyrics': 'Hinahanap ang lyrics...',
+  'tasks.autoChords': 'Hinahanap sa background ang chords at melody ng kantang ito. Ilang minuto ito; lalabas dito ang score kapag handa na.',
   'tasks.findingNotes': 'Hinahanap ang notes...',
   'tasks.drumScore': 'Drum score',
   'tasks.chordsMelody': 'Chords at melody',

@@ -222,6 +222,7 @@ const id: Strings = {
   'tasks.lyrics': 'Lirik',
   'tasks.editLyrics': 'Edit lirik',
   'tasks.findingLyrics': 'Mencari lirik...',
+  'tasks.autoChords': 'Sedang mencari akor dan melodi lagu ini di latar belakang. Butuh beberapa menit; partitur muncul di sini setelah selesai.',
   'tasks.findingNotes': 'Mencari not...',
   'tasks.drumScore': 'Notasi drum',
   'tasks.chordsMelody': 'Akor & melodi',

@@ -222,6 +222,7 @@ const zh: Strings = {
   'tasks.lyrics': '歌词',
   'tasks.editLyrics': '编辑歌词',
   'tasks.findingLyrics': '正在识别歌词...',
+  'tasks.autoChords': '正在后台分析这首歌的和弦和旋律。需要几分钟，完成后乐谱会显示在这里。',
   'tasks.findingNotes': '正在识别音符...',
   'tasks.drumScore': '鼓谱',
   'tasks.chordsMelody': '和弦与旋律',

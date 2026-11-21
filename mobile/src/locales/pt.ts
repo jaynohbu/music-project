@@ -222,6 +222,7 @@ const pt: Strings = {
   'tasks.lyrics': 'Letra',
   'tasks.editLyrics': 'Editar letra',
   'tasks.findingLyrics': 'Buscando letra...',
+  'tasks.autoChords': 'Buscando os acordes e a melodia em segundo plano. Leva alguns minutos; as partituras aparecem aqui quando prontas.',
   'tasks.findingNotes': 'Buscando notas...',
   'tasks.drumScore': 'Partitura de bateria',
   'tasks.chordsMelody': 'Acordes e melodia',

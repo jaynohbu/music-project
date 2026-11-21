@@ -222,6 +222,7 @@ const ja: Strings = {
   'tasks.lyrics': '歌詞',
   'tasks.editLyrics': '歌詞を編集',
   'tasks.findingLyrics': '歌詞を検出中...',
+  'tasks.autoChords': 'この曲のコードとメロディーをバックグラウンドで解析しています。数分かかり、終わると譜面がここに表示されます。',
   'tasks.findingNotes': '音符を検出中...',
   'tasks.drumScore': 'ドラム譜',
   'tasks.chordsMelody': 'コードとメロディー',

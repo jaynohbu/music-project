@@ -18,6 +18,9 @@ const MAX_AUDIO_SECONDS = 900;
 const STEM_POLL_MS = 4000;
 const STEM_DOWNLOAD_POOL = 4;
 
+// Songs whose chords and melody were asked for by themselves, so a song in two mixers is asked once.
+const autoRequested = new Set<string>();
+
 @Component({
   standalone: true,
   imports: [FormsModule, RouterLink],
@@ -360,6 +363,9 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
       }
       @if (job()?.status === 'failed') {
         <p role="alert" class="error">{{ job()?.error || 'Stem separation failed.' }}</p>
+      }
+      @if (job()?.status === 'completed' && findingChords() && !harmonyParts()) {
+        <p role="status" class="task-status">Finding this song's chords and melody in the background. It takes a few minutes; the scores appear here when ready.</p>
       }
       @if (job()?.status === 'completed') {
         @if (sceneEntry) {
@@ -1407,6 +1413,12 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
       const job = response.job;
       this.job.set(job);
       this.error.set('');
+      // The first time a split song is opened, its chords and melody are found in the background, once per
+      // song while the page is open. A failed run is not retried by itself; the button does that.
+      if (job.status === 'completed' && !job.harmony && !autoRequested.has(job.jobId)) {
+        autoRequested.add(job.jobId);
+        setTimeout(() => void this.findChords());
+      }
       if (job.status === 'completed') {
         // Keep polling through a load, so a stem that finished during it still gets loaded.
         if (!this.restoring(job) && !this.loadingStems) clearInterval(this.pollTimer);

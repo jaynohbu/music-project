@@ -1,6 +1,6 @@
 import { useIsFocused } from 'expo-router';
 import { useEffect, useLayoutEffect, useReducer, useRef, useState, type ComponentRef } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { ENSEMBLE_STEMS, HARMONY_STEMS, REGENERATED_STEMS, STEM_NAMES, getSong, type LyricLine, type SceneEntry, type SceneSettings, type Song, type StemName } from './api';
 import { addCleanedFile, holdSong, songFiles, stemPaths } from './cache';
 import { EFFECT_CONTROLS } from './effects';
@@ -209,6 +209,10 @@ export function MixerControls({ mixer, song = null, peaks, inScene = false }: { 
   const inside = position > mixer.sectionStart && position < mixer.sectionEnd;
   return <View style={styles.page}>
     {!!(error || mixer.error || tasks.error) && <Text accessibilityRole="alert" style={styles.error}>{error || mixer.error || tasks.error}</Text>}
+    {tasks.findingChords && !tasks.parts && <View style={styles.status} accessibilityRole="text" accessibilityLiveRegion="polite">
+      <ActivityIndicator size="small" color={theme.accent} />
+      <Text style={styles.statusLine}>{t('tasks.autoChords')}</Text>
+    </View>}
     {editingLyrics && tasks.lyrics && <LyricsEditor lines={tasks.lyrics} duration={mixer.duration}
       onSave={saveLyrics} onClose={() => setEditingLyrics(false)} />}
     {song && <View style={styles.liveToggle}>
@@ -410,6 +414,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   consoleTitle: { fontSize: 15, lineHeight: 20, fontWeight: '800', color: t.consoleInk },
   consoleAction: { fontSize: 13, lineHeight: 20, fontWeight: '600', color: t.consoleAccent },
   liveToggle: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  status: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: 8, backgroundColor: t.surface, borderWidth: 1, borderColor: t.line },
+  statusLine: { flex: 1, fontSize: 13, lineHeight: 18, color: t.ink },
   liveNote: { flex: 1, fontSize: 12, color: t.muted },
   consoleStatus: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   statusText: { fontSize: 12, lineHeight: 20, color: t.consoleInk, fontWeight: '600' },

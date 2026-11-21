@@ -222,6 +222,7 @@ const ko: Strings = {
   'tasks.lyrics': '가사',
   'tasks.editLyrics': '가사 수정',
   'tasks.findingLyrics': '가사 찾는 중...',
+  'tasks.autoChords': '이 곡의 코드와 멜로디를 백그라운드에서 찾고 있어요. 몇 분 걸리며, 끝나면 악보가 여기에 나타나요.',
   'tasks.findingNotes': '음표 찾는 중...',
   'tasks.drumScore': '드럼 악보',
   'tasks.chordsMelody': '코드 및 멜로디',

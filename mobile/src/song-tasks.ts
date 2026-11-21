@@ -17,6 +17,10 @@ export const hasMusic = (part?: HarmonyPart) => !!part && (part.chords.length > 
 export const regenerateLabel = (name: string) => t(name === 'drums' ? 'tasks.regenDrums' : 'tasks.regenChordsMelody');
 export const stemName = (name: string) => t(`stem.${name}` as TextKey);
 
+// Songs whose chords and melody were asked for by themselves in this run of the app, so a song open in two
+// places, or reopened, is not asked twice. A failed run is not retried by itself; the button does that.
+const autoRequested = new Set<string>();
+
 // Finds, loads and saves a song's lyrics and score, polling the song while the API works on them.
 export function useSongTasks(initial: Song | null) {
   const [song, setSong] = useState(initial);
@@ -53,6 +57,16 @@ export function useSongTasks(initial: Song | null) {
     const timer = setInterval(() => void refresh(), POLL_MS);
     return () => clearInterval(timer);
   }, [busy, refresh]);
+
+  // The first time a split song is opened, its chords and melody are found in the background.
+  const needsChords = !!jobId && song?.status === 'completed' && !song.harmony;
+  useEffect(() => {
+    if (!needsChords || !jobId || autoRequested.has(jobId)) return;
+    autoRequested.add(jobId);
+    createHarmony(jobId).then(refresh, failure => {
+      if (alive.current) setError(t('tasks.startChordsFailed', { error: errorText(failure) }));
+    });
+  }, [needsChords, jobId, refresh]);
 
   const lyricsUrl = song?.lyrics?.url;
   useEffect(() => {

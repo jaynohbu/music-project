@@ -222,6 +222,7 @@ const vi: Strings = {
   'tasks.lyrics': 'Lời bài hát',
   'tasks.editLyrics': 'Sửa lời bài hát',
   'tasks.findingLyrics': 'Đang tìm lời bài hát...',
+  'tasks.autoChords': 'Đang tìm hợp âm và giai điệu của bài này trong nền. Mất vài phút; bản nhạc sẽ hiện ở đây khi xong.',
   'tasks.findingNotes': 'Đang tìm nốt nhạc...',
   'tasks.drumScore': 'Bản nhạc trống',
   'tasks.chordsMelody': 'Hợp âm & giai điệu',

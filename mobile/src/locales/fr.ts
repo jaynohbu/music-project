@@ -222,6 +222,7 @@ const fr: Strings = {
   'tasks.lyrics': 'Paroles',
   'tasks.editLyrics': 'Modifier les paroles',
   'tasks.findingLyrics': 'Recherche des paroles…',
+  'tasks.autoChords': 'Recherche des accords et de la mélodie en arrière-plan. Cela prend quelques minutes ; les partitions apparaîtront ici.',
   'tasks.findingNotes': 'Recherche des notes…',
   'tasks.drumScore': 'Partition de batterie',
   'tasks.chordsMelody': 'Accords et mélodie',
