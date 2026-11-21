@@ -118,7 +118,8 @@ export function splitValues(unit: number, length: number, firstBar: number, valu
   return pieces;
 }
 
-export function notePieces(stem: string, note: HarmonyNote, firstBar: number): NotePiece[] {
+// `voice` fixes the stem direction when two lines share the staff: the melody up, the second line down.
+export function notePieces(stem: string, note: HarmonyNote, firstBar: number, voice?: 'up' | 'down'): NotePiece[] {
   const { bottomStep, lift, low, high } = CLEFS[stem];
   let written = note.pitch + lift;
   while (written < low) written += 12;
@@ -130,7 +131,7 @@ export function notePieces(stem: string, note: HarmonyNote, firstBar: number): N
   const ledgers: number[] = [];
   for (let value = bottomStep - 2; value >= step; value -= 2) ledgers.push(yOf(value));
   for (let value = bottomStep + 10; value <= step; value += 2) ledgers.push(yOf(value));
-  const up = y >= MIDDLE_LINE_Y;
+  const up = voice ? voice === 'up' : y >= MIDDLE_LINE_Y;
   const parts = splitValues(note.unit, note.length, firstBar, NOTE_VALUES);
   return parts.map((part, index) => {
     const x = part.unit * UNIT_WIDTH;

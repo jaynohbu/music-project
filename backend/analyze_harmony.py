@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Finds the song's chords and melody from its harmonic stems together, and the bass and drum parts, as JSON.
 
-Guitar, piano and other are heard as one ensemble: one chord progression (bass supplies the roots) and one
-melody line, the highest clear voice. Output is approximate."""
+Guitar, piano and other are heard as one ensemble: one chord progression (bass supplies the roots), a
+melody line (the highest clear voice) and a second line under it. Output is approximate."""
 import argparse
 import json
 import os
@@ -38,6 +38,10 @@ HIHAT_BAND = (6000, 16000)
 HIHAT_HOP = 128  # About 3 ms at the drum rate; the drum model only sees 10 ms steps.
 # Lower notes in the ensemble are accompaniment (arpeggios, bass doubling), not the tune.
 MELODY_LOWEST = 55  # G3
+# The second line, under the melody: a counter-melody or the top of the accompaniment.
+SECOND_LOWEST = 48  # C3
+# Several instruments together blur each note's onset, so the ensemble accepts softer notes than one stem.
+ENSEMBLE_STRENGTH = 0.35
 # Quieter than this share of the loudest stem at that moment is treated as bleed from that stem.
 SHORTEST_CHORD = 0.75
 FIRST_MODEL_PITCH = 21
@@ -286,7 +290,7 @@ def slash_chords(chords, bass_chroma, bass_level, frames):
 
 
 def ensemble_part(stems, names, chromas, levels, frames, loudest, floor, beats):
-    """Guitar, piano and other heard together: one key, one chord progression, one melody line."""
+    """Guitar, piano and other heard together: one key, one chord progression, a melody and a second line."""
     import soundfile
     import tempfile
     harmony = sum(normalized(chromas[name][:, :frames]) for name in names)
@@ -302,10 +306,22 @@ def ensemble_part(stems, names, chromas, levels, frames, loudest, floor, beats):
         mix = audio if mix is None else mix[:len(audio)] + audio[:len(mix)]
     with tempfile.NamedTemporaryFile(suffix='.wav') as file:
         soundfile.write(file.name, mix / max(float(np.abs(mix).max()), 1e-6) * 0.95, rate)
-        events = [event for event in note_events(file.name)
-                  if event[2] >= MELODY_LOWEST and audible[min(int(event[0] / SECONDS), frames - 1)]]
+        events = [event for event in note_events(file.name) if audible[min(int(event[0] / SECONDS), frames - 1)]]
+    melody = clear_line([event for event in events if event[2] >= MELODY_LOWEST], ENSEMBLE_STRENGTH)
+    second = clear_line(under(melody, [event for event in events if event[2] >= SECOND_LOWEST]), ENSEMBLE_STRENGTH)
     root, minor = song_key(together)
-    return {'key': f"{NOTES[root]}{'m' if minor else ''}", 'chords': chords, 'notes': note_values(clear_line(events), beats)}
+    return {'key': f"{NOTES[root]}{'m' if minor else ''}", 'chords': chords,
+            'notes': note_values(melody, beats), 'second': note_values(second, beats)}
+
+
+def under(line, events):
+    """Events that sound below the line at their start, or where the line is silent: what the second voice may use."""
+    kept = []
+    for event in events:
+        above = [note['pitch'] for note in line if note['start'] <= event[0] < note['end']]
+        if not above or event[2] < min(above):
+            kept.append(event)
+    return kept
 
 
 def normalized(chroma):

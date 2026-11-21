@@ -101,6 +101,8 @@ interface Score {
   drums: boolean; written: boolean;
   chords: { name: string; unit: number; x: number }[];
   notes: NotePiece[][];
+  // The line under the melody, drawn lighter with its stems down.
+  second: NotePiece[][];
   strokes: ReturnType<typeof drumScore>['strokes'];
   beams: ReturnType<typeof drumScore>['beams'];
   rests: ScoreRest[];
@@ -112,10 +114,10 @@ interface Score {
 
 const CHORD_TEXT = 15, CHORD_GAP = 6, EDGE = 6;
 // The highest and lowest y any mark of the score reaches, staff included.
-function extent(notes: NotePiece[][], strokes: Score['strokes'], beams: Score['beams']) {
+function extent(notes: NotePiece[][], second: NotePiece[][], strokes: Score['strokes'], beams: Score['beams']) {
   let low = STAFF_LINES[4], high = STAFF_LINES[0];
   const reach = (...ys: number[]) => { for (const y of ys) { low = Math.min(low, y); high = Math.max(high, y); } };
-  for (const piece of notes.flat()) {
+  for (const piece of [...notes, ...second].flat()) {
     reach(piece.y - 5, piece.y + 5, ...piece.ledgers);
     if (piece.stem) reach(piece.stem.end);
     if (piece.tie) reach(piece.y - 15, piece.y + 15);
@@ -130,7 +132,7 @@ function extent(notes: NotePiece[][], strokes: Score['strokes'], beams: Score['b
 
 function layout(part: HarmonyPart, stem: string, grid: HarmonyGrid): Score {
   const drums = stem === 'drums';
-  const written = part.notes.length > 0 || !!part.hits?.length;
+  const written = part.notes.length > 0 || !!part.second?.length || !!part.hits?.length;
   const drawn = drumScore(part.hits ?? [], grid.firstBar);
   // Drums have no chords; the score is written from the hits alone.
   const chords = drums ? []
@@ -143,17 +145,19 @@ function layout(part: HarmonyPart, stem: string, grid: HarmonyGrid): Score {
   if (written) {
     for (let unit = grid.firstBar * 4; unit < grid.beats.length * 4; unit += UNITS_PER_BAR) bars.push(unit * UNIT_WIDTH - UNIT_WIDTH / 2);
   }
-  const notes = drums ? [] : part.notes.map(note => notePieces(stem, note, grid.firstBar));
+  const voices = !drums && !!part.second?.length;
+  const notes = drums ? [] : part.notes.map(note => notePieces(stem, note, grid.firstBar, voices ? 'up' : undefined));
+  const second = voices ? part.second!.map(note => notePieces(stem, note, grid.firstBar, 'down')) : [];
   const strokes = drums ? drawn.strokes : [], beams = drums ? drawn.beams : [];
   let top = 0, height = CHORDS_ONLY, chordY = 18;
   if (written) {
-    const { low, high } = extent(notes, strokes, beams);
+    const { low, high } = extent(notes, second, strokes, beams);
     chordY = low - CHORD_GAP;
     top = (chords.length ? chordY - CHORD_TEXT : low) - EDGE;
     height = high + EDGE - top;
   }
   return {
-    drums, written, chords, bars, notes, strokes, beams,
+    drums, written, chords, bars, notes, second, strokes, beams,
     rests: drums ? drawn.rests : scoreRests(part.notes, grid.firstBar),
     spans: drums ? drawn.strokes : part.notes, top, height, chordY,
   };
@@ -219,6 +223,7 @@ const Chunk = memo(function Chunk({ score, chunk, activeChord, activeNote }: {
     {score.rests.map((rest, index) => inside(rest.x) && <RestMark key={index} rest={rest} />)}
     {score.beams.map((beam, index) => inside(beam.x) && <Rect key={index} x={beam.x} y={beam.y} width={beam.width} height={BEAM_HEIGHT} fill={theme.note} />)}
     {score.strokes.map((stroke, index) => inside(stroke.x) && <StrokeMark key={stroke.unit} stroke={stroke} color={index === activeNote ? theme.accent : theme.note} />)}
+    {score.second.map((pieces, index) => inside(pieces[0].x) && <NoteMark key={`second-${index}`} pieces={pieces} color={theme.staff} />)}
     {score.notes.map((pieces, index) => inside(pieces[0].x) && <NoteMark key={index} pieces={pieces} color={index === activeNote ? theme.accent : theme.note} />)}
   </Svg>;
 });

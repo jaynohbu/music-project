@@ -41,10 +41,11 @@ const checkNotes = (notes, duration) => Array.isArray(notes) && notes.every(note
   note.pitch <= 127 && validTime(note.start, duration) && validTime(note.end, duration) && note.end >= note.start &&
   Number.isInteger(note.unit) && note.unit >= 0 && Number.isInteger(note.length) && note.length >= 1);
 
-// Guitar, piano and other together: the song's key, one chord progression and one melody line.
+// Guitar, piano and other together: the song's key, one chord progression, a melody and the line under it.
 function checkEnsemble(ensemble, duration) {
   return ensemble === undefined || (typeof ensemble?.key === 'string' && /^[A-G][#b]?m?$/.test(ensemble.key) &&
-    checkChords(ensemble.chords, duration) && checkNotes(ensemble.notes, duration));
+    checkChords(ensemble.chords, duration) && checkNotes(ensemble.notes, duration) &&
+    (ensemble.second === undefined || checkNotes(ensemble.second, duration)));
 }
 
 export function checkHarmony(value, duration) {

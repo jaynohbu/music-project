@@ -535,14 +535,14 @@ test('harmony results from the old format are ignored, so they get redone', asyn
   });
   assert.equal((await call(parentId, undefined, 'GET')).body.job.harmony, undefined);
   assert.equal((await call(`${parentId}/harmony`, {})).status, 202);
-  assert.equal(database.get('owner', (await call(parentId, undefined, 'GET')).body.job.harmony.id).version, 4);
+  assert.equal(database.get('owner', (await call(parentId, undefined, 'GET')).body.job.harmony.id).version, 5);
   assert.equal(started.length, 1);
 });
 
 function regeneration() {
   const context = setup();
   const finished = (id, fields) => context.database.put({
-    userId: 'owner', jobId: id, type: 'harmony', version: 4, parentJobId: parentId, status: 'completed', title: 'Chords',
+    userId: 'owner', jobId: id, type: 'harmony', version: 5, parentJobId: parentId, status: 'completed', title: 'Chords',
     key: `users/owner/harmony/${parentId}/${id}.json`, generatedAt: new Date(Date.now() - 60000).toISOString(), ...fields,
   });
   finished(lyricsId);
@@ -887,11 +887,13 @@ test('the template keeps delete permission away from original stems', () => {
 test('the ensemble part is checked like a stem part, with a key', async () => {
   const { checkHarmony } = await import('../stem-analysis.mjs');
   const base = { beats: [0, 1], firstBar: 0, stems: { bass: { chords: [], notes: [] } } };
-  const ensemble = { key: 'F#m', chords: [{ start: 0, name: 'Cmaj7/E' }], notes: [{ start: 0.5, end: 1, pitch: 69, unit: 2, length: 2 }] };
+  const ensemble = { key: 'F#m', chords: [{ start: 0, name: 'Cmaj7/E' }], notes: [{ start: 0.5, end: 1, pitch: 69, unit: 2, length: 2 }],
+    second: [{ start: 0.5, end: 1, pitch: 64, unit: 2, length: 2 }] };
   assert.ok(checkHarmony({ ...base, ensemble }, 2));
   assert.ok(checkHarmony(base, 2), 'Bass or drums regenerated alone have no ensemble');
   for (const bad of [{ ...ensemble, key: 'H' }, { ...ensemble, key: undefined }, { ...ensemble, chords: [{ start: 0, name: '' }] },
-    { ...ensemble, notes: [{ start: 0, end: 1, pitch: 200, unit: 0, length: 1 }] }, null]) {
+    { ...ensemble, notes: [{ start: 0, end: 1, pitch: 200, unit: 0, length: 1 }] },
+    { ...ensemble, second: [{ start: 0, end: 1, pitch: 60, unit: -1, length: 1 }] }, null]) {
     assert.throws(() => checkHarmony({ ...base, ensemble: bad }, 2), /Invalid harmony/, JSON.stringify(bad));
   }
 });

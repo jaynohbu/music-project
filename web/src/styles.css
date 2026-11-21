@@ -287,3 +287,4 @@ footer { text-align: center; color: #64748b; padding: 20px var(--page-gutter); f
 .theme-picker select { width: auto; padding: 8px 10px; border: 1px solid #cbd5e3; border-radius: 8px; font: inherit; background: #fff; color: inherit; }
 .task-status { padding: 10px 14px; border: 1px solid #dce3ed; border-radius: 8px; background: #f4f7fd; color: #28384e; font-size: .9rem; }
 :root[data-theme]:not([data-theme="simple"]) .task-status { background: var(--surface); border-color: var(--line); color: var(--ink); }
+.score-note.second { opacity: .5; }

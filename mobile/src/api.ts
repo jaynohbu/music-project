@@ -39,7 +39,8 @@ export interface HarmonyNote { start: number; end: number; pitch: number; unit: 
 export type DrumName = 'kick' | 'snare' | 'tom' | 'hihat' | 'cymbal';
 export interface DrumHit { unit: number; drum: DrumName }
 // `key` is set on the ensemble part: guitar, piano and other heard together, which those three stems share.
-export interface HarmonyPart { chords: { start: number; name: string }[]; notes: HarmonyNote[]; hits?: DrumHit[]; key?: string }
+// `second` is the ensemble's line under the melody (a counter-melody or the top of the accompaniment).
+export interface HarmonyPart { chords: { start: number; name: string }[]; notes: HarmonyNote[]; hits?: DrumHit[]; key?: string; second?: HarmonyNote[] }
 export interface HarmonyGrid { beats: number[]; firstBar: number }
 export const HARMONY_STEMS: readonly string[] = ['guitar', 'piano', 'other', 'bass', 'drums'];
 export const ENSEMBLE_STEMS: readonly string[] = ['guitar', 'piano', 'other'];

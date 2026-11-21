@@ -27,10 +27,10 @@ def connected(line):
     return joined
 
 
-def clear_line(events):
+def clear_line(events, strength=CLEAR_STRENGTH):
     """One voice of clear notes: the highest sounding."""
     clear = sorted(event for event in events
-                   if event[3] >= CLEAR_STRENGTH and event[1] - event[0] >= SHORTEST_EVENT)
+                   if event[3] >= strength and event[1] - event[0] >= SHORTEST_EVENT)
     line = []
     for start, end, pitch, _ in clear:
         if line and start < line[-1][1]:

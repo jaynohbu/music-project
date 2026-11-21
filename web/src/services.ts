@@ -278,6 +278,8 @@ export interface HarmonyPart {
   hits?: DrumHit[];
   // Set on the ensemble part: guitar, piano and other heard together, which those three stems share.
   key?: string;
+  // The ensemble's line under the melody (a counter-melody or the top of the accompaniment).
+  second?: HarmonyNote[];
 }
 export interface HarmonyNote { start: number; end: number; pitch: number; unit: number; length: number }
 export interface HarmonyGrid { beats: number[]; firstBar: number }

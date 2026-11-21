@@ -55,7 +55,8 @@ export function splitValues(unit: number, length: number, firstBar: number, valu
   return pieces;
 }
 
-export function notePieces(stem: string, note: HarmonyNote, firstBar: number): NotePiece[] {
+// `voice` fixes the stem direction when two lines share the staff: the melody up, the second line down.
+export function notePieces(stem: string, note: HarmonyNote, firstBar: number, voice?: 'up' | 'down'): NotePiece[] {
   const { bottomStep, lift, low, high } = CLEFS[stem];
   let written = note.pitch + lift;
   while (written < low) written += 12;
@@ -67,7 +68,7 @@ export function notePieces(stem: string, note: HarmonyNote, firstBar: number): N
   const ledgers: number[] = [];
   for (let value = bottomStep - 2; value >= step; value -= 2) ledgers.push(yOf(value));
   for (let value = bottomStep + 10; value <= step; value += 2) ledgers.push(yOf(value));
-  const up = y >= MIDDLE_LINE_Y;
+  const up = voice ? voice === 'up' : y >= MIDDLE_LINE_Y;
   const parts = splitValues(note.unit, note.length, firstBar, NOTE_VALUES);
   return parts.map((part, index) => {
     const x = part.unit * UNIT_WIDTH;
@@ -287,6 +288,22 @@ function drumRests(hits: DrumHit[], firstBar: number): ScoreRest[] {
               @for (dot of item.dots; track $index) { <circle r="1.6" [attr.cx]="dot.x" [attr.cy]="dot.y"></circle> }
             </g>
           }
+          @for (pieces of second(); track $index) {
+            <g class="score-note second">
+              @for (piece of pieces; track $index) {
+                @for (y of piece.ledgers; track y) {
+                  <line [attr.x1]="piece.x - 8" [attr.x2]="piece.x + 8" [attr.y1]="y" [attr.y2]="y"></line>
+                }
+                <ellipse rx="5.2" ry="3.8" [class.hollow]="piece.hollow" [attr.cx]="piece.x" [attr.cy]="piece.y"
+                  [attr.transform]="'rotate(-20 ' + piece.x + ' ' + piece.y + ')'"></ellipse>
+                @if (piece.stem; as stem) { <line [attr.x1]="stem.x" [attr.x2]="stem.x" [attr.y1]="piece.y" [attr.y2]="stem.end"></line> }
+                @for (flag of piece.flags; track $index) { <path [attr.d]="flag"></path> }
+                @if (piece.dot; as dot) { <circle r="1.6" [attr.cx]="dot.x" [attr.cy]="dot.y"></circle> }
+                @if (piece.tie; as tie) { <path [attr.d]="tie"></path> }
+                @if (piece.accidental) { <text text-anchor="end" [attr.x]="piece.x - 7" [attr.y]="piece.y + 4">{{ piece.accidental }}</text> }
+              }
+            </g>
+          }
           @for (pieces of notes(); track $index) {
             <g class="score-note">
               @for (piece of pieces; track $index) {
@@ -329,7 +346,7 @@ export class HarmonyStrip {
     if (!this.written()) return { top: 0, height: 30, chordY: 18 };
     let low = this.staffLines[4], high = this.staffLines[0];
     const reach = (...ys: number[]) => { for (const y of ys) { low = Math.min(low, y); high = Math.max(high, y); } };
-    for (const piece of this.notes().flat()) {
+    for (const piece of [...this.notes(), ...this.second()].flat()) {
       reach(piece.y - 5, piece.y + 5, ...piece.ledgers);
       if (piece.stem) reach(piece.stem.end);
       if (piece.tie) reach(piece.y - 15, piece.y + 15);
@@ -343,9 +360,12 @@ export class HarmonyStrip {
     return { top, height: high + 6 - top, chordY };
   });
   readonly isDrums = computed(() => this.stem() === 'drums');
-  readonly written = computed(() => this.part().notes.length > 0 || !!this.part().hits?.length);
+  readonly written = computed(() => this.part().notes.length > 0 || !!this.part().second?.length || !!this.part().hits?.length);
   readonly clef = computed(() => CLEFS[this.stem()]?.clef);
-  readonly notes = computed(() => this.part().notes.map(note => notePieces(this.stem(), note, this.grid().firstBar)));
+  readonly voices = computed(() => !this.isDrums() && !!this.part().second?.length);
+  readonly notes = computed(() => this.part().notes.map(note => notePieces(this.stem(), note, this.grid().firstBar, this.voices() ? 'up' : undefined)));
+  // The line under the melody, drawn lighter with its stems down.
+  readonly second = computed(() => this.voices() ? this.part().second!.map(note => notePieces(this.stem(), note, this.grid().firstBar, 'down')) : []);
   readonly drums = computed<DrumScore>(() => drumScore(this.part().hits ?? [], this.grid().firstBar));
   readonly rests = computed(() => this.isDrums() ? this.drums().rests : scoreRests(this.part().notes, this.grid().firstBar));
   // Drums have no chords; the score is written from the hits alone.
