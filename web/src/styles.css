@@ -272,7 +272,7 @@ footer { text-align: center; color: #64748b; padding: 20px var(--page-gutter); f
 :root[data-theme]:not([data-theme="simple"]) :is(.card, .library li) { background: var(--surface); border-color: var(--line); color: var(--ink); }
 :root[data-theme]:not([data-theme="simple"]) :is(p, .hint, .usage, footer, .brand small, .scene-entry-name label, .waveform-times) { color: var(--muted); }
 :root[data-theme]:not([data-theme="simple"]) .scene-create { background: var(--surface-soft); border-color: var(--line); }
-:root[data-theme]:not([data-theme="simple"]) :is(.eyebrow, a, .library h2 a:hover) { color: var(--accent); }
+:root[data-theme]:not([data-theme="simple"]) :is(.eyebrow, a:not(.button-link), .library h2 a:hover) { color: var(--accent); }
 :root[data-theme]:not([data-theme="simple"]) :is(.library h2 a, .brand) { color: var(--ink); }
 :root[data-theme]:not([data-theme="simple"]) nav a { color: var(--muted); }
 :root[data-theme]:not([data-theme="simple"]) nav a:hover { background: var(--tab); }
@@ -294,7 +294,8 @@ footer { text-align: center; color: #64748b; padding: 20px var(--page-gutter); f
 .admin-page .scene-actions input { width: 220px; }
 .admin-table-wrap { overflow-x: auto; }
 .admin-table { width: 100%; border-collapse: collapse; font-size: .88rem; }
-.admin-table :is(th, td) { padding: 10px 8px; border-bottom: 1px solid #dce3ed; text-align: left; vertical-align: middle; white-space: nowrap; }
+.admin-table :is(th, td) { padding: 10px 6px; border-bottom: 1px solid #dce3ed; text-align: left; vertical-align: middle; white-space: nowrap; }
+.admin-table .time { white-space: normal; min-width: 72px; }
 .admin-table thead th { font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; opacity: .75; }
 .admin-table tbody th small { display: block; font-weight: 400; opacity: .7; }
 .admin-table tr.disabled { opacity: .55; }
@@ -302,3 +303,5 @@ footer { text-align: center; color: #64748b; padding: 20px var(--page-gutter); f
 .admin-actions { display: flex; gap: 6px; }
 .admin-actions button { padding: 6px 10px; font-size: .82rem; }
 :root[data-theme]:not([data-theme="simple"]) .admin-table :is(th, td) { border-bottom-color: var(--line); }
+:root[data-theme]:not([data-theme="simple"]) .error { background: #5a141ad9; color: #ffdadd; }
+:root[data-theme]:not([data-theme="simple"]) .success { background: #103a24d9; color: #cbf3dc; }

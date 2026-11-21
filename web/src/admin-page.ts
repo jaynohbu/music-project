@@ -26,7 +26,7 @@ const size = (bytes: number) => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` 
         <table class="admin-table">
           <thead><tr>
             <th scope="col">User</th><th scope="col">Status</th><th scope="col">Plan</th><th scope="col">Songs</th>
-            <th scope="col">Storage</th><th scope="col">Splits this month</th><th scope="col">Today</th>
+            <th scope="col">Storage</th><th scope="col">Splits</th><th scope="col">Today</th>
             <th scope="col">Last 7 days</th><th scope="col">Last active</th><th scope="col"><span class="visually-hidden">Actions</span></th>
           </tr></thead>
           <tbody>
@@ -41,9 +41,9 @@ const size = (bytes: number) => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` 
                 </td>
                 <td>{{ user.songs }}/{{ user.songLimit }}</td>
                 <td>{{ size(user.bytes) }}</td>
-                <td>{{ user.splits }}/{{ user.splitLimit }}</td>
-                <td>{{ minutes(user.today.open) }} open · {{ minutes(user.today.play) }} play</td>
-                <td>{{ minutes(user.week.open) }} open · {{ minutes(user.week.play) }} play</td>
+                <td title="Splits this month">{{ user.splits }}/{{ user.splitLimit }}</td>
+                <td class="time">{{ minutes(user.today.open) }} open<br>{{ minutes(user.today.play) }} play</td>
+                <td class="time">{{ minutes(user.week.open) }} open<br>{{ minutes(user.week.play) }} play</td>
                 <td>{{ user.lastActive ?? '—' }}</td>
                 <td class="admin-actions">
                   <button class="secondary" (click)="toggle(user)" [disabled]="working() === user.id">{{ user.enabled ? 'Disable' : 'Enable' }}</button>
