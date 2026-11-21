@@ -187,6 +187,8 @@ const es: Strings = {
   'mixer.key': 'Tono',
   'mixer.keyDown': 'Bajar medio tono',
   'mixer.keyUp': 'Subir medio tono',
+  'mixer.keyFrom': 'Original {key}',
+  'mixer.semitones': '{count} semitonos',
   'mixer.original': 'Original',
   'mixer.cleaned': 'Limpiada',
   'mixer.loadCleaned': 'Cargar versión limpiada',

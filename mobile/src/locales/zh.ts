@@ -187,6 +187,8 @@ const zh: Strings = {
   'mixer.key': '调',
   'mixer.keyDown': '降低半音',
   'mixer.keyUp': '升高半音',
+  'mixer.keyFrom': '原调 {key}',
+  'mixer.semitones': '{count} 个半音',
   'mixer.original': '原始',
   'mixer.cleaned': '已净化',
   'mixer.loadCleaned': '加载净化版本',

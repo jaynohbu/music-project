@@ -63,6 +63,104 @@ Resources:
         AccessToken: minutes
         IdToken: minutes
         RefreshToken: days
+  # Admins sign in on the website like other users; this group lets them open the admin page (admin-api.mjs).
+  AdminsGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      UserPoolId: !Ref UserPool
+      GroupName: admins
+      Description: Sorituh master admins
+  # Server-only client that opens the website as a user for an admin. Only it allows CUSTOM_AUTH, and its
+  # challenge needs ImpersonationSecret, which only Lambda can read (auth-challenge.mjs). Tokens last an hour.
+  ImpersonationClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      ExplicitAuthFlows: [ALLOW_CUSTOM_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 60
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: minutes
+  ImpersonationSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Signs the admin's custom sign-in challenge (auth-challenge.mjs)
+      GenerateSecretString:
+        PasswordLength: 64
+        ExcludePunctuation: true
+  AuthChallenge:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend
+      Handler: auth-challenge.handler
+      Runtime: nodejs22.x
+      MemorySize: 256
+      Timeout: 5
+      Environment:
+        Variables:
+          IMPERSONATION_SECRET: !Ref ImpersonationSecret
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref ImpersonationSecret
+      Events:
+        Challenge:
+          Type: Cognito
+          Properties:
+            UserPool: !Ref UserPool
+            Trigger: [DefineAuthChallenge, CreateAuthChallenge, VerifyAuthChallengeResponse]
+  AdminApi:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend
+      Handler: admin-api.handler
+      Runtime: nodejs22.x
+      MemorySize: 512
+      Timeout: 29
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Jobs
+          USER_POOL_ID: !Ref UserPool
+          USER_POOL_CLIENT_ID: !Ref UserPoolClient
+          IMPERSONATION_CLIENT_ID: !Ref ImpersonationClient
+          IMPERSONATION_SECRET: !Ref ImpersonationSecret
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:Query, dynamodb:UpdateItem, dynamodb:PutItem, dynamodb:DeleteItem]
+              Resource: !GetAtt Jobs.Arn
+            - Effect: Allow
+              Action:
+                - cognito-idp:ListUsers
+                - cognito-idp:AdminListGroupsForUser
+                - cognito-idp:AdminEnableUser
+                - cognito-idp:AdminDisableUser
+                - cognito-idp:AdminUserGlobalSignOut
+                - cognito-idp:AdminInitiateAuth
+                - cognito-idp:AdminRespondToAuthChallenge
+              Resource: !GetAtt UserPool.Arn
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref ImpersonationSecret
+      Events:
+        Activity:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: /api/activity, Method: POST }
+        Users:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: /api/admin/users, Method: GET }
+        UserAction:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/api/admin/users/{id}/{action}', Method: POST }
 
   AudioBucket:
     Type: AWS::S3::Bucket
@@ -716,7 +814,8 @@ Resources:
             IdentitySource: $request.header.Authorization
             JwtConfiguration:
               issuer: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}'
-              audience: [!Ref UserPoolClient]
+              # The impersonation client's tokens are a user's own tokens, opened by an admin.
+              audience: [!Ref UserPoolClient, !Ref ImpersonationClient]
       CorsConfiguration:
         AllowOrigins:
           - http://localhost:4200

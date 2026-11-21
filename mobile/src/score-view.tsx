@@ -6,8 +6,8 @@ import Svg, { Circle, Ellipse, G, Line, Path, Rect, Text as SvgText } from 'reac
 import type { HarmonyGrid, HarmonyPart, LyricLine, LyricWord } from './api';
 import {
   BEAM_HEIGHT, CLEFS, CYMBAL_LEDGER, HELD_AFTER_WORD, MIDDLE_LINE_Y, STAFF_LINES, UNIT_WIDTH, UNITS_PER_BAR,
-  drumScore, editedLines, firstChange, gapAfter, lineText, lyricIndex, notePieces, positionAt, reachedIndex, scoreRests,
-  type LyricRow, type NotePiece, type ScoreRest,
+  drumScore, editedLines, firstChange, gapAfter, keySignature, lineText, lyricIndex, notePieces, positionAt, reachedIndex, scoreRests,
+  signatureMarks, type KeySignature, type LyricRow, type NotePiece, type ScoreRest,
 } from './score';
 import { Button, ButtonRow, formatTime } from './ui';
 import { useT } from './language';
@@ -113,6 +113,8 @@ interface Score {
 }
 
 const CHORD_TEXT = 15, CHORD_GAP = 6, EDGE = 6;
+// The clef's column, and each sharp or flat of the key signature after it.
+const CLEF_WIDTH = 44, MARK_WIDTH = 8;
 // The highest and lowest y any mark of the score reaches, staff included.
 function extent(notes: NotePiece[][], second: NotePiece[][], strokes: Score['strokes'], beams: Score['beams']) {
   let low = STAFF_LINES[4], high = STAFF_LINES[0];
@@ -130,7 +132,7 @@ function extent(notes: NotePiece[][], second: NotePiece[][], strokes: Score['str
   return { low, high };
 }
 
-function layout(part: HarmonyPart, stem: string, grid: HarmonyGrid): Score {
+function layout(part: HarmonyPart, stem: string, grid: HarmonyGrid, signature: KeySignature): Score {
   const drums = stem === 'drums';
   const written = part.notes.length > 0 || !!part.second?.length || !!part.hits?.length;
   const drawn = drumScore(part.hits ?? [], grid.firstBar);
@@ -146,8 +148,8 @@ function layout(part: HarmonyPart, stem: string, grid: HarmonyGrid): Score {
     for (let unit = grid.firstBar * 4; unit < grid.beats.length * 4; unit += UNITS_PER_BAR) bars.push(unit * UNIT_WIDTH - UNIT_WIDTH / 2);
   }
   const voices = !drums && !!part.second?.length;
-  const notes = drums ? [] : part.notes.map(note => notePieces(stem, note, grid.firstBar, voices ? 'up' : undefined));
-  const second = voices ? part.second!.map(note => notePieces(stem, note, grid.firstBar, 'down')) : [];
+  const notes = drums ? [] : part.notes.map(note => notePieces(stem, note, grid.firstBar, voices ? 'up' : undefined, signature));
+  const second = voices ? part.second!.map(note => notePieces(stem, note, grid.firstBar, 'down', signature)) : [];
   const strokes = drums ? drawn.strokes : [], beams = drums ? drawn.beams : [];
   let top = 0, height = CHORDS_ONLY, chordY = 18;
   if (written) {
@@ -229,9 +231,14 @@ const Chunk = memo(function Chunk({ score, chunk, activeChord, activeNote }: {
 });
 
 // A staff that scrolls under a fixed "now" line, the same as the website's score strip.
-export function HarmonyStrip({ part, stem, grid, time }: { part: HarmonyPart; stem: string; grid: HarmonyGrid; time: number }) {
+// `songKey` is the song's key (after any key change), which the bass part does not carry itself.
+export function HarmonyStrip({ part, stem, grid, time, songKey }: {
+  part: HarmonyPart; stem: string; grid: HarmonyGrid; time: number; songKey?: string;
+}) {
   const styles = useStyles(makeStyles), t = useT();
-  const score = useMemo(() => layout(part, stem, grid), [part, stem, grid]);
+  const key = part.key ?? songKey;
+  const signature = useMemo(() => keySignature(stem === 'drums' ? undefined : key), [stem, key]);
+  const score = useMemo(() => layout(part, stem, grid, signature), [part, stem, grid, signature]);
   const [width, setWidth] = useState(0);
   const [offset] = useState(() => new Animated.Value(0));
   const position = positionAt(grid.beats, time);
@@ -248,11 +255,14 @@ export function HarmonyStrip({ part, stem, grid, time }: { part: HarmonyPart; st
   const label = score.drums ? t('score.drumLabel', { count: score.strokes.length })
     : t('score.chordsLabel', { chords: part.chords.map(item => item.name).slice(0, 40).join(', ') });
   const staffTop = STAFF_LINES[4] - score.top;
+  // The key signature sits after the clef and pushes the moving score right by its width.
+  const marks = !score.drums && score.written && clef ? signatureMarks(signature, clef, CLEFS[stem].bottomStep) : [];
+  const start = CLEF_WIDTH + (marks.length ? marks.length * MARK_WIDTH + 4 : 0);
   return <View style={[styles.harmony, { height: score.height }]} onLayout={event => setWidth(event.nativeEvent.layout.width)}
     accessible accessibilityRole="image" accessibilityLabel={label}>
     {score.written && STAFF_LINES.map(y => <View key={y} style={[styles.staffLine, { top: y - score.top }]} />)}
-    <View style={styles.window}>
-      <Animated.View style={[styles.flow, { height: score.height, opacity: width ? 1 : 0, transform: [{ translateX: offset }] }]}>
+    <View style={[styles.window, { left: start }]}>
+      <Animated.View style={[styles.flow, { left: -start, height: score.height, opacity: width ? 1 : 0, transform: [{ translateX: offset }] }]}>
         {chunks.map(chunk => <Chunk key={chunk} score={score} chunk={chunk}
           activeChord={chord >= 0 && chunkOf(score.chords[chord].x) === chunk ? chord : -1}
           activeNote={activeNote >= 0 && chunkOf(noteX(activeNote)) === chunk ? activeNote : -1} />)}
@@ -261,6 +271,8 @@ export function HarmonyStrip({ part, stem, grid, time }: { part: HarmonyPart; st
     {score.drums ? <View style={[styles.drumClef, { top: staffTop + 8 }]} />
       : score.written && <Text style={[styles.clef, clef === 'bass' ? styles.bassClef : styles.trebleClef,
         { top: staffTop - (clef === 'bass' ? 16 : 10) }]}>{clef === 'bass' ? '𝄢' : '𝄞'}</Text>}
+    {marks.map((mark, index) => <Text key={index} style={[styles.keyMark, { left: CLEF_WIDTH - 8 + index * MARK_WIDTH, top: mark.y - score.top - 11 }]}>
+      {mark.symbol}</Text>)}
     <Fades />
     <View pointerEvents="none" style={styles.now} />
   </View>;
@@ -338,8 +350,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   wordActive: { color: t.wordActive, fontWeight: '700' },
   harmony: { marginTop: 10, marginHorizontal: 14, borderRadius: 6, backgroundColor: t.strip, overflow: 'hidden' },
   staffLine: { position: 'absolute', left: 0, right: 0, height: 1, marginTop: -0.5, backgroundColor: t.staff },
-  window: { position: 'absolute', top: 0, bottom: 0, left: 44, right: 0, overflow: 'hidden' },
-  flow: { position: 'absolute', left: -44, top: 0, width: 1 },
+  window: { position: 'absolute', top: 0, bottom: 0, right: 0, overflow: 'hidden' },
+  flow: { position: 'absolute', top: 0, width: 1 },
+  keyMark: { position: 'absolute', width: MARK_WIDTH, fontSize: 15, lineHeight: 20, textAlign: 'center', color: t.scoreInk },
   clef: { position: 'absolute', left: 6, color: t.scoreInk },
   trebleClef: { fontSize: 44, lineHeight: 52 },
   bassClef: { fontSize: 34, lineHeight: 52 },

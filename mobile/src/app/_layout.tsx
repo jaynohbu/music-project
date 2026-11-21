@@ -3,6 +3,7 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { View } from 'react-native';
 import { AppHeader } from '../app-header';
+import { useActivity } from '../activity';
 import { SessionProvider, useSession } from '../session';
 import { LanguageProvider, useT } from '../language';
 import { ThemeBackground, ThemeProvider, useTheme } from '../theme';
@@ -19,8 +20,9 @@ function RootNavigator() {
   const pathname = usePathname();
   const theme = useTheme();
   const t = useT();
-  if (state.name === 'loading') return <Loading />;
   const ready = state.name === 'ready';
+  useActivity(ready);
+  if (state.name === 'loading') return <Loading />;
   return (
     <View style={{ flex: 1 }}>
     {ready && <AppHeader pathname={pathname} navigate={path => router.navigate(path)} />}

@@ -42,12 +42,26 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Request failed. Please try again.';
 }
 
+const VIEWING_KEY = 'sorituh-viewing';
+const ADMIN_SESSION_KEY = 'sorituh-admin-session';
+
+// The groups in an ID token, read without checking it: the API checks every request itself.
+function tokenGroups(idToken: string): string[] {
+  try {
+    const payload = JSON.parse(atob(idToken.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return Array.isArray(payload['cognito:groups']) ? payload['cognito:groups'] : [];
+  } catch { return []; }
+}
+
 @Injectable({ providedIn: 'root' })
 export class AuthService {
   private readonly http = inject(HttpClient);
   private readonly config = inject(CONFIG);
   readonly signedIn = signal(false);
   readonly notice = signal('');
+  // An admin (Cognito group `admins`) sees the Admin page; `viewing` is the user whose account an admin has opened.
+  readonly isAdmin = signal(false);
+  readonly viewing = signal<string | null>(null);
   private session: Session | null = null;
   private refreshing?: Promise<string>;
   private challenge?: { session: string; username: string };
@@ -68,6 +82,8 @@ export class AuthService {
           idToken: value.idToken, accessToken: value.accessToken,
           refreshToken: value.refreshToken, expiresAt: value.expiresAt,
         };
+        this.viewing.set(sessionStorage.getItem(VIEWING_KEY));
+        this.isAdmin.set(!this.viewing() && tokenGroups(value.idToken).includes('admins'));
         this.signedIn.set(true);
       } catch (error) {
         console.warn('Discarding invalid saved session', error);
@@ -126,13 +142,43 @@ export class AuthService {
       expiresAt: Date.now() + tokens.ExpiresIn * 1000,
     };
     sessionStorage.setItem('youtube-session', JSON.stringify(this.session));
+    this.isAdmin.set(tokenGroups(tokens.IdToken).includes('admins'));
     this.notice.set('');
     this.signedIn.set(true);
+  }
+
+  // Opens the site as a user for an admin. Their tokens last an hour and cannot be refreshed; the admin's own
+  // session waits in this tab and comes back on Exit.
+  startViewing(session: { idToken: string; accessToken: string; expiresIn: number }, email: string): void {
+    if (!this.session || this.viewing()) return;
+    sessionStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(this.session));
+    this.session = { idToken: session.idToken, accessToken: session.accessToken, refreshToken: '', expiresAt: Date.now() + session.expiresIn * 1000 };
+    sessionStorage.setItem('youtube-session', JSON.stringify(this.session));
+    sessionStorage.setItem(VIEWING_KEY, email);
+    this.viewing.set(email);
+    this.isAdmin.set(false);
+  }
+
+  stopViewing(notice = ''): void {
+    const saved = sessionStorage.getItem(ADMIN_SESSION_KEY);
+    sessionStorage.removeItem(ADMIN_SESSION_KEY);
+    sessionStorage.removeItem(VIEWING_KEY);
+    this.viewing.set(null);
+    if (!saved) { this.clear(); return; }
+    this.session = JSON.parse(saved) as Session;
+    sessionStorage.setItem('youtube-session', saved);
+    this.isAdmin.set(tokenGroups(this.session.idToken).includes('admins'));
+    this.notice.set(notice);
   }
 
   async token(): Promise<string> {
     if (!this.session) throw new Error('Sign in to continue.');
     if (this.session.expiresAt > Date.now() + 60000) return this.session.idToken;
+    // A viewed account's hour is up: return to the admin rather than refreshing someone else's session.
+    if (this.viewing()) {
+      this.stopViewing(`Your hour viewing ${this.viewing()} ended.`);
+      throw new Error('The time to view this account ended.');
+    }
     if (!this.refreshing) {
       this.refreshing = this.refresh().finally(() => { this.refreshing = undefined; });
     }
@@ -156,6 +202,8 @@ export class AuthService {
   }
 
   async logout(): Promise<void> {
+    // Never sign the viewed user out of their own devices; logging out here only leaves their account.
+    if (this.viewing()) { this.stopViewing(); return; }
     try {
       if (this.session) {
         await this.token();
@@ -168,6 +216,10 @@ export class AuthService {
 
   private clear(): void {
     this.session = null;
+    this.isAdmin.set(false);
+    this.viewing.set(null);
+    sessionStorage.removeItem(VIEWING_KEY);
+    sessionStorage.removeItem(ADMIN_SESSION_KEY);
     this.challenge = undefined;
     sessionStorage.removeItem('youtube-session');
     this.notice.set('');
@@ -407,5 +459,74 @@ export class StemsService {
       {},
       { headers: { Authorization: `Bearer ${token}` } },
     ));
+  }
+}
+
+export interface AdminUser {
+  id: string; email: string; enabled: boolean; status: string; createdAt: string;
+  plan: 'free' | 'premium'; songs: number; songLimit: number; splits: number; splitLimit: number; bytes: number;
+  today: { open: number; play: number }; week: { open: number; play: number }; lastActive: string | null;
+}
+
+// The master admin's calls (backend/admin-api.mjs); the API refuses them for anyone else.
+@Injectable({ providedIn: 'root' })
+export class AdminService {
+  private readonly http = inject(HttpClient);
+  private readonly auth = inject(AuthService);
+  private readonly config = inject(CONFIG);
+
+  private async headers() { return { Authorization: `Bearer ${await this.auth.token()}` }; }
+
+  async users(): Promise<AdminUser[]> {
+    return (await firstValueFrom(this.http.get<{ users: AdminUser[] }>(`${this.config.apiBaseUrl}/admin/users`,
+      { headers: await this.headers() }))).users;
+  }
+  async setEnabled(id: string, enabled: boolean): Promise<void> {
+    await firstValueFrom(this.http.post(`${this.config.apiBaseUrl}/admin/users/${id}/enabled`, { enabled }, { headers: await this.headers() }));
+  }
+  async setPlan(id: string, plan: 'free' | 'premium'): Promise<void> {
+    await firstValueFrom(this.http.post(`${this.config.apiBaseUrl}/admin/users/${id}/plan`, { plan }, { headers: await this.headers() }));
+  }
+  async open(id: string): Promise<void> {
+    const opened = await firstValueFrom(this.http.post<{ email: string; session: { idToken: string; accessToken: string; expiresIn: number } }>(
+      `${this.config.apiBaseUrl}/admin/users/${id}/session`, {}, { headers: await this.headers() }));
+    this.auth.startViewing(opened.session, opened.email);
+  }
+}
+
+// Time on the website, sent each minute: open while the page is visible, play while a song plays. Not counted
+// while an admin views someone else's account.
+@Injectable({ providedIn: 'root' })
+export class ActivityService {
+  private readonly http = inject(HttpClient);
+  private readonly auth = inject(AuthService);
+  private readonly config = inject(CONFIG);
+  private open = 0;
+  private play = 0;
+  private players = 0;
+  private started = false;
+
+  // Each mixer reports when it starts and stops playing.
+  playing(now: boolean): void { this.players = Math.max(0, this.players + (now ? 1 : -1)); }
+
+  start(): void {
+    if (this.started) return;
+    this.started = true;
+    const STEP = 15;
+    setInterval(() => {
+      if (!this.auth.signedIn() || this.auth.viewing() || document.visibilityState !== 'visible') return;
+      this.open += STEP;
+      if (this.players > 0) this.play += STEP;
+      if (this.open >= 60) void this.send();
+    }, STEP * 1000);
+  }
+
+  private async send(): Promise<void> {
+    const body = { open: Math.min(this.open, 120), play: Math.min(this.play, 120) };
+    this.open = 0; this.play = 0;
+    try {
+      await firstValueFrom(this.http.post(`${this.config.apiBaseUrl}/activity`, body,
+        { headers: { Authorization: `Bearer ${await this.auth.token()}` } }));
+    } catch { /* A missed minute is not worth bothering the user about. */ }
   }
 }

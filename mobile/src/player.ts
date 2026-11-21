@@ -310,6 +310,8 @@ export class Mixer {
   }
 
   get isPlaying() { return this.playing; }
+  // Whether any song is playing now, for the time a user spends playing (activity.ts).
+  static get anyPlaying() { return !!Mixer.active?.playing; }
 
   get position() { return this.positionAt(this.context.currentTime); }
 

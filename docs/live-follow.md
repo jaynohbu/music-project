@@ -1,6 +1,6 @@
 # Live follow: playing along with the stems
 
-Status: written 2026-11-04 for the iPhone app; instruments added 2026-11-05. Typecheck, lint and all 55 tests pass. On the simulator a take was recorded, saved, reloaded after relaunch and played back with the stems. Not yet tested with a real instrument on a phone; the simulator microphone only hears silence, so the band never changed speed there. Needs a new native build because the microphone permission text is added to Info.plist.
+Status: written 2026-11-04 for the iPhone app; instruments added 2026-11-05; reworked 2026-11-20 (see "Changes 2026-11-20" at the end): the input is always heard and mixed as its own channel, the instrument is detected automatically, and the band-part option and channel mix are saved per scene entry. Earlier notes: Typecheck, lint and all 55 tests pass. On the simulator a take was recorded, saved, reloaded after relaunch and played back with the stems. Not yet tested with a real instrument on a phone; the simulator microphone only hears silence, so the band never changed speed there. Needs a new native build because the microphone permission text is added to Info.plist.
 
 ## What it does
 
@@ -134,3 +134,15 @@ The card is hidden until the **Live input** switch at the top of the song's mixe
 - Simulator: recording, saving, reloading after relaunch and playback with the take were checked by hand.
 - Simulator: choosing Vocals and recording showed "Live vocals" and silenced the Vocals stem ("Your part", LED off) in the heavy metal theme; the instrument picker and switch were checked in the simple theme.
 - Still to do on a real iPhone: follow real instruments (guitar and bass through an interface, a keyboard line out, voice on a mic), check the band audibly follows, check Sync, and try each Follow strength.
+
+## Changes 2026-11-20
+
+These supersede the matching parts above.
+
+- **Always heard, mixed like a stem.** While recording, the input plays through a live channel with the same effects chain as a stem (volume, mute, solo, EQ, the other effects, bypass, reset). The recorded take plays through the same channel. The **Hear input** switch and the take's own volume fader are gone. Solo on the live channel silences the stems, and solo on a stem silences it.
+- **Same card as a stem.** The Live input card has the stem card's frame and a full mixer console ("Live input mixer").
+- **Instrument detected automatically** (`mobile/src/instrument-detect.ts`). The picker is gone. After about three seconds of playing, the input's spectrum is compared with what each stem is playing at that moment (analysers tapped before each stem's fader, 24 log bands); the best-matching part names the instrument. Noisy, unpitched input is drums; with no clear match, a low clear pitch is bass and a steady clear pitch is vocals. Detection then switches the onset detector to that instrument's settings.
+- **Band part off by default.** Because the instrument is guessed, the option that silences the matching stem starts off; a wrong guess had silenced the vocals in some songs. Resetting a silenced stem (its own Reset, or the scene's whole-song reset) brings it back and turns the option off.
+- **Saved per scene entry.** The live channel's mix and the band-part option are saved in the scene entry's settings (`live`), not in `take.json`. From Music nothing is saved. `take.json` still holds the recording and its tempo log; its `volume`, `muted` and `replace` fields are no longer read.
+- **Key change** shifts the take with the stems.
+- **Tests:** `mobile/test/instrument-detect.test.cjs` (synthetic tones and noise), plus live-channel and release tests in `mobile/test/native-mixer.test.cjs`. Detection accuracy, monitoring delay and feedback without headphones still need a real instrument on the iPhone.

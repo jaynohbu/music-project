@@ -6,3 +6,6 @@ web/public/config.json
 .venv-download/
 .venv-stems/
 **/__pycache__/
+# Local secrets, such as the master admin (backend/create-admin.mjs).
+.env
+.env.*

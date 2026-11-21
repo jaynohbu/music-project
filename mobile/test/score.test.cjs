@@ -120,3 +120,29 @@ test('a key change moves chords, slash basses, notes and the key, spelled for th
   assert.equal(moved.second[0].pitch, 53);
   assert.equal(score.transposePart(part, 0), part, 'No change keeps the same part');
 });
+
+test('key signatures count their sharps or flats and sit where they are written on each clef', () => {
+  assert.deepEqual(score.keySignature('G'), { flats: false, count: 1, known: true, altered: { 3: '♯' } });
+  assert.equal(score.keySignature('Bb').count, 2);
+  assert.equal(score.keySignature('Bb').flats, true);
+  assert.equal(score.keySignature('F#m').count, 3);
+  assert.equal(score.keySignature('Dm').flats, true);
+  assert.equal(score.keySignature(undefined).known, false);
+  // Treble: F♯ on the top line (y 56); bass: B♭ on the second line (y 80).
+  assert.deepEqual(score.signatureMarks(score.keySignature('G'), 'treble', 30), [{ symbol: '♯', y: 56 }]);
+  assert.equal(score.signatureMarks(score.keySignature('F'), 'bass', 18)[0].y, 80);
+  assert.equal(score.signatureMarks(score.keySignature('C'), 'treble', 30).length, 0);
+});
+
+test('notes are spelled for the key: signature notes plain, naturals marked, black keys in the key\'s sharps or flats', () => {
+  const sign = (pitch, key) => score.notePieces('piano', { start: 0, end: 1, pitch, unit: 0, length: 4 }, 0, undefined, score.keySignature(key))[0];
+  assert.equal(sign(66, 'G').accidental, '', 'F♯ is in G major');
+  assert.equal(sign(65, 'G').accidental, '♮', 'F natural in G major');
+  assert.equal(sign(70, 'F').accidental, '', 'B♭ is in F major');
+  assert.equal(sign(63, 'F').accidental, '♭', 'E♭ in a flat key');
+  assert.equal(sign(63, 'D').accidental, '♯', 'D♯ in a sharp key');
+  assert.equal(sign(63, undefined).accidental, '♭', 'Unknown key keeps the mixed spelling');
+  // D♯ and E♭ sound the same but sit on different lines.
+  assert.notEqual(sign(63, 'D').y, sign(63, 'F').y);
+  assert.equal(sign(72, 'C#').y, sign(71, 'C').y, 'B♯ in C♯ major sits where B does');
+});

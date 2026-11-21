@@ -126,6 +126,9 @@ async function request<T>(method: string, path: string, body?: object): Promise<
   return result as T;
 }
 
+// Seconds the app was open and a song played since the last report (activity.ts); the API caps each at 120.
+export const reportActivity = (open: number, play: number) => request('POST', '/activity', { open, play });
+
 export async function listSongs(cursor?: string | null) {
   const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
   return request<{ jobs: Song[]; cursor: string | null }>('GET', `/jobs${query}`);

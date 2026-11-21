@@ -1,42 +1,44 @@
 # Sorituh mobile app design
 
-Status: step 1 passed on the iPhone, step 2 is deployed, and step 3 now includes native Scenes and the full effects mixer. The parity repair passes 16 mocked regression tests, typecheck, lint, Expo Doctor, Android native compilation and iOS bundle export; it has not yet been tested signed in on a physical phone. Last updated 2026-11-03.
+Status: the app is in daily iPhone testing through EAS internal builds; the server and website are deployed. Since 2026-11-20 the work added a shared ensemble score with automatic analysis, key change, a live-input mixer channel, themes with backgrounds, scene-level mix saving, and the same features on the website where they apply. Last updated 2026-11-21 (commit `24135be`).
 
 This is the source of truth for the native app work. Read it before changing `mobile/`, the stem pipeline, or account limits. A Korean summary for people is in `sorituh-mobile-app-design.docx`; if the two differ, this file wins.
 
 ## Goal
 
-Replace the WebView wrapper with a native Expo app that plays stems from its own audio engine. Users sign in with an email only and never see a password. The AWS backend stays; the website stays but gets no new features.
+Replace the WebView wrapper with a native Expo app that plays stems from its own audio engine. Users sign in with an email only and never see a password. The AWS backend stays. The website stays and, since 2026-11-20, gets the app's features where they apply (see Website).
 
 ## Current state
 
 | Area | State | Where |
 |---|---|---|
-| App, first version | Written 2026-11-03; builds and opens to sign-in on the Android emulator; not tested signed in or on the iPhone | `mobile/src/app/`, see Step 3 |
-| Sign-in logic | Keep | `mobile/src/auth.ts` |
-| Device account API | Deployed 2026-11-03 with the `ByDevice` index; session route answers 201; not yet used from a phone | `backend/accounts.mjs`, `template.yaml` |
-| AAC generation | Deployed 2026-11-03 (worker image `cpu-20261103210959`); not yet seen on a real split | `backend/stem-playback.mjs`, `backend/stem-worker.mjs`, `backend/stem-restore.mjs` |
-| AAC for existing songs | Script written; dry run lists 4 songs and 7 cleaned stems; not applied yet | `backend/convert-playback.mjs` |
-| Usage limits | Deployed 2026-11-03; `GET /api/stems/usage` answers 401 signed out | `backend/stem-usage.mjs`, `backend/stem-api.mjs`, `backend/accounts.mjs` |
-| Audio engine | Written from the trial findings; not yet run on real songs | `mobile/src/player.ts` |
-| Local cache | Written; not yet run | `mobile/src/cache.ts` |
+| App | Installed from EAS `staging` builds on the user's iPhone; signed-in use daily. Latest build `1109096e` (commit `24135be`) | `mobile/src/` |
+| Sign-in | Email + device ID, as designed. Codes now go through SES, which is in sandbox (see Constraints) | `mobile/src/auth.ts`, `backend/accounts.mjs` |
+| Audio engine | Six stems streamed from disk, full effects, key change through a library patch | `mobile/src/player.ts`, `mobile/patches/` |
+| Score analysis | Version 5: ensemble score (key, extended chords, melody, second line), bass and drum parts, hi-hat filling. Found automatically when a song is first opened | `backend/analyze_harmony.py`, `backend/note_lines.py` |
+| Live input | A mixer channel like a stem; instrument detected automatically; take saved per song | `mobile/src/live-*.ts`, `mobile/src/instrument-detect.ts`, [live-follow.md](./live-follow.md) |
+| Scenes | Mix, live mix and key change saved per scene entry; nothing saved from Music | `backend/scene-api.mjs`, `mobile/src/mixer-settings.ts` |
+| Themes | Heavy metal (default), Rock, Pop, Jazz club, Worship, Simple, with backgrounds, in app and website | `mobile/src/theme.tsx`, `web/src/themes.ts` |
+| Website | Deployed 2026-11-21 with the ensemble score, themes, usage, store links | `web/src/` |
+| Worker image | `cpu-20261121080006` | `backend/Dockerfile.stems` |
+| Not built | Score editor, website languages and live input, account deletion, billing, store submission | see Build order |
 
-Step 1 and step 2 work is committed and pushed (`9b01351` on `main`). Commit, push or deploy only when the user asks.
-
-Nothing has run end to end against real AWS or on a physical phone.
+Commit and push when the user asks; deploys (API, worker image, website) and EAS builds also need the user's go-ahead.
 
 ## Architecture
 
 ```
 App (Expo)
  ├ Sign-in: email + device ID
- ├ Screens: music list, scenes, upload, mixer, settings
- ├ Audio engine: real-time mix of 6 AAC files read from disk
+ ├ Screens: music list (edit title/artist), scenes, upload, mixer, settings
+ ├ Audio engine: real-time mix of 6 AAC files read from disk, plus the live input channel
+ ├ Key change: WSOLA pitch shift on every stem (patched library)
  └ Local cache: most recent 20 songs or 2 GB, whichever comes first
 Server (existing AWS stack)
- ├ API: accounts, song list, scenes, usage limits
- ├ Split worker: on-demand Fargate task, also produces AAC
- └ S3: WAV (original, downloads) + AAC (playback, cache)
+ ├ API: accounts, song list, scenes, usage limits, lyrics and score analysis
+ ├ Split worker: on-demand Fargate task (htdemucs_6s), also produces AAC
+ ├ Analysis worker: same image; lyrics, ensemble score, bass and drum parts
+ └ S3: WAV (original, downloads) + AAC (playback, cache) + analysis JSON
 ```
 
 ## Decisions
@@ -89,7 +91,9 @@ AAC adds about 20–50 ms of start delay. Stems shift together, but timing again
 - **Waveforms:** the mixer streams stems, so `src/waveform.ts` decodes each stem once more at 2 kHz, one at a time after the mixer is ready, and caches 100 normalized peaks as `<stem file>.peaks.json` in the song's cache folder. This matches the website's `waveformPeaks`. The cleaned version gets its own peaks. On the simulator six 4-minute test stems decoded in about 2.3 s.
 - Full effects are not yet measured on a physical phone. The current independent per-stem convolvers preserve each stem's pan/mute/solo/bypass behavior, but the trial below showed a substantial CPU cost for six reverbs. Benchmark full effects before shipping; a shared reverb would require an intentional routing/tail-behavior change.
 - Background playback: iOS background audio, Android foreground media service, lock-screen controls.
-- First candidate is `react-native-audio-api`. It passed on the Android emulator but is **not yet proven on physical phones** (see Step 1 plan). The fallback is custom Expo modules using AVAudioEngine on iOS and Oboe on Android.
+- `react-native-audio-api` 0.13.6 carries the mixer on the iPhone (Step 1). Android phones are still untested.
+- **Library patch (2026-11-21):** `mobile/patches/react-native-audio-api+0.13.6.patch`, applied by `patch-package` on `postinstall`, adds a `pitchShift` property (semitones) to file sources. The library already had a WSOLA stretcher with a pitch factor for buffer sources; the patch passes it on file sources too and uses the stretcher whenever the pitch is shifted. Regenerate the patch with `npx patch-package react-native-audio-api --exclude '^package\.json$|^android/|/external/|\.DS_Store$'`, or it picks up build output.
+- Mixer layout on the phone: the page does not scroll by finger, so faders never drag the page; rails on both sides scroll it, faint when idle and dark while scrolling. Space under the last stem lets it reach the focus line. Faders are 90 pt, the master bar is slim, each console is named after its stem ("Guitar mixer").
 
 ### Local cache
 
@@ -128,9 +132,46 @@ Enforce on the server only.
 - **Lyrics and chords:** one run per song, as before; a failed run can be retried. Regenerating one stem's chords: once per stem and source (original or cleaned stem).
 - **One new account per device:** `AccountDevices` has a `ByDevice` index. A device request that would create a new account for a device already linked to another email deletes the account it just made and returns 409 `DEVICE_HAS_ACCOUNT`. The user pool hides whether an email exists, so the check runs after the create. Signing in to other existing accounts from that device still works.
 
+### Score analysis (2026-11-20, harmony version 5)
+
+The user found the per-stem scores of guitar, piano and other torn apart and hard to follow, so they are analysed as one ensemble. Decided with the user:
+
+- **Ensemble:** guitar, piano and other are mixed and analysed together; bass supplies chord roots only and keeps its own bass line. The result's `ensemble` has the key, one chord progression and two lines, shared by the guitar, piano and other cards.
+- **Chords:** triads plus 7, maj7, m7, sus2, sus4, add9, dim, aug, and slash chords where the bass plays another chord tone (C/E). Richer chords must beat a triad by a margin, so plain chords stay plain. Inner voices are expressed by these chord names, not written as notes.
+- **Lines:** the melody is the highest clear voice from G3 up; the second line is the highest voice under it from C3 up (a counter-melody or the top of the accompaniment). Notes need strength 0.35 (stems alone use 0.5). Stairway: melody coverage 64% → 79%, second line 71%.
+- **Drums:** pattern letters (A, B…) are no longer written; they looked like chord names. Missing hi-hats inside a steady pattern are filled when the hi-hat band (6–16 kHz, read every 3 ms) shows a hit within **12% of the slot's note length**, at least half as strong as the hi-hats around it (a snare on the same sixteenth must reach a full hi-hat's level). Stairway: 580 detected, 39 filled. The user first said 10%, then 5%; 12% was recommended because players drift 10–20 ms, and a comparison at 8/12/16% can be shown on request.
+- **Regeneration:** only bass and drums can be redone alone; the ensemble is redone with the whole song.
+- **Automatic:** opening a completed song with no current result (app or website) asks for it once in the background and shows a status line. A failed run is left for the button. Older results (versions 3 and 4) are ignored, so songs are re-analysed on first open.
+- A local run on Stairway takes about 78 s on this Mac.
+
+### Key change (2026-11-21)
+
+- −6 to +6 semitones in the mixer console (KEY row under the master), applied to every stem including vocals, the cleaned versions and the live take, without changing speed (option A, real time; server-rendered keys were the rejected option B).
+- Scores follow: chords, slash basses, both lines and the key name, spelled with flats in flat keys.
+- Saved per scene entry as `transpose`; reset returns to 0. Expected to sound natural to about ±3 semitones; vocals may sound mechanical beyond that. Not yet judged by ear.
+- The website plays at the original key and passes `transpose` through when it saves a scene.
+
+### Saving the mix
+
+- **Scenes only.** A scene entry saves every stem's mix, master, section, loop, the live channel's mix, the band-part option (`live`) and the key change (`transpose`). The server accepts `live` and `transpose` as optional fields.
+- **Music:** opening a song from Music saves nothing and starts at defaults; the whole-song reset exists only in scenes.
+- The live take itself (audio and tempo log) is song content and stays per song.
+
+### Themes
+
+- Heavy metal (default), Rock, Pop, Jazz club (was Jazz band), Worship (was Christian), Simple.
+- Backgrounds: heavy metal was supplied by the user; Rock, Pop, Jazz club and Worship are rendered by scripts (`mobile/scripts/theme-art/`: light beams through haze, bloom, bokeh, silhouettes). Unsplash photos were considered but its bot check blocks scripted downloads.
+- Modals need the theme backdrop explicitly (the scene song picker was white until 2026-11-21).
+
+### Rejected experiments (2026-11-06)
+
+- **4 stems instead of 6:** started, then reversed by the user. The work is kept in `git stash` ("4-stem switch + song chords under lyrics").
+- **Harmonic-guided cross-stem refinement** (moving bass harmonics between stems, giving Other back to guitar/piano/bass) and **residual redistribution**: measured on remixed server stems, bass got 2–5 dB worse and guitar 1–2 dB worse; residual sharing helped piano but hurt guitar and bass. Not shipped.
+- **Residual stem:** the Stairway residual (mix minus six stems) is −20.3 dB and tonal. It was not built after the experiments stopped. Separately, Demucs' default clip rescale lowered the drums about 1 dB in that song.
+
 ### Website
 
-No new features. It gets AAC playback automatically through `playUrl`.
+Since 2026-11-20 the website gets the app's features where they apply: the ensemble score (shared by guitar, piano and other, with the key), no drum letters, the second line, automatic analysis on open with a status line, themes with backgrounds (menu in the header, saved per browser), the usage line on Music, store links on upload, per-stem mixer names, cropped score strips, and pass-through of the app's `live` and `transpose` scene fields. Not on the website: 12 languages, live input, key change playback (browsers need a pitch-shift library).
 
 ## App deployment
 
@@ -180,8 +221,9 @@ These came from the user's short description. The user confirmed 1, 2 and 4 on 2
 1. **Engine trial:** 6 stems at once, sync, seeking, effects and a 15-minute song, on a low-end Android phone and an iPhone. A failure here reopens the design, so it comes first.
 2. **Server:** AAC, deletion, conversion of existing songs, usage limits, device API deployment.
 3. **App, first version:** sign-in, song list, upload, mixer, cache, background playback.
-4. **App, second version:** lyrics and chords (written 2026-11-03, see "Lyrics and score"; rendering checked on the iOS simulator build 20efb6bf with `react-native-svg`; an iPhone build with the new native module is still needed), restoration.
-5. **Release:** account deletion, Amazon SES, billing, EAS setup and store submission (see App deployment). Set up the `staging` profile earlier, because step 1 needs an iPhone build.
+4. **App, second version:** lyrics and score, restoration, live input, themes, languages, ensemble score, key change. Done and in testing.
+5. **Next, planned with the user:** a score editor in the app (full-screen modal; notes, rests, pitch, accidentals, key signature and chords editable; bars and beats fixed to the drum grid; saved per song so every scene shares it), then the website in 12 languages, then live input and key change on the website.
+6. **Release:** account deletion, SES production access, billing, App Store Connect and store submission (see App deployment).
 
 ## Step 1 plan: engine trial
 
@@ -388,12 +430,21 @@ Settings → Language offers 12 languages: English, 한국어, 日本語, 简体
 - Known limits: messages written by the server and iOS system prompts (such as the microphone permission) stay in English. The translations are machine-made and should be reviewed by native speakers.
 - `expo-localization` is a native module, so this needs a new native build.
 
+## Admin (master user, 2026-11-21)
+
+- The master admin is an ordinary user in the same Cognito pool, in the group `admins`. It needs no device: it signs in on the website with email and password. `backend/create-admin.mjs` creates it from `SORITUH_ADMIN_EMAIL` and `SORITUH_ADMIN_PASSWORD` in the root `.env` (ignored by git) and adds it to the group.
+- The website shows an Admin link and page (`web/src/admin-page.ts`) only to that group. The API (`backend/admin-api.mjs`) checks the group on every request, and only for tokens from the public client.
+- Per user the page shows: enabled or disabled, plan (Free or Premium, changeable), songs and limit, storage, splits this month, time open and time playing today and over 7 days, last active day.
+- Disable also signs the user out on every device. An admin cannot disable their own account.
+- Open as user: the API signs in as that user through `ImpersonationClient`, a server-only client that allows only CUSTOM_AUTH. Its challenge (`backend/auth-challenge.mjs`) accepts only an HMAC made with a secret in Secrets Manager. The tokens last one hour and cannot be refreshed. The website keeps the admin's session in the tab, shows a red "Viewing as" banner, and returns to the Admin page on Exit or when the hour ends. Admin accounts and disabled users cannot be opened. Every action is written to the log as an `audit` line.
+- Time: the app (`mobile/src/activity.ts`) and the website (`ActivityService`) send `POST /api/activity` about once a minute with seconds open and seconds playing, at most 120 each. They are stored per UTC day as `activity:YYYY-MM-DD` in the jobs table. Time while an admin views an account is not counted.
+
 ## Constraints
 
 - **iOS cannot be built on this Mac.** Expo SDK 58 needs Swift 6.2 (Xcode 26); the Mac has Xcode 16.2 on macOS 14.5. Use EAS and a physical iPhone, as in App deployment. Yanji's submit settings suggest an Apple Developer account exists, but its status has not been checked, and an old Yanji `build.log` shows a "no team" failure.
 - **Apple requires in-app account deletion** for apps that create accounts. Not built.
 - **Android signing:** the current APK is for testing; Google Play needs a release key. Changing the key changes the Android ID, so test accounts will need the email code once.
-- **Email:** the user pool uses Cognito's built-in sender (about 50 messages a day, from memory, unverified). Move to Amazon SES before launch.
+- **Email:** Cognito's built-in sender did not reach Hotmail, so `template.yaml` sends through SES from `no-reply@tunesbasis.com` (applied by the 2026-11-20 deploy). **SES is still in sandbox**, so codes reach only the verified addresses `nohjiyoung@hotmail.com` and `jay-noh@naver.com`; anyone else cannot sign in on a new device or reset a password. The user still has to choose: request SES production access, or go back to `COGNITO_DEFAULT`.
 - **Open sign-up:** there is no email proof or admin approval on new accounts. Abuse protection is IP rate limiting plus the limits above.
 - **Device ID acts as a credential:** email plus device ID can reset a password. A rooted Android phone can expose the ID.
 - **Accounts awaiting admin approval** stay disabled in the app.
@@ -406,5 +457,8 @@ The ADTOF licence is handled by a plan to train an in-house model before product
 - **CocoaPods** needs `LANG=en_US.UTF-8` and `LC_ALL=en_US.UTF-8`.
 - **Expo APIs:** `mobile/AGENTS.md` says to check the versioned docs, because SDK 58 differs from older knowledge. `ios/` and `android/` are generated and gitignored; never edit them by hand.
 - **Checks:** `node --test test/*.test.mjs` in `backend/`; `npm test`, `npx tsc --noEmit`, `npx expo lint` and `npx expo-doctor` in `mobile/`; `sam validate --lint` in the repo root.
-- **API deploy:** `STEM_IMAGE=<image> bash publish-api.sh youtube-audio-library`. The current image is `086723604095.dkr.ecr.us-west-2.amazonaws.com/youtube-audio-library-artifacts-stemrepository-8kjzuftyhvbg:cpu-20261103210959`. Worker code changes need a new image first (`build-stem-image.sh`). The publish scripts ship the working folder as it stands.
+- **API deploy:** `STEM_IMAGE=<image> bash publish-api.sh youtube-audio-library`; without `STEM_IMAGE` the deployed image stays. The current image is `086723604095.dkr.ecr.us-west-2.amazonaws.com/youtube-audio-library-artifacts-stemrepository-8kjzuftyhvbg:cpu-20261121080006`. Worker code changes need a new image first (`build-stem-image.sh`, needs Docker Desktop running). The publish scripts ship the working folder as it stands.
+- **Analysis locally:** a venv with the worker's Python requirements (no torch, demucs or whisper) plus `basic-pitch==0.4.0 --no-deps`, and the ADTOF model from the Dockerfile's URL as `DRUM_MODEL`, runs `analyze_harmony.py` on downloaded stems.
+- **iPhone builds:** `eas build --platform ios --profile staging` and install from the build link. `xcrun devicectl` cannot install on the user's iPhone because Xcode 16.2 has no disk image for its iOS. The `simulator` profile builds for the iOS 18 simulator on this Mac. `eas build` sometimes fails right after a cancel; rerunning works.
+- **Scene settings and the server:** the backend validates every field of scene settings, so a new app field (like `live` or `transpose`) needs the API deployed before an app build that sends it.
 - **Names:** "youtube" in the stack name, the `youtube-session` key and similar is only a label; YouTube downloading has been removed.

@@ -1,5 +1,5 @@
 import { useIsFocused } from 'expo-router';
-import { useEffect, useLayoutEffect, useReducer, useRef, useState, type ComponentRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ComponentRef } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { ENSEMBLE_STEMS, HARMONY_STEMS, REGENERATED_STEMS, STEM_NAMES, getSong, type LyricLine, type SceneEntry, type SceneSettings, type Song, type StemName } from './api';
 import { addCleanedFile, holdSong, songFiles, stemPaths } from './cache';
@@ -352,14 +352,15 @@ function ChannelConsole({ songKey, mixer, label, channel, expanded, live, replac
 function KeyChange({ mixer, songKey }: { mixer: Mixer; songKey?: string }) {
   const styles = useStyles(makeStyles), t = useT();
   const shift = mixer.transpose;
+  // Key names when the song's key is known; semitones only until its score is found.
   const signed = shift > 0 ? `+${shift}` : String(shift);
-  const value = songKey ? (shift ? `${songKey} → ${transposeKey(songKey, shift)} (${signed})` : songKey)
-    : shift ? signed : t('mixer.original');
+  const value = songKey ? transposeKey(songKey, shift) : shift ? t('mixer.semitones', { count: signed }) : t('mixer.original');
+  const from = songKey && shift ? t('mixer.keyFrom', { key: songKey }) : '';
   return <View style={styles.keyRow}>
     <Text style={styles.keyLabel}>{t('mixer.key').toUpperCase()}</Text>
     <IconButton icon="moveEarlier" disabled={shift <= -MAX_TRANSPOSE} accessibilityLabel={t('mixer.keyDown')}
       onPress={() => mixer.setTranspose(shift - 1)} />
-    <Text style={styles.keyValue} accessibilityLiveRegion="polite">{value}</Text>
+    <Text style={styles.keyValue} accessibilityLiveRegion="polite">{value}{!!from && <Text style={styles.keyFrom}>  {from}</Text>}</Text>
     <IconButton icon="moveLater" disabled={shift >= MAX_TRANSPOSE} accessibilityLabel={t('mixer.keyUp')}
       onPress={() => mixer.setTranspose(shift + 1)} />
   </View>;
@@ -372,10 +373,13 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
 }) {
   const styles = useStyles(makeStyles), t = useT();
   const vocals = name === 'vocals', harmonic = HARMONY_STEMS.includes(name);
-  if (!vocals && !harmonic) return null;
-  // The score follows the key change; drums have no pitch.
+  // The score follows the key change; drums have no pitch. Kept until the key or the score changes,
+  // so the playhead's ten updates a second do not lay the score out again.
   const parts = tasks.parts, found = parts?.[name];
-  const part = found && name !== 'drums' ? transposePart(found, transpose) : found;
+  const part = useMemo(() => found && name !== 'drums' ? transposePart(found, transpose) : found, [found, name, transpose]);
+  // The bass part has no key of its own; it is written in the song's key, after any key change.
+  const ensembleKey = parts?.guitar?.key, songKey = ensembleKey ? transposeKey(ensembleKey, transpose) : undefined;
+  if (!vocals && !harmonic) return null;
   const regenerating = harmonic && tasks.regenerating(name);
   const action = vocals
     ? tasks.lyrics ? { label: t('tasks.editLyrics'), onPress: onEditLyrics }
@@ -405,7 +409,8 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
       : <Text style={styles.taskHint}>{t('tasks.noLyrics')}</Text>)}
     {harmonic && parts && (name === 'drums' && !part && !regenerating
       ? <Text style={styles.taskHint}>{t('tasks.pressDrums')}</Text>
-      : hasMusic(part) && tasks.grid ? <HarmonyStrip part={part!} stem={ENSEMBLE_STEMS.includes(name) ? 'piano' : name} grid={tasks.grid} time={position} />
+      : hasMusic(part) && tasks.grid ? <HarmonyStrip part={part!} stem={ENSEMBLE_STEMS.includes(name) ? 'piano' : name} grid={tasks.grid} time={position}
+        songKey={songKey} />
         : part ? <Text style={styles.taskHint}>{t('tasks.noChords')}</Text> : null)}
   </View>;
 }
@@ -449,7 +454,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   switches: { flexDirection: 'row', gap: 8, paddingHorizontal: 14 },
   keyRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14 },
   keyLabel: { fontSize: 11, fontWeight: '800', letterSpacing: .5, color: t.consoleInk, minWidth: 46 },
-  keyValue: { flex: 1, textAlign: 'center', fontSize: 14, fontWeight: '700', color: t.consoleInk, fontVariant: ['tabular-nums'] },
+  keyValue: { flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '800', color: t.consoleInk },
+  keyFrom: { fontSize: 12, fontWeight: '600', color: t.consoleMuted },
   channels: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: t.consoleLine },
   channelRow: { flexDirection: 'row' },
   consoleNote: { fontSize: 12, color: t.consoleMuted, paddingHorizontal: 14 },

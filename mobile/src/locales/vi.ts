@@ -187,6 +187,8 @@ const vi: Strings = {
   'mixer.key': 'Tông',
   'mixer.keyDown': 'Hạ tông nửa cung',
   'mixer.keyUp': 'Nâng tông nửa cung',
+  'mixer.keyFrom': 'Gốc {key}',
+  'mixer.semitones': '{count} nửa cung',
   'mixer.original': 'Gốc',
   'mixer.cleaned': 'Đã làm sạch',
   'mixer.loadCleaned': 'Tải bản đã làm sạch',

@@ -187,6 +187,8 @@ const de: Strings = {
   'mixer.key': 'Tonart',
   'mixer.keyDown': 'Einen Halbton tiefer',
   'mixer.keyUp': 'Einen Halbton höher',
+  'mixer.keyFrom': 'Original {key}',
+  'mixer.semitones': '{count} Halbtöne',
   'mixer.original': 'Original',
   'mixer.cleaned': 'Bereinigt',
   'mixer.loadCleaned': 'Bereinigte Version laden',

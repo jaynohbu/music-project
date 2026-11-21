@@ -187,6 +187,8 @@ const id: Strings = {
   'mixer.key': 'Nada dasar',
   'mixer.keyDown': 'Turunkan setengah nada',
   'mixer.keyUp': 'Naikkan setengah nada',
+  'mixer.keyFrom': 'Asli {key}',
+  'mixer.semitones': '{count} semitone',
   'mixer.original': 'Asli',
   'mixer.cleaned': 'Dibersihkan',
   'mixer.loadCleaned': 'Muat versi bersih',

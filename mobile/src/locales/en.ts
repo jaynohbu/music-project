@@ -186,6 +186,8 @@ const en = {
   'mixer.key': 'Key',
   'mixer.keyDown': 'Lower the key by a semitone',
   'mixer.keyUp': 'Raise the key by a semitone',
+  'mixer.keyFrom': 'Original {key}',
+  'mixer.semitones': '{count} semitones',
   'mixer.original': 'Original',
   'mixer.cleaned': 'Cleaned',
   'mixer.loadCleaned': 'Load cleaned',

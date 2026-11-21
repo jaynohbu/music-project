@@ -187,6 +187,8 @@ const ja: Strings = {
   'mixer.key': 'キー',
   'mixer.keyDown': 'キーを半音下げる',
   'mixer.keyUp': 'キーを半音上げる',
+  'mixer.keyFrom': '原曲 {key}',
+  'mixer.semitones': '{count}半音',
   'mixer.original': 'オリジナル',
   'mixer.cleaned': 'ノイズ除去済み',
   'mixer.loadCleaned': 'ノイズ除去版を読み込む',

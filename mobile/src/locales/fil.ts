@@ -187,6 +187,8 @@ const fil: Strings = {
   'mixer.key': 'Key',
   'mixer.keyDown': 'Ibaba ang key nang kalahating tono',
   'mixer.keyUp': 'Itaas ang key nang kalahating tono',
+  'mixer.keyFrom': 'Orihinal {key}',
+  'mixer.semitones': '{count} semitone',
   'mixer.original': 'Orihinal',
   'mixer.cleaned': 'Nilinis',
   'mixer.loadCleaned': 'I-load ang nilinis',

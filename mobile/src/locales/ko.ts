@@ -187,6 +187,8 @@ const ko: Strings = {
   'mixer.key': '키',
   'mixer.keyDown': '키를 반음 내리기',
   'mixer.keyUp': '키를 반음 올리기',
+  'mixer.keyFrom': '원래 {key}',
+  'mixer.semitones': '{count}반음',
   'mixer.original': '원본',
   'mixer.cleaned': '노이즈 제거됨',
   'mixer.loadCleaned': '노이즈 제거 버전 불러오기',

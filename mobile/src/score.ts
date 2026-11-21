@@ -17,10 +17,63 @@ const STEM_LENGTH = 26;
 const HEAD_OFFSET = 4.8;
 const NOTE_VALUES = [16, 12, 8, 6, 4, 3, 2, 1];
 const REST_VALUES = [16, 8, 4, 2, 1];
-// Letter name offset from C, and accidental, for each pitch class.
-const SPELLING: [number, string][] = [
+// Key signatures: how many sharps or flats each key has. Letters count from C (C=0 … B=6).
+const NATURAL = [0, 2, 4, 5, 7, 9, 11];
+const SHARP_ORDER = [3, 0, 4, 1, 5, 2, 6]; // F C G D A E B
+const FLAT_ORDER = [6, 2, 5, 1, 4, 0, 3]; // B E A D G C F
+const SHARP_KEYS: Record<string, number> = {
+  C: 0, G: 1, D: 2, A: 3, E: 4, B: 5, 'F#': 6, 'C#': 7, Am: 0, Em: 1, Bm: 2, 'F#m': 3, 'C#m': 4, 'G#m': 5, 'D#m': 6, 'A#m': 7,
+};
+const FLAT_KEY_COUNTS: Record<string, number> = {
+  F: 1, Bb: 2, Eb: 3, Ab: 4, Db: 5, Gb: 6, Cb: 7, Dm: 1, Gm: 2, Cm: 3, Fm: 4, Bbm: 5, Ebm: 6, Abm: 7,
+};
+// Staff steps (letters from C0) where each sharp or flat of the signature is written, in order.
+const SIGNATURE_STEPS = {
+  treble: { sharp: [38, 35, 39, 36, 33, 37, 34], flat: [34, 37, 33, 36, 32, 35, 31] },
+  bass: { sharp: [24, 21, 25, 22, 19, 23, 20], flat: [20, 23, 19, 22, 18, 21, 17] },
+};
+
+// `known` is false when the song's key is not found yet; black keys then use the common mixed spelling.
+export interface KeySignature { flats: boolean; count: number; altered: Record<number, string>; known: boolean }
+// Letter and sign of each pitch class when the key is unknown: C♯ E♭ F♯ A♭ B♭.
+const MIXED: [number, string][] = [
   [0, ''], [0, '♯'], [1, ''], [2, '♭'], [2, ''], [3, ''], [3, '♯'], [4, ''], [5, '♭'], [5, ''], [6, '♭'], [6, ''],
 ];
+
+// The signature of a key such as 'G', 'Bb' or 'F#m'; an unknown key is written as C major.
+export function keySignature(key?: string): KeySignature {
+  const flats = !!key && key in FLAT_KEY_COUNTS;
+  const count = !key ? 0 : flats ? FLAT_KEY_COUNTS[key] : SHARP_KEYS[key] ?? 0;
+  const order = flats ? FLAT_ORDER : SHARP_ORDER;
+  return { flats, count, known: !!key && (key in FLAT_KEY_COUNTS || key in SHARP_KEYS),
+    altered: Object.fromEntries(order.slice(0, count).map(letter => [letter, flats ? '♭' : '♯'])) };
+}
+
+// Where the signature's sharps or flats sit on this clef's staff.
+export function signatureMarks(signature: KeySignature, clef: 'treble' | 'bass', bottomStep: number) {
+  const steps = SIGNATURE_STEPS[clef][signature.flats ? 'flat' : 'sharp'].slice(0, signature.count);
+  return steps.map(step => ({ symbol: signature.flats ? '♭' : '♯', y: BOTTOM_LINE_Y - (step - bottomStep) * LINE_GAP / 2 }));
+}
+
+// Spells a pitch class in the key: a note in the signature needs no sign, a natural on an altered letter shows ♮,
+// and other black keys follow the key's sharps or flats. Returns the letter, the sign shown, and an octave shift
+// for B♯ and C♭, whose letter sits in the octave next to their pitch.
+function spell(pitchClass: number, signature: KeySignature): [number, string, number] {
+  if (!signature.known) return [...MIXED[pitchClass], 0];
+  const options: [number, string][] = [];
+  NATURAL.forEach((natural, letter) => {
+    const difference = (pitchClass - natural + 12) % 12;
+    const sign = difference === 0 ? '' : difference === 1 ? '♯' : difference === 11 ? '♭' : null;
+    if (sign !== null) options.push([letter, sign]);
+  });
+  const octave = (letter: number) => (letter === 6 && pitchClass === 0 ? -1 : letter === 0 && pitchClass === 11 ? 1 : 0);
+  const inKey = options.find(([letter, sign]) => (signature.altered[letter] ?? '') === sign);
+  if (inKey) return [inKey[0], '', octave(inKey[0])];
+  const natural = options.find(([, sign]) => sign === '');
+  if (natural) return [natural[0], signature.altered[natural[0]] ? '♮' : '', 0];
+  const chosen = options.find(([, sign]) => sign === (signature.flats ? '♭' : '♯')) ?? options[0];
+  return [chosen[0], chosen[1], octave(chosen[0])];
+}
 // Steps count letter names from C0; bottom is E4 or G2. Guitar and bass are written an octave above their sound.
 export const CLEFS: Record<string, { clef: 'treble' | 'bass'; bottomStep: number; lift: number; low: number; high: number }> = {
   guitar: { clef: 'treble', bottomStep: 30, lift: 12, low: 52, high: 84 },
@@ -119,13 +172,14 @@ export function splitValues(unit: number, length: number, firstBar: number, valu
 }
 
 // `voice` fixes the stem direction when two lines share the staff: the melody up, the second line down.
-export function notePieces(stem: string, note: HarmonyNote, firstBar: number, voice?: 'up' | 'down'): NotePiece[] {
+export function notePieces(stem: string, note: HarmonyNote, firstBar: number, voice?: 'up' | 'down',
+  signature: KeySignature = keySignature()): NotePiece[] {
   const { bottomStep, lift, low, high } = CLEFS[stem];
   let written = note.pitch + lift;
   while (written < low) written += 12;
   while (written > high) written -= 12;
-  const [letter, accidental] = SPELLING[written % 12];
-  const step = (Math.floor(written / 12) - 1) * 7 + letter;
+  const [letter, accidental, octaveShift] = spell(written % 12, signature);
+  const step = (Math.floor(written / 12) - 1 + octaveShift) * 7 + letter;
   const yOf = (value: number) => BOTTOM_LINE_Y - (value - bottomStep) * LINE_GAP / 2;
   const y = yOf(step);
   const ledgers: number[] = [];

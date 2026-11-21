@@ -2,7 +2,7 @@ import { Component, ElementRef, EventEmitter, Injector, Input, OnChanges, OnDest
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
-import { ENSEMBLE_STEMS, HARMONY_STEMS, HarmonyGrid, REGENERATED_STEMS, HarmonyPart, Job, LyricLine, SceneEntry, SceneSettings, STEM_NAMES, StemName, StemsService, errorMessage } from './services';
+import { ActivityService, ENSEMBLE_STEMS, HARMONY_STEMS, HarmonyGrid, REGENERATED_STEMS, HarmonyPart, Job, LyricLine, SceneEntry, SceneSettings, STEM_NAMES, StemName, StemsService, errorMessage } from './services';
 import { ConfirmationService } from './confirmation';
 import { captureSceneSettings, restoredSceneInterval } from './scene-settings';
 import { HarmonyStrip } from './harmony-strip';
@@ -770,6 +770,8 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   readonly position = signal(0);
   readonly duration = signal(0);
   readonly playing = signal(false);
+  private readonly activity = inject(ActivityService);
+  private reportedPlaying = false;
   readonly renewingLinks = signal(false);
   readonly masterVolume = signal(80);
   readonly sectionStart = signal(0);
@@ -784,6 +786,8 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   musicAuthor = '';
 
   constructor() {
+    // Playing time counts towards the user's daily time (ActivityService).
+    effect(() => { const now = this.playing(); if (now !== this.reportedPlaying) { this.reportedPlaying = now; this.activity.playing(now); } });
     effect(() => {
       if (!this.hydrated()) return;
       const settings = this.snapshotSettings();
@@ -1353,6 +1357,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    if (this.reportedPlaying) { this.reportedPlaying = false; this.activity.playing(false); }
     this.destroyed = true;
     this.hydrated.set(false);
     window.removeEventListener('scroll', this.followScroll);

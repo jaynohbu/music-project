@@ -3,23 +3,32 @@ import { Component, effect, inject, signal } from '@angular/core';
 import { bootstrapApplication } from '@angular/platform-browser';
 import { provideHttpClient } from '@angular/common/http';
 import { CanActivateFn, Router, RouterLink, RouterLinkActive, RouterOutlet, provideRouter, withHashLocation } from '@angular/router';
-import { AuthService, CONFIG, Config, errorMessage } from './services';
+import { ActivityService, AuthService, CONFIG, Config, errorMessage } from './services';
 import { ListPage, LoginPage } from './pages';
 import { MixerPage, SplitPage } from './stem-pages';
 import { ForgotPasswordPage, RegisterPage } from './account-pages';
 import { ConfirmationDialog } from './confirmation';
 import { ScenePage, ScenesPage } from './scene-pages';
+import { AdminPage } from './admin-page';
 
 const authenticated: CanActivateFn = () =>
   inject(AuthService).signedIn() || inject(Router).createUrlTree(['/login']);
 const anonymous: CanActivateFn = () =>
   !inject(AuthService).signedIn() || inject(Router).createUrlTree(['/list']);
+const admin: CanActivateFn = () =>
+  inject(AuthService).isAdmin() || inject(Router).createUrlTree(['/list']);
 
 @Component({
   selector: 'app-root',
   standalone: true,
   imports: [RouterOutlet, RouterLink, RouterLinkActive, ConfirmationDialog],
   template: `
+    @if (auth.viewing()) {
+      <div class="viewing-banner" role="status">
+        <span>Viewing as <strong>{{ auth.viewing() }}</strong>. Changes here are made to their account.</span>
+        <button (click)="exitViewing()">Exit</button>
+      </div>
+    }
     @if (!uploadScreen()) {
     <header>
       <a class="brand" routerLink="/list" aria-label="Sorituh home">
@@ -30,18 +39,20 @@ const anonymous: CanActivateFn = () =>
         <nav aria-label="Main navigation">
           <a routerLink="/list" routerLinkActive="active">Music</a>
           <a routerLink="/scenes" routerLinkActive="active">Scenes</a>
+          @if (auth.isAdmin()) { <a routerLink="/admin" routerLinkActive="active">Admin</a> }
           <label class="theme-picker"><span>Theme</span>
             <select [value]="themes.theme()" (change)="pickTheme($event)" aria-label="Theme">
               @for (item of themeList; track item.id) { <option [value]="item.id">{{ item.name }}</option> }
             </select>
           </label>
-          <button class="secondary" (click)="logout()" [disabled]="busy()">Log out</button>
+          @if (!auth.viewing()) { <button class="secondary" (click)="logout()" [disabled]="busy()">Log out</button> }
         </nav>
       }
     </header>
     }
     <main>
       @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
+      @if (auth.signedIn() && auth.notice()) { <p class="error" role="alert">{{ auth.notice() }}</p> }
       <router-outlet />
     </main>
     @if (!uploadScreen()) { <footer>Sorituh · The foundation of sound. Your music, privately stored.</footer> }
@@ -58,6 +69,14 @@ class AppComponent {
   readonly busy = signal(false);
   readonly uploadScreen = signal(false);
   constructor() {
+    inject(ActivityService).start();
+    // A viewed account's hour ending returns the admin to the Admin page.
+    let previouslyViewing = this.auth.viewing();
+    effect(() => {
+      const viewing = this.auth.viewing();
+      if (previouslyViewing && !viewing && this.auth.isAdmin()) void this.router.navigateByUrl('/admin');
+      previouslyViewing = viewing;
+    });
     this.router.events.subscribe(() => this.uploadScreen.set(this.router.url.split('?')[0] === '/split'));
     let previouslySignedIn = this.auth.signedIn();
     effect(() => {
@@ -66,6 +85,7 @@ class AppComponent {
       previouslySignedIn = signedIn;
     });
   }
+  exitViewing(): void { this.auth.stopViewing(); }
   async logout(): Promise<void> {
     this.busy.set(true);
     let message = '';
@@ -108,6 +128,7 @@ async function start(): Promise<void> {
         { path: 'mixer/:jobId', component: MixerPage, canActivate: [authenticated] },
         { path: 'list', component: ListPage, canActivate: [authenticated] },
         { path: 'scenes', component: ScenesPage, canActivate: [authenticated] },
+        { path: 'admin', component: AdminPage, canActivate: [authenticated, admin] },
         { path: 'scenes/:sceneId', component: ScenePage, canActivate: [authenticated],
           canDeactivate: [(page: ScenePage) => page.canLeave()] },
         { path: '', redirectTo: 'list', pathMatch: 'full' },

@@ -187,6 +187,8 @@ const pt: Strings = {
   'mixer.key': 'Tom',
   'mixer.keyDown': 'Baixar meio tom',
   'mixer.keyUp': 'Subir meio tom',
+  'mixer.keyFrom': 'Original {key}',
+  'mixer.semitones': '{count} semitons',
   'mixer.original': 'Original',
   'mixer.cleaned': 'Limpa',
   'mixer.loadCleaned': 'Carregar versão limpa',
