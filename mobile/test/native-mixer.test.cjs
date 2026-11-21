@@ -562,3 +562,22 @@ test('the live mix and the band-part option are saved with the scene entry, not 
   assert.equal(other.liveChannel.volume, 0.5); assert.equal(other.liveChannel.reverb, 30); assert.equal(other.replacePart, true);
   await other.close();
 });
+
+test('a key change shifts every stem, keeps speed, and is saved with the scene entry', async () => {
+  const f = fixture(), { snapshot, restore } = f.load('mixer-settings');
+  const mixer = await f.load('player').Mixer.create(f.paths, 'Key');
+  const context = f.contexts.at(-1);
+  mixer.setTranspose(3);
+  assert.equal(mixer.transpose, 3);
+  assert.ok(context.files.every(file => file.pitchShift === 3), 'Every stem, vocals included, moves');
+  assert.ok(context.files.every(file => file.rate === 1), 'Speed does not change');
+  mixer.setTranspose(20);
+  assert.equal(mixer.transpose, 6, 'Limited to six semitones');
+  assert.equal(snapshot(mixer).transpose, 6);
+  const other = await f.load('player').Mixer.create(f.paths, 'Restored');
+  restore(other, { ...snapshot(mixer), transpose: -2 });
+  assert.equal(other.transpose, -2);
+  other.reset();
+  assert.equal(other.transpose, 0, 'Reset returns to the original key');
+  await other.close(); await mixer.close();
+});

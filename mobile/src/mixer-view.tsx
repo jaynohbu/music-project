@@ -7,7 +7,7 @@ import { EFFECT_CONTROLS } from './effects';
 import { t as text } from './i18n';
 import { useT } from './language';
 import { LivePanel } from './live-panel';
-import { Mixer, defaultChannel, type Channel } from './player';
+import { MAX_TRANSPOSE, Mixer, defaultChannel, type Channel } from './player';
 import { ChannelStrip, IconButton, LampSwitch, MasterFader, Timeline } from './mixer-console';
 import { useStemScroll } from './stem-scroll';
 import { focusedStem } from './stem-focus';
@@ -16,7 +16,7 @@ import { Button, Centered, errorText, useConfirm } from './ui';
 
 import { snapshot, restore } from './mixer-settings';
 import { HarmonyStrip, LyricsEditor, LyricsStrip } from './score-view';
-import { LYRICS_REPLAY_LEAD, firstChange } from './score';
+import { LYRICS_REPLAY_LEAD, firstChange, transposeKey, transposePart } from './score';
 import { hasMusic, regenerateLabel, useSongTasks } from './song-tasks';
 import { type Theme, useStyles, useTheme } from './theme';
 
@@ -221,7 +221,7 @@ export function MixerControls({ mixer, song = null, peaks, inScene = false }: { 
       {!liveOpen && mixer.hasTake && <Text style={styles.liveNote}>{t('mixer.takePlays')}</Text>}
     </View>}
     {song && <LivePanel key={song.jobId} open={liveOpen} mixer={mixer} song={song} tasks={tasks} position={position} onRecording={setRecording}
-      console={heard => <ChannelConsole {...{ mixer, locked, inside, position, allMuted, soloing, run: operation => void run(operation), onReset: inScene ? () => void reset() : undefined }} label={t('mixer.liveInput')} channel={liveChannel}
+      console={heard => <ChannelConsole {...{ mixer, locked, inside, position, allMuted, soloing, run: operation => void run(operation), onReset: inScene ? () => void reset() : undefined, songKey: tasks.parts?.guitar?.key }} label={t('mixer.liveInput')} channel={liveChannel}
         expanded={liveExpanded} live={heard && !liveChannel.muted && !(soloing && !liveChannel.solo)}
         onToggle={() => setLiveExpanded(value => !value)} setChannel={change => mixer.setLiveChannel(change)}
         resetChannel={() => mixer.setLiveChannel(defaultChannel())} />} />}
@@ -255,14 +255,14 @@ export function MixerControls({ mixer, song = null, peaks, inScene = false }: { 
         </View>
         {!!(tasks.cleanFailure(name) || cleanErrors[name]) &&
           <Text accessibilityRole="alert" style={[styles.error, styles.stemError]}>{tasks.cleanFailure(name) || cleanErrors[name]}</Text>}
-        {song && <StemTasks name={name} label={label} cleaned={channel.useCleaned} tasks={tasks} position={position}
+        {song && <StemTasks transpose={mixer.transpose} name={name} label={label} cleaned={channel.useCleaned} tasks={tasks} position={position}
           disabled={locked} onEditLyrics={editLyrics} />}
         <Timeline label={label} duration={mixer.duration} start={mixer.sectionStart} end={mixer.sectionEnd} position={position}
           peaks={channel.useCleaned ? peaks?.[name]?.cleaned ?? cleanedPeaks[name] : peaks?.[name]?.original}
           disabled={locked} onSection={(start, end) => mixer.setSection(start, end)}
           onSeek={time => void run(() => mixer.seek(time))}
           onReset={() => mixer.setSection(0, mixer.duration)} />
-        <ChannelConsole {...{ mixer, locked, inside, position, allMuted, soloing, run: operation => void run(operation), onReset: inScene ? () => void reset() : undefined }} label={label} channel={channel} expanded={expanded} live={live} replaced={replaced}
+        <ChannelConsole {...{ mixer, locked, inside, position, allMuted, soloing, run: operation => void run(operation), onReset: inScene ? () => void reset() : undefined, songKey: tasks.parts?.guitar?.key }} label={label} channel={channel} expanded={expanded} live={live} replaced={replaced}
           onToggle={() => { if (!expanded) openStem(name); }} setChannel={change => mixer.setChannel(name, change)}
           resetChannel={() => {
             mixer.setChannel(name, { ...defaultChannel(), useCleaned: channel.useCleaned });
@@ -281,8 +281,10 @@ interface ConsoleProps {
   run: (operation: () => Promise<void>) => void;
   // The whole-song reset; only given in a scene.
   onReset?: () => void;
+  // The song's key from its score, shown with the key change; undefined until the score is found.
+  songKey?: string;
 }
-function ChannelConsole({ mixer, label, channel, expanded, live, replaced = false, locked, inside, position, allMuted, soloing,
+function ChannelConsole({ songKey, mixer, label, channel, expanded, live, replaced = false, locked, inside, position, allMuted, soloing,
   onToggle, setChannel, resetChannel, run, onReset }: ConsoleProps) {
   const styles = useStyles(makeStyles), t = useT();
   return <>
@@ -320,6 +322,7 @@ function ChannelConsole({ mixer, label, channel, expanded, live, replaced = fals
         {onReset && <IconButton icon="reset" accessibilityLabel={t('mixer.resetSettings')} onPress={onReset} />}
       </View>
       <MasterFader value={Math.round(mixer.volume * 100)} onChange={value => mixer.setVolume(value / 100)} />
+      <KeyChange mixer={mixer} songKey={songKey} />
       <ScrollView horizontal style={styles.channels} contentContainerStyle={styles.channelRow}
         accessibilityLabel={t('mixer.faders', { stem: label })}>
         {EFFECT_CONTROLS.map(control => {
@@ -345,15 +348,34 @@ function ChannelConsole({ mixer, label, channel, expanded, live, replaced = fals
   </>;
 }
 
+// Raises or lowers the whole song, vocals included, without changing its speed.
+function KeyChange({ mixer, songKey }: { mixer: Mixer; songKey?: string }) {
+  const styles = useStyles(makeStyles), t = useT();
+  const shift = mixer.transpose;
+  const signed = shift > 0 ? `+${shift}` : String(shift);
+  const value = songKey ? (shift ? `${songKey} → ${transposeKey(songKey, shift)} (${signed})` : songKey)
+    : shift ? signed : t('mixer.original');
+  return <View style={styles.keyRow}>
+    <Text style={styles.keyLabel}>{t('mixer.key').toUpperCase()}</Text>
+    <IconButton icon="moveEarlier" disabled={shift <= -MAX_TRANSPOSE} accessibilityLabel={t('mixer.keyDown')}
+      onPress={() => mixer.setTranspose(shift - 1)} />
+    <Text style={styles.keyValue} accessibilityLiveRegion="polite">{value}</Text>
+    <IconButton icon="moveLater" disabled={shift >= MAX_TRANSPOSE} accessibilityLabel={t('mixer.keyUp')}
+      onPress={() => mixer.setTranspose(shift + 1)} />
+  </View>;
+}
+
 // The website's lyrics and 악보 controls for one stem: find, edit or regenerate, then the scrolling strip.
-function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyrics }: {
+function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyrics, transpose }: {
   name: StemName; label: string; cleaned: boolean; tasks: ReturnType<typeof useSongTasks>; position: number;
-  disabled: boolean; onEditLyrics: () => void;
+  disabled: boolean; onEditLyrics: () => void; transpose: number;
 }) {
   const styles = useStyles(makeStyles), t = useT();
   const vocals = name === 'vocals', harmonic = HARMONY_STEMS.includes(name);
   if (!vocals && !harmonic) return null;
-  const parts = tasks.parts, part = parts?.[name];
+  // The score follows the key change; drums have no pitch.
+  const parts = tasks.parts, found = parts?.[name];
+  const part = found && name !== 'drums' ? transposePart(found, transpose) : found;
   const regenerating = harmonic && tasks.regenerating(name);
   const action = vocals
     ? tasks.lyrics ? { label: t('tasks.editLyrics'), onPress: onEditLyrics }
@@ -425,6 +447,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   console: { backgroundImage: t.metal, borderTopWidth: 1, borderTopColor: t.consoleLine, paddingVertical: 10, gap: 8 },
   transport: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14 },
   switches: { flexDirection: 'row', gap: 8, paddingHorizontal: 14 },
+  keyRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14 },
+  keyLabel: { fontSize: 11, fontWeight: '800', letterSpacing: .5, color: t.consoleInk, minWidth: 46 },
+  keyValue: { flex: 1, textAlign: 'center', fontSize: 14, fontWeight: '700', color: t.consoleInk, fontVariant: ['tabular-nums'] },
   channels: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: t.consoleLine },
   channelRow: { flexDirection: 'row' },
   consoleNote: { fontSize: 12, color: t.consoleMuted, paddingHorizontal: 14 },

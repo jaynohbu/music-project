@@ -340,6 +340,29 @@ test('an entry may carry the live input\'s mix, which is checked like a stem\'s'
   }
 });
 
+test('an entry may carry a key change of up to six semitones', async () => {
+  const { database, scenes, storage } = setup();
+  seedSong(database, storage, A, SONG);
+  const scene = await makeScene(scenes);
+  let revision = 1;
+  const save = async value => {
+    const result = await call(scenes, A, 'PATCH', `/api/scenes/${scene.id}`,
+      { revision, entries: [{ id: uuid(302), jobId: SONG, settings: value }] });
+    if (result.status === 200) revision = result.body.scene.revision;
+    return result;
+  };
+  for (const transpose of [-6, 0, 3, 6]) {
+    const saved = await save(settings({ transpose }));
+    assert.equal(saved.status, 200);
+    assert.equal(saved.body.scene.entries[0].settings.transpose, transpose);
+  }
+  for (const bad of [7, -7, 1.5, '2', null]) {
+    const result = await save(settings({ transpose: bad }));
+    assert.equal(result.status, 400, String(bad));
+    assert.match(result.body.message, /settings\.transpose/);
+  }
+});
+
 test('entries must reference the caller\'s own completed songs', async () => {
   const { database, scenes, storage } = setup();
   seedSong(database, storage, A, SONG);

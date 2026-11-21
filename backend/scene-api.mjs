@@ -30,6 +30,9 @@ export const TRACK_FLAGS = ['muted', 'solo', 'bypassed', 'useCleaned'];
 const SETTINGS_KEYS = ['masterVolume', 'sectionStart', 'sectionEnd', 'loop', 'tracks'];
 // The app's live input is mixed like a stem; its mix belongs to the scene entry, as the stems' does.
 const LIVE_KEY = 'live';
+// The app's key change in semitones; part of the entry's mix like the faders.
+const TRANSPOSE_KEY = 'transpose';
+const MAX_TRANSPOSE = 6;
 
 export class SceneInputError extends Error {
   constructor(message, statusCode = 400) { super(message); this.name = 'SceneInputError'; this.statusCode = statusCode; }
@@ -74,7 +77,7 @@ function track(value, at, flags = TRACK_FLAGS) {
 
 export function sceneSettings(value, duration, path = 'settings') {
   if (!isObject(value)) fail(`${path} must be an object.`);
-  const { [LIVE_KEY]: live, ...rest } = value;
+  const { [LIVE_KEY]: live, [TRANSPOSE_KEY]: transpose, ...rest } = value;
   exactKeys(rest, SETTINGS_KEYS, path);
   const limit = Number.isFinite(duration) && duration > 0 ? duration : STEM_MAX_DURATION;
   number(value.masterVolume, `${path}.masterVolume`, 0, 100);
@@ -89,6 +92,10 @@ export function sceneSettings(value, duration, path = 'settings') {
   const result = { masterVolume: value.masterVolume, sectionStart: value.sectionStart, sectionEnd: value.sectionEnd, loop: value.loop, tracks };
   // Optional: scenes saved before the live input, and by the website, have none.
   if (live !== undefined) result[LIVE_KEY] = track(live, `${path}.${LIVE_KEY}`, [...TRACK_FLAGS.filter(key => key !== 'useCleaned'), 'replace']);
+  if (transpose !== undefined) {
+    if (!Number.isInteger(transpose)) fail(`${path}.${TRANSPOSE_KEY} must be a whole number of semitones.`);
+    result[TRANSPOSE_KEY] = number(transpose, `${path}.${TRANSPOSE_KEY}`, -MAX_TRANSPOSE, MAX_TRANSPOSE);
+  }
   return result;
 }
 

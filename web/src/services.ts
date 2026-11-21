@@ -206,6 +206,8 @@ export interface SceneSettings {
   tracks: Record<string, SceneTrackSettings>;
   // The app's live-input mix for this entry. The website has no live input and passes it through unchanged.
   live?: Record<string, number | boolean>;
+  // The app's key change in semitones; the website plays at the original key and passes it through.
+  transpose?: number;
 }
 export interface SceneEntry {
   id: string;

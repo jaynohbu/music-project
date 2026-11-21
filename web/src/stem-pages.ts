@@ -798,9 +798,9 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   private snapshotSettings(): SceneSettings {
     const settings = captureSceneSettings(this.masterVolume(), this.sectionStart(), this.sectionEndTime(),
       this.loopSection(), this.tracks(), this.job()?.duration);
-    // Keep the app's live-input mix; saving from the website must not erase it.
-    const live = this.sceneEntry?.settings?.live;
-    return live ? { ...settings, live } : settings;
+    // Keep the app's live-input mix and key change; saving from the website must not erase them.
+    const { live, transpose } = this.sceneEntry?.settings ?? {};
+    return { ...settings, ...(live ? { live } : {}), ...(transpose !== undefined ? { transpose } : {}) };
   }
 
   async resetSong(): Promise<void> {

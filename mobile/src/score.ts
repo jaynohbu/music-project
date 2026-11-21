@@ -1,6 +1,6 @@
 // Lyrics timing and staff layout, ported from the website (web/src/lyrics-strip.ts, lyrics-editor.ts and
 // harmony-strip.ts) so both draw the same score. Pure functions only, so they can be unit-tested.
-import type { DrumHit, DrumName, HarmonyNote, LyricLine, LyricWord } from './api';
+import type { DrumHit, DrumName, HarmonyNote, HarmonyPart, LyricLine, LyricWord } from './api';
 
 export const HELD_AFTER_WORD = 0.25;
 export const LYRICS_REPLAY_LEAD = 1;
@@ -288,4 +288,46 @@ export function drumRests(hits: DrumHit[], firstBar: number): ScoreRest[] {
     }
   }
   return rests;
+}
+
+// Key change: chord names, notes and the key move by semitones, spelled with flats in flat keys.
+const SHARP_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const FLAT_NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'];
+const FLAT_KEYS = new Set(['F', 'Bb', 'Eb', 'Ab', 'Db', 'Gb', 'Dm', 'Gm', 'Cm', 'Fm', 'Bbm', 'Ebm']);
+const NOTE_INDEX: Record<string, number> = Object.fromEntries([
+  ...SHARP_NAMES.map((name, index) => [name, index]), ...FLAT_NAMES.map((name, index) => [name, index]),
+]);
+const rootOf = (name: string) => (name[1] === '#' || name[1] === 'b' ? name.slice(0, 2) : name.slice(0, 1));
+
+function moveNote(note: string, semitones: number, flats: boolean) {
+  const index = NOTE_INDEX[note];
+  if (index === undefined) return note;
+  return (flats ? FLAT_NAMES : SHARP_NAMES)[((index + semitones) % 12 + 12) % 12];
+}
+
+export function transposeKey(key: string, semitones: number) {
+  const root = rootOf(key);
+  const moved = moveNote(root, semitones, false) + key.slice(root.length);
+  // Spell the new key the way it is usually written (Bb, not A#).
+  const flat = moveNote(root, semitones, true) + key.slice(root.length);
+  return FLAT_KEYS.has(flat) ? flat : moved;
+}
+
+export function transposeChord(name: string, semitones: number, flats: boolean) {
+  const [chord, bass] = name.split('/');
+  const root = rootOf(chord);
+  const moved = moveNote(root, semitones, flats) + chord.slice(root.length);
+  return bass ? `${moved}/${moveNote(bass, semitones, flats)}` : moved;
+}
+
+export function transposePart(part: HarmonyPart, semitones: number): HarmonyPart {
+  if (!semitones) return part;
+  const key = part.key ? transposeKey(part.key, semitones) : undefined;
+  const flats = key ? FLAT_KEYS.has(key) : semitones < 0;
+  const move = (notes: HarmonyNote[]) => notes.map(note => ({ ...note, pitch: note.pitch + semitones }));
+  return {
+    ...part, key,
+    chords: part.chords.map(chord => ({ ...chord, name: transposeChord(chord.name, semitones, flats) })),
+    notes: move(part.notes), second: part.second && move(part.second),
+  };
 }

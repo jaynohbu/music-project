@@ -101,3 +101,22 @@ test('drumScore beams hands together and gives the kick its own voice', () => {
   // The hands play on beats one and two, so the rest of the bar is quarter rests.
   assert.deepEqual(drawn.rests, [{ x: 128, units: 4 }, { x: 192, units: 4 }]);
 });
+
+test('a key change moves chords, slash basses, notes and the key, spelled for the new key', () => {
+  assert.equal(score.transposeKey('E', 3), 'G');
+  assert.equal(score.transposeKey('C', 5), 'F');
+  assert.equal(score.transposeKey('C', -2), 'Bb', 'Flat keys keep flats');
+  assert.equal(score.transposeKey('Am', 1), 'Bbm');
+  assert.equal(score.transposeKey('Am', 2), 'Bm');
+  assert.equal(score.transposeChord('Cmaj7/E', 2, false), 'Dmaj7/F#');
+  assert.equal(score.transposeChord('G/B', -2, true), 'F/A');
+  assert.equal(score.transposeChord('Ebm7', 1, false), 'Em7');
+  const part = { key: 'C', chords: [{ start: 0, name: 'Am7' }], notes: [{ start: 0, end: 1, pitch: 60, unit: 0, length: 4 }],
+    second: [{ start: 0, end: 1, pitch: 55, unit: 0, length: 4 }] };
+  const moved = score.transposePart(part, -2);
+  assert.equal(moved.key, 'Bb');
+  assert.equal(moved.chords[0].name, 'Gm7');
+  assert.equal(moved.notes[0].pitch, 58);
+  assert.equal(moved.second[0].pitch, 53);
+  assert.equal(score.transposePart(part, 0), part, 'No change keeps the same part');
+});

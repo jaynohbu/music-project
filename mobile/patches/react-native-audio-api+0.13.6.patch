@@ -1,0 +1,100 @@
+diff --git a/node_modules/react-native-audio-api/common/cpp/audioapi/HostObjects/sources/AudioFileSourceNodeHostObject.cpp b/node_modules/react-native-audio-api/common/cpp/audioapi/HostObjects/sources/AudioFileSourceNodeHostObject.cpp
+index 2831320..875b315 100644
+--- a/node_modules/react-native-audio-api/common/cpp/audioapi/HostObjects/sources/AudioFileSourceNodeHostObject.cpp
++++ b/node_modules/react-native-audio-api/common/cpp/audioapi/HostObjects/sources/AudioFileSourceNodeHostObject.cpp
+@@ -37,6 +37,7 @@ AudioFileSourceNodeHostObject::AudioFileSourceNodeHostObject(
+       JSI_EXPORT_PROPERTY_SETTER(AudioFileSourceNodeHostObject, volume),
+       JSI_EXPORT_PROPERTY_SETTER(AudioFileSourceNodeHostObject, playbackRate),
+       JSI_EXPORT_PROPERTY_SETTER(AudioFileSourceNodeHostObject, preservesPitch),
++      JSI_EXPORT_PROPERTY_SETTER(AudioFileSourceNodeHostObject, pitchShift),
+       JSI_EXPORT_PROPERTY_SETTER(AudioFileSourceNodeHostObject, loop));
+ 
+   addFunctions(
+@@ -93,6 +94,14 @@ JSI_PROPERTY_SETTER_IMPL(AudioFileSourceNodeHostObject, preservesPitch) {
+   node->scheduleAudioEvent(std::move(event));
+ }
+ 
++JSI_PROPERTY_SETTER_IMPL(AudioFileSourceNodeHostObject, pitchShift) {
++  auto node = std::static_pointer_cast<AudioFileSourceNode>(node_);
++  auto event = [node, semitones = static_cast<float>(value.getNumber())](BaseAudioContext &ctx) {
++    node->setPitchShift(semitones);
++  };
++  node->scheduleAudioEvent(std::move(event));
++}
++
+ JSI_PROPERTY_GETTER_IMPL(AudioFileSourceNodeHostObject, loop) {
+   return {loop_};
+ }
+diff --git a/node_modules/react-native-audio-api/common/cpp/audioapi/HostObjects/sources/AudioFileSourceNodeHostObject.h b/node_modules/react-native-audio-api/common/cpp/audioapi/HostObjects/sources/AudioFileSourceNodeHostObject.h
+index 9377136..76deb20 100644
+--- a/node_modules/react-native-audio-api/common/cpp/audioapi/HostObjects/sources/AudioFileSourceNodeHostObject.h
++++ b/node_modules/react-native-audio-api/common/cpp/audioapi/HostObjects/sources/AudioFileSourceNodeHostObject.h
+@@ -29,6 +29,7 @@ class AudioFileSourceNodeHostObject : public AudioScheduledSourceNodeHostObject
+   JSI_PROPERTY_SETTER_DECL(volume);
+   JSI_PROPERTY_SETTER_DECL(playbackRate);
+   JSI_PROPERTY_SETTER_DECL(preservesPitch);
++  JSI_PROPERTY_SETTER_DECL(pitchShift);
+   JSI_PROPERTY_SETTER_DECL(loop);
+   JSI_PROPERTY_SETTER_DECL(onPositionChanged);
+   JSI_PROPERTY_SETTER_DECL(onBufferingStateChanged);
+diff --git a/node_modules/react-native-audio-api/common/cpp/audioapi/core/sources/AudioFileSourceNode.cpp b/node_modules/react-native-audio-api/common/cpp/audioapi/core/sources/AudioFileSourceNode.cpp
+index a11a641..2fb28bc 100644
+--- a/node_modules/react-native-audio-api/common/cpp/audioapi/core/sources/AudioFileSourceNode.cpp
++++ b/node_modules/react-native-audio-api/common/cpp/audioapi/core/sources/AudioFileSourceNode.cpp
+@@ -159,6 +159,13 @@ void AudioFileSourceNode::setPlaybackRate(float v) {
+   targetPlaybackRate_ = v;
+ }
+ 
++void AudioFileSourceNode::setPitchShift(float semitones) {
++  if (!std::isfinite(semitones)) {
++    return;
++  }
++  pitchFactor_ = std::pow(2.0f, std::clamp(semitones, -12.0f, 12.0f) / 12.0f);
++}
++
+ void AudioFileSourceNode::setPreservesPitch(bool v) {
+   if (decoderState_ == nullptr) {
+     return;
+@@ -531,7 +538,8 @@ size_t AudioFileSourceNode::renderWithWsolaPitchPreservation(
+       inputFrames,
+       *processingBuffer,
+       static_cast<size_t>(framesToProcess),
+-      activeRate);
++      activeRate,
++      pitchFactor_);
+ 
+   return std::min(inputFrames, requestedInputFrames);
+ }
+@@ -756,7 +764,9 @@ std::shared_ptr<DSPAudioBuffer> AudioFileSourceNode::processDecodedOutput(
+   }
+ 
+   const bool hasDecoderInput = pendingDecoderChunk_.size > 0 || incoming.size > 0;
+-  const FillMode fillMode = chooseFillMode(preservesPitch, rateAffectsOutput);
++  // A pitch shift needs the stretcher even at normal speed.
++  const bool pitchShifted = std::abs(pitchFactor_ - 1.0f) > RATE_SETTLE_EPSILON;
++  const FillMode fillMode = chooseFillMode(preservesPitch, rateAffectsOutput || pitchShifted);
+   setFillMode(fillMode);
+ 
+   const bool shouldStretch =
+diff --git a/node_modules/react-native-audio-api/common/cpp/audioapi/core/sources/AudioFileSourceNode.h b/node_modules/react-native-audio-api/common/cpp/audioapi/core/sources/AudioFileSourceNode.h
+index 7060247..797526e 100644
+--- a/node_modules/react-native-audio-api/common/cpp/audioapi/core/sources/AudioFileSourceNode.h
++++ b/node_modules/react-native-audio-api/common/cpp/audioapi/core/sources/AudioFileSourceNode.h
+@@ -95,6 +95,9 @@ class AudioFileSourceNode : public AudioScheduledSourceNode {
+   /// @brief When true, playback speed changes preserve the original pitch.
+   void setPreservesPitch(bool v);
+ 
++  /// @brief Shifts pitch by semitones without changing speed (Sorituh patch). Needs preservesPitch.
++  void setPitchShift(float semitones);
++
+   /// @brief Current pitch-preservation mode.
+   bool getPreservesPitch() const {
+     return decoderState_->preservesPitch.load(std::memory_order_acquire);
+@@ -174,6 +177,7 @@ class AudioFileSourceNode : public AudioScheduledSourceNode {
+ 
+   // Target rate from JS; applied immediately on the audio thread (Chromium does not smooth rate).
+   float targetPlaybackRate_{1.0f};
++  float pitchFactor_ = 1.0f;
+   static constexpr float RATE_SETTLE_EPSILON = 1e-2f;
+ 
+   enum class FillMode : std::uint8_t { Passthrough, Resample, Wsola };

@@ -41,6 +41,9 @@ const SEEK_SETTLE_MS = 500;
 // library, so playback ends this far before the shortest stem runs out.
 const END_MARGIN = .5;
 const SKIP_SECONDS = 15;
+export const MAX_TRANSPOSE = 6;
+// The pitch shift is a Sorituh patch to the pinned library (patches/react-native-audio-api+0.13.6.patch).
+const shiftPitch = (native: object, semitones: number) => { (native as { pitchShift: number }).pitchShift = semitones; };
 const ANALYSER_SIZE = 2048;
 // While a take plays, the stems' speed is checked this often against its tempo log.
 const FOLLOW_MS = 25;
@@ -99,6 +102,7 @@ export class Mixer {
   private readonly subscriptions: { remove(): void }[] = [];
   private channels: Record<StemName, Channel>;
   private masterVolume = 0.8;
+  private semitones = 0;
   private playing = false;
   private closed = false;
   // While playing, the position is startPosition plus the context time since startClock.
@@ -195,6 +199,7 @@ export class Mixer {
       source: path, loop: false, volume: 1, playbackRate: this.speed, preservesPitch: true,
     });
     if (!native) throw new Error(t('player.unavailable'));
+    if (this.semitones) shiftPitch(native, this.semitones);
     const source: FileSource = new AudioFileSourceNode(this.context, native);
     // attach()/dispose() in pinned 0.13.6 leave JS listeners registered. Own and
     // remove the native event subscriptions so changing Scene tabs releases audio.
@@ -318,6 +323,17 @@ export class Mixer {
   // The audio-clock time the stems started, or will start, playing.
   get startTime() { return this.startClock; }
   get rate() { return this.speed; }
+
+  // The key change in semitones: every stem, vocals included, and the take move together without changing speed.
+  get transpose() { return this.semitones; }
+  setTranspose(value: number) {
+    const semitones = Math.round(Math.min(MAX_TRANSPOSE, Math.max(-MAX_TRANSPOSE, value)));
+    if (!Number.isFinite(semitones) || semitones === this.semitones) return;
+    this.semitones = semitones;
+    for (const source of this.sources) shiftPitch(source.getFileSourceNode(), semitones);
+    if (this.take?.open) shiftPitch(this.take.open.source.getFileSourceNode(), semitones);
+    this.changed();
+  }
 
   // Changes how fast the stems play without changing their pitch.
   setRate(value: number) {
@@ -588,6 +604,7 @@ export class Mixer {
     for (const name of STEM_NAMES) this.setChannel(name, defaultChannel());
     this.setLiveChannel(defaultChannel());
     this.releaseReplacedStem();
+    this.setTranspose(0);
     this.setVolume(.8); this.sectionStart = 0; this.sectionEnd = this.duration; this.loop = false;
     this.changed();
   }
