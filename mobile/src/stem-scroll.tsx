@@ -67,7 +67,7 @@ class RailFade {
   hideSoon() {
     if (this.holding) return;
     if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(() => { this.timer = null; this.to(0, 350); }, 700);
+    this.timer = setTimeout(() => { this.timer = null; this.to(0, 200); }, 150);
   }
 }
 
