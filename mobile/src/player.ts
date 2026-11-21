@@ -1,7 +1,7 @@
 // The mixer's audio engine: six stems read from disk and decoded as they play, all
 // driven by one audio context so they stay sample-aligned (design doc, Audio engine).
 import {
-  AudioContext, AudioManager, MediaElementAudioSourceNode, PlaybackNotificationManager,
+  AnalyserNode, AudioContext, AudioManager, MediaElementAudioSourceNode, PlaybackNotificationManager,
   type AudioParam, type GainNode, type RecorderAdapterNode,
 } from 'react-native-audio-api';
 // @ts-expect-error Not part of the public API, so the library is pinned (design doc).
@@ -9,8 +9,9 @@ import {
 import { AudioFileSourceNode } from 'react-native-audio-api/lib/module/Audio/AudioFileSourceNode';
 import type { AudioFileSourceNode as FileSource } from 'react-native-audio-api/lib/typescript/Audio/AudioFileSourceNode';
 import { STEM_NAMES, type StemName } from './api';
-import { applyEffects, createEffects, defaults, stereoGain, type EffectNodes, type Effects } from './effects';
+import { EXPLICIT_STEREO, applyEffects, createEffects, defaults, stereoGain, type EffectNodes, type Effects } from './effects';
 import { t, type TextKey } from './i18n';
+import { bandLevels, type StemLevels } from './instrument-detect';
 import { MAX_RATE, MIN_RATE, rateAt, songPositionAt, takeTimeAt, type TempoPoint } from './live-follow';
 
 export interface Channel extends Omit<Effects, 'volume'> {
@@ -40,6 +41,7 @@ const SEEK_SETTLE_MS = 500;
 // library, so playback ends this far before the shortest stem runs out.
 const END_MARGIN = .5;
 const SKIP_SECONDS = 15;
+const ANALYSER_SIZE = 2048;
 // While a take plays, the stems' speed is checked this often against its tempo log.
 const FOLLOW_MS = 25;
 // Any drift from the log is closed over this long, and never by more than FOLLOW_NUDGE.
@@ -65,7 +67,12 @@ interface Stem {
   cleanedGain?: GainNode;
   gain: GainNode;
   effects: EffectNodes;
+  // Hears the stem before its fader, so the live input can be compared with each part.
+  analyser: AnalyserNode;
 }
+
+// The player's own channel: the live input and the recorded take both play through it.
+interface LiveChannel { effects: EffectNodes; gain: GainNode }
 
 // The native media-control registry is an unsynchronised dictionary that every
 // call mutates on a concurrent queue, so overlapping calls crash the app.
@@ -116,6 +123,9 @@ export class Mixer {
   private notificationShown = false;
   // Song seconds per second; stems are time-stretched with their pitch kept.
   private speed = 1;
+  private readonly live: LiveChannel;
+  private readonly listening: GainNode;
+  private liveSettings: Channel = defaultChannel();
   private take: (TakeTrack & { gain: GainNode; open?: OpenSource; clock: number; offset: number; startTimer?: ReturnType<typeof setTimeout> }) | null = null;
   // While recording a new take, the old one stays silent and the live follower sets the speed.
   private takeSuspended = false;
@@ -149,6 +159,13 @@ export class Mixer {
     this.master.gain.value = this.masterVolume;
     this.master.connect(this.context.destination);
     this.channels = Object.fromEntries(STEM_NAMES.map(name => [name, defaultChannel()])) as Record<StemName, Channel>;
+    // Analysers only run when something downstream pulls them, so they feed a silent gain.
+    this.listening = stereoGain(this.context, 0);
+    this.listening.connect(this.master);
+    this.live = { effects: createEffects(this.context), gain: stereoGain(this.context) };
+    this.live.effects.output.connect(this.live.gain);
+    this.live.gain.connect(this.master);
+    applyEffects(this.context, this.live.effects, { ...this.liveSettings, volume: this.liveSettings.volume * 100 }, false);
     try {
       this.stems = Object.fromEntries(STEM_NAMES.map(name => [name, this.createStem(paths[name], cleaned[name])])) as Record<StemName, Stem>;
       const durations = this.sources.map(source => source.getDuration());
@@ -219,7 +236,11 @@ export class Mixer {
     const cleaned = cleanedPath && cleanedGain ? this.createSource(cleanedPath, cleanedGain, false) : undefined;
     effects.output.connect(gain);
     gain.connect(this.master);
-    return { source, cleaned, originalGain, cleanedGain, gain, effects };
+    // Explicit stereo like every other node here; a default "max" node can share stale buffers with the stem.
+    const analyser = new AnalyserNode(this.context, { ...EXPLICIT_STEREO, fftSize: ANALYSER_SIZE, smoothingTimeConstant: 0 });
+    effects.input.connect(analyser);
+    analyser.connect(this.listening);
+    return { source, cleaned, originalGain, cleanedGain, gain, effects, analyser };
   }
 
   private system(operation: Promise<void>) {
@@ -467,14 +488,13 @@ export class Mixer {
 
   private replaced: StemName | null = null;
   get hasTake() { return !!this.take; }
-  get takeLevel() { return this.take ? { volume: this.take.volume, muted: this.take.muted } : null; }
 
   // Plays a recorded take with the stems following its tempo; replaces any take already attached.
   attachTake(track: TakeTrack) {
     return this.run(async () => {
       this.detach();
-      const gain = stereoGain(this.context, track.muted ? 0 : track.volume);
-      gain.connect(this.master);
+      const gain = stereoGain(this.context);
+      gain.connect(this.live.effects.input);
       this.take = { ...track, gain, clock: 0, offset: 0 };
       if (this.playing && !this.takeSuspended) await this.startAt(this.position);
       this.changed();
@@ -493,14 +513,6 @@ export class Mixer {
     if (!this.takeSuspended) this.setRate(1);
   }
 
-  setTakeLevel(change: { volume?: number; muted?: boolean }) {
-    const take = this.take;
-    if (!take) return;
-    Object.assign(take, change);
-    ramp(take.gain.gain, take.muted ? 0 : take.volume, this.context.currentTime);
-    this.changed();
-  }
-
   // While recording, the old take is silent and the caller drives the speed with setRate.
   suspendTake(suspended: boolean) {
     return this.run(async () => {
@@ -512,13 +524,33 @@ export class Mixer {
     });
   }
 
-  // Routes live input to the speakers, for players without monitoring on their interface.
-  createInputMonitor(volume: number): { input: RecorderAdapterNode; gain: GainNode } {
+  // The live input plays through the player's channel, so it is mixed like a stem while it comes in.
+  createInputMonitor(): RecorderAdapterNode {
     const input = this.context.createRecorderAdapter();
-    const gain = stereoGain(this.context, volume);
-    input.connect(gain);
-    gain.connect(this.master);
-    return { input, gain };
+    input.connect(this.live.effects.input);
+    return input;
+  }
+
+  // What each stem is playing now, as band levels for the instrument detector; null while stopped.
+  stemLevels(): StemLevels | null {
+    if (!this.playing || this.restarting) return null;
+    const levels: StemLevels = {};
+    for (const name of STEM_NAMES) {
+      const { analyser } = this.stems[name];
+      const spectrum = new Float32Array(analyser.frequencyBinCount);
+      analyser.getFloatFrequencyData(spectrum);
+      levels[name] = bandLevels(spectrum, this.context.sampleRate / ANALYSER_SIZE, true);
+    }
+    return levels;
+  }
+
+  get liveChannel() { return this.liveSettings; }
+
+  setLiveChannel(change: Partial<Channel>) {
+    this.liveSettings = { ...this.liveSettings, ...change, useCleaned: false };
+    applyEffects(this.context, this.live.effects, { ...this.liveSettings, volume: this.liveSettings.volume * 100 }, this.liveSettings.bypassed);
+    this.applyGains();
+    this.changed();
   }
 
   hasCleaned(name: StemName) { return !!this.stems[name].cleaned; }
@@ -554,6 +586,8 @@ export class Mixer {
 
   reset() {
     for (const name of STEM_NAMES) this.setChannel(name, defaultChannel());
+    this.setLiveChannel(defaultChannel());
+    this.releaseReplacedStem();
     this.setVolume(.8); this.sectionStart = 0; this.sectionEnd = this.duration; this.loop = false;
     this.changed();
   }
@@ -580,6 +614,20 @@ export class Mixer {
   // The band stem the player's own part stands in for. Silenced without touching the channel,
   // so scenes and saved settings keep the stem as the user set it.
   get replacedStem() { return this.replaced; }
+  // Resetting the silenced stem gives it back to the band and turns the entry's option off.
+  releaseReplacedStem() {
+    this.setReplacePart(false);
+    this.setReplacedStem(null);
+  }
+
+  // Whether the band part the player stands in for is silenced: part of the scene entry's mix, like the faders.
+  private replacing = false;
+  get replacePart() { return this.replacing; }
+  setReplacePart(value: boolean) {
+    if (this.replacing === value) return;
+    this.replacing = value;
+    this.changed();
+  }
   setReplacedStem(name: StemName | null) {
     if (this.replaced === name) return;
     this.replaced = name;
@@ -589,11 +637,13 @@ export class Mixer {
 
   // Muted, replaced by the player, or silent because another stem is soloed; otherwise the stem's volume.
   private applyGains() {
-    const soloing = STEM_NAMES.some(name => this.channels[name].solo);
+    const soloing = this.liveSettings.solo || STEM_NAMES.some(name => this.channels[name].solo);
     for (const name of STEM_NAMES) {
       const { volume, muted, solo } = this.channels[name];
       ramp(this.stems[name].gain.gain, muted || name === this.replaced || (soloing && !solo) ? 0 : volume, this.context.currentTime);
     }
+    const { volume, muted, solo } = this.liveSettings;
+    ramp(this.live.gain.gain, muted || (soloing && !solo) ? 0 : volume, this.context.currentTime);
   }
 
   private notify() {
@@ -628,6 +678,7 @@ export class Mixer {
       for (const source of this.sources) source.dispose();
       this.closeTakeSource();
       for (const name of STEM_NAMES) clearTimeout(this.stems[name].effects.links.reverbOff);
+      clearTimeout(this.live.effects.links.reverbOff);
       this.listeners.clear(); this.endedListeners.clear();
       await notification(() => PlaybackNotificationManager.hide()).catch(error => console.warn('Could not hide media controls', error));
       await this.context.close();

@@ -204,6 +204,8 @@ export interface SceneSettings {
   sectionEnd: number;
   loop: boolean;
   tracks: Record<string, SceneTrackSettings>;
+  // The app's live-input mix for this entry. The website has no live input and passes it through unchanged.
+  live?: Record<string, number | boolean>;
 }
 export interface SceneEntry {
   id: string;
@@ -270,16 +272,19 @@ export interface LyricWord { start: number; end: number; text: string }
 export interface LyricLine { start: number; end: number; words: LyricWord[] }
 export type DrumName = 'kick' | 'snare' | 'tom' | 'hihat' | 'cymbal';
 export interface DrumHit { unit: number; drum: DrumName }
-export interface BarPattern { unit: number; label: string }
 export interface HarmonyPart {
   chords: { start: number; name: string }[];
   notes: HarmonyNote[];
   hits?: DrumHit[];
-  patterns?: BarPattern[];
+  // Set on the ensemble part: guitar, piano and other heard together, which those three stems share.
+  key?: string;
 }
 export interface HarmonyNote { start: number; end: number; pitch: number; unit: number; length: number }
 export interface HarmonyGrid { beats: number[]; firstBar: number }
 export const HARMONY_STEMS: readonly string[] = ['guitar', 'piano', 'other', 'bass', 'drums'];
+export const ENSEMBLE_STEMS: readonly string[] = ['guitar', 'piano', 'other'];
+// The ensemble is found with the whole song; only bass and drums can be redone on their own.
+export const REGENERATED_STEMS: readonly string[] = ['bass', 'drums'];
 export interface StemUploadRequest {
   job: Job;
   upload: { url: string; fields: Record<string, string> };
@@ -301,11 +306,23 @@ export class LibraryService {
   }
 }
 
+export interface Usage {
+  plan: 'free' | 'premium'; month: string;
+  splits: { used: number; limit: number }; songs: { used: number; limit: number };
+}
+
 @Injectable({ providedIn: 'root' })
 export class StemsService {
   private readonly http = inject(HttpClient);
   private readonly auth = inject(AuthService);
   private readonly config = inject(CONFIG);
+
+  // Splits used this month and songs stored, against the plan's limits; the app shows the same.
+  async usage(): Promise<Usage> {
+    const token = await this.auth.token();
+    return (await firstValueFrom(this.http.get<{ usage: Usage }>(`${this.config.apiBaseUrl}/stems/usage`,
+      { headers: { Authorization: `Bearer ${token}` } }))).usage;
+  }
 
   async remove(jobId: string): Promise<void> {
     const token = await this.auth.token();

@@ -35,16 +35,25 @@ function checkDrums(part) {
       Number.isInteger(pattern.unit) && pattern.unit >= 0 && typeof pattern.label === 'string' && pattern.label)));
 }
 
+const checkChords = (chords, duration) => Array.isArray(chords) &&
+  chords.every(chord => typeof chord.name === 'string' && chord.name && validTime(chord.start, duration));
+const checkNotes = (notes, duration) => Array.isArray(notes) && notes.every(note => Number.isInteger(note.pitch) && note.pitch >= 0 &&
+  note.pitch <= 127 && validTime(note.start, duration) && validTime(note.end, duration) && note.end >= note.start &&
+  Number.isInteger(note.unit) && note.unit >= 0 && Number.isInteger(note.length) && note.length >= 1);
+
+// Guitar, piano and other together: the song's key, one chord progression and one melody line.
+function checkEnsemble(ensemble, duration) {
+  return ensemble === undefined || (typeof ensemble?.key === 'string' && /^[A-G][#b]?m?$/.test(ensemble.key) &&
+    checkChords(ensemble.chords, duration) && checkNotes(ensemble.notes, duration));
+}
+
 export function checkHarmony(value, duration) {
   const parts = value?.stems && Object.values(value.stems);
   const beats = value?.beats;
   if (!Array.isArray(beats) || beats.length < 2 || !beats.every((beat, index) => Number.isFinite(beat) && (!index || beat > beats[index - 1])) ||
       ![0, 1, 2, 3].includes(value.firstBar) ||
-      !parts?.length || !parts.every(part => Array.isArray(part.chords) && Array.isArray(part.notes) && checkDrums(part) &&
-      part.chords.every(chord => typeof chord.name === 'string' && chord.name && validTime(chord.start, duration)) &&
-      part.notes.every(note => Number.isInteger(note.pitch) && note.pitch >= 0 && note.pitch <= 127 &&
-        validTime(note.start, duration) && validTime(note.end, duration) && note.end >= note.start &&
-        Number.isInteger(note.unit) && note.unit >= 0 && Number.isInteger(note.length) && note.length >= 1))) {
+      !parts?.length || !parts.every(part => checkChords(part.chords, duration) && checkNotes(part.notes, duration) && checkDrums(part)) ||
+      !checkEnsemble(value.ensemble, duration)) {
     throw new Error('Invalid harmony.');
   }
   return value;

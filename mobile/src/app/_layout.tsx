@@ -11,6 +11,8 @@ import { ConfirmationProvider, Loading } from '../ui';
 // On iOS 26 the back swipe works from anywhere on the screen, so dragging a mixer
 // slider to the right left the screen. These screens use the back button instead.
 const noSwipeBack = { gestureEnabled: false, fullScreenGestureEnabled: false };
+// No screen has a second title bar under the tabs: tab screens are named by the tabs, and the song and
+// scene pages show their name at the top and go back through the tabs.
 
 function RootNavigator() {
   const { state } = useSession();
@@ -27,12 +29,12 @@ function RootNavigator() {
       contentStyle: { backgroundColor: 'transparent' }, statusBarStyle: theme.dark ? 'light' : 'dark',
       headerBackButtonDisplayMode: 'minimal' }}>
       <Stack.Protected guard={ready}>
-        <Stack.Screen name="index" options={{ title: t('title.music') }} />
-        <Stack.Screen name="scenes/index" options={{ title: t('title.scenes') }} />
-        <Stack.Screen name="scenes/[id]" options={{ title: t('title.scene'), ...noSwipeBack }} />
+        <Stack.Screen name="index" options={{ title: t('title.music'), headerShown: false }} />
+        <Stack.Screen name="scenes/index" options={{ title: t('title.scenes'), headerShown: false }} />
+        <Stack.Screen name="scenes/[id]" options={{ title: t('title.scene'), headerShown: false, ...noSwipeBack }} />
         <Stack.Screen name="upload" options={{ title: t('title.upload'), presentation: 'modal' }} />
-        <Stack.Screen name="song/[id]" options={{ title: '', ...noSwipeBack }} />
-        <Stack.Screen name="settings" options={{ title: t('title.settings') }} />
+        <Stack.Screen name="song/[id]" options={{ title: '', headerShown: false, ...noSwipeBack }} />
+        <Stack.Screen name="settings" options={{ title: t('title.settings'), headerShown: false }} />
       </Stack.Protected>
       <Stack.Protected guard={!ready}>
         <Stack.Screen name="sign-in" options={{ headerShown: false }} />

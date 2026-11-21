@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Finds chords, and clear melody lines with lengths, of stems, written as JSON. Output is approximate."""
+"""Finds the song's chords and melody from its harmonic stems together, and the bass and drum parts, as JSON.
+
+Guitar, piano and other are heard as one ensemble: one chord progression (bass supplies the roots) and one
+melody line, the highest clear voice. Output is approximate."""
 import argparse
 import json
 import os
@@ -16,12 +19,27 @@ HOP = 2048
 SECONDS = HOP / RATE
 BEAT_HOP = 512
 NOTES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B']
-# Triads only: separated stems rarely hold full voicings, so richer chord types were mostly guesses.
+# Triads for the bass part, which hears one stem. The ensemble hears every harmonic stem at once, so it can
+# also name sevenths, suspensions and added notes: the inner lines it does not write as notes.
 SHAPES = {'': (0, 4, 7), 'm': (0, 3, 7)}
+RICH_SHAPES = {'': (0, 4, 7), 'm': (0, 3, 7), '7': (0, 4, 7, 10), 'maj7': (0, 4, 7, 11), 'm7': (0, 3, 7, 10),
+               'sus2': (0, 2, 7), 'sus4': (0, 5, 7), 'add9': (0, 2, 4, 7), 'dim': (0, 3, 6), 'aug': (0, 4, 8)}
+# The triad each chord type belongs to, for the key bonus; None when it fits no key family on its own.
+TRIAD_OF = {'': '', 'm': 'm', '7': '', 'maj7': '', 'm7': 'm', 'add9': '', 'sus2': None, 'sus4': None, 'dim': None, 'aug': None}
+# A richer chord must match this much better than a triad to be named, so plain chords stay plain.
+RICH_PENALTY = 0.05
+# A bass note this dominant in its chroma, other than the root, is written as a slash chord (C/E).
+SLASH_SHARE = 0.35
+# Missing hi-hats: a slot inside a running pattern is filled when the hi-hat band has a hit within this share
+# of the slot's note length, at least HIHAT_LEVEL as strong as the hi-hats played around it.
+HIHAT_FILL_SHARE = 0.12
+HIHAT_LEVEL = 0.5
+HIHAT_BAND = (6000, 16000)
+HIHAT_HOP = 128  # About 3 ms at the drum rate; the drum model only sees 10 ms steps.
+# Lower notes in the ensemble are accompaniment (arpeggios, bass doubling), not the tune.
+MELODY_LOWEST = 55  # G3
 # Quieter than this share of the loudest stem at that moment is treated as bleed from that stem.
-BLEED_SHARE = 0.25
 SHORTEST_CHORD = 0.75
-MELODY_STEMS = ('guitar', 'piano')
 FIRST_MODEL_PITCH = 21
 LOWEST_BASS = 23
 HIGHEST_BASS = 67
@@ -45,14 +63,12 @@ DRUM_THRESHOLDS = (0.22, 0.24, 0.32, 0.22, 0.30)
 DRUM_RATE = 44100
 DRUM_FRAMES = 100  # Output frames per second.
 SHORTEST_HIT_GAP = 3  # Frames.
-SAME_PATTERN = 0.25  # Cosine distance under which two bars count as one pattern; found by measuring a known fill.
-QUIET_BAR = 0.2
 
 
-def chord_templates():
+def chord_templates(shapes=SHAPES):
     names, rows = [], []
     for root, note in enumerate(NOTES):
-        for suffix, shape in SHAPES.items():
+        for suffix, shape in shapes.items():
             row = np.zeros(12)
             row[[(root + step) % 12 for step in shape]] = 1
             names.append(note + suffix)
@@ -60,22 +76,33 @@ def chord_templates():
     return names, np.array(rows)
 
 
-def key_bonus(chroma, amount=0.08):
-    """Favors chords of the song's key, which settles major or minor when a stem barely plays the third."""
+def song_key(chroma):
+    """The key whose Krumhansl-Schmuckler profile best fits the whole song, as (root, minor)."""
     total = chroma.sum(axis=1)
     fits = [(np.corrcoef(total, np.roll(profile, root))[0, 1], root, minor)
             for minor, profile in enumerate((MAJOR_PROFILE, MINOR_PROFILE)) for root in range(12)]
     _, root, minor = max(fits)
+    return root, minor
+
+
+def key_bonus(chroma, amount=0.08, shapes=SHAPES):
+    """Favors chords of the song's key, which settles major or minor when a stem barely plays the third."""
+    root, minor = song_key(chroma)
     family = MINOR_FAMILY if minor else MAJOR_FAMILY
     fitting = {NOTES[(root + step) % 12] + suffix for step, suffix in family}
-    names, _ = chord_templates()
-    return np.array([[amount if name in fitting else 0] for name in names])
+    bonus = []
+    for note in NOTES:
+        for suffix in shapes:
+            triad = TRIAD_OF.get(suffix)
+            bonus.append([amount if triad is not None and note + triad in fitting else 0])
+    return np.array(bonus)
 
 
-def chord_path(chroma, bonus, weight=8, stay=0.985):
+def chord_path(chroma, bonus, weight=8, stay=0.985, shapes=SHAPES):
     """Viterbi: chords persist, so changing must beat a momentary better match."""
-    names, templates = chord_templates()
-    scores = templates @ (chroma / np.maximum(np.linalg.norm(chroma, axis=0, keepdims=True), 1e-6)) + bonus
+    names, templates = chord_templates(shapes)
+    penalty = np.array([[0 if suffix in SHAPES else -RICH_PENALTY] for _ in NOTES for suffix in shapes])
+    scores = templates @ (chroma / np.maximum(np.linalg.norm(chroma, axis=0, keepdims=True), 1e-6)) + bonus + penalty
     count, frames = scores.shape
     log_stay, log_move = np.log(stay), np.log((1 - stay) / (count - 1))
     best = scores[:, 0] * weight
@@ -186,31 +213,99 @@ def beat_times(stems, activity):
     return beats
 
 
-def bar_patterns(activity, beats, shift, bar):
-    """Labels bars that repeat, by comparing one beat-aligned vector per bar; tempo changes do not matter here."""
-    from sklearn.cluster import AgglomerativeClustering
-    count = (len(beats) - 1) * 4
-    times = np.interp((np.arange(count) + shift) / 4, np.arange(len(beats)), beats)
-    frames = np.clip((times * DRUM_FRAMES).astype(int), 0, len(activity) - 1)
-    steps = np.stack([activity[max(frame - 3, 0):frame + 4].max(axis=0) for frame in frames])
-    first = bar * 4
-    total = (len(steps) - first) // 16
-    bars = steps[first:first + total * 16].reshape(total, -1)
-    playing = np.nonzero(bars.max(axis=1) > QUIET_BAR)[0]
-    if len(playing) < 2:
-        return []
-    groups = AgglomerativeClustering(n_clusters=None, distance_threshold=SAME_PATTERN, metric='cosine',
-                                     linkage='average').fit_predict(bars[playing])
-    sizes = np.bincount(groups)
-    repeated = [group for group in np.argsort(-sizes, kind='stable') if sizes[group] > 1][:26]
-    letters = {group: chr(65 + index) for index, group in enumerate(repeated)}
-    return [{'unit': int(first + index * 16), 'label': letters[group]}
-            for index, group in zip(playing, groups) if group in letters]
+def unit_time(unit, shift, beats):
+    """The song time of a sixteenth on the grid that drum_units snapped to."""
+    return float(np.interp((unit + shift) / 4, np.arange(len(beats)), beats))
 
 
-def drum_part(activity, beats, bar):
+def hihat_band(path):
+    """How sharply sound rises in the hi-hat band, about every 3 ms."""
+    from scipy.signal import butter, sosfiltfilt
+    audio, _ = librosa.load(path, sr=DRUM_RATE, mono=True)
+    band = sosfiltfilt(butter(4, HIHAT_BAND, btype='band', fs=DRUM_RATE, output='sos'), audio)
+    flux = librosa.onset.onset_strength(y=band, sr=DRUM_RATE, hop_length=HIHAT_HOP, n_fft=512)
+    return librosa.frames_to_time(np.arange(len(flux)), sr=DRUM_RATE, hop_length=HIHAT_HOP), flux
+
+
+def fill_hihats(hits, shift, beats, band):
+    """Fills hi-hats the model missed inside a steady pattern, where the hi-hat band shows a hit in time."""
+    times, flux = band
+    hats = sorted(hit['unit'] for hit in hits if hit['drum'] == 'hihat')
+    taken = {(hit['unit'], hit['drum']) for hit in hits}
+
+    def peak(time, window):
+        inside = (times >= time - window) & (times <= time + window)
+        return float(flux[inside].max()) if inside.any() else 0.0
+
+    added = []
+    for before, after in zip(hats, hats[1:]):
+        steps = [later - earlier for earlier, later in zip(hats, hats[1:]) if abs(earlier - before) <= 32 and 0 < later - earlier <= 4]
+        if len(steps) < 4:
+            continue
+        step = max(set(steps), key=steps.count)
+        gap = after - before
+        # Only a slot or a few missing inside a running pattern; longer silences are the drummer resting.
+        if gap <= step or gap % step or gap > step * 4:
+            continue
+        near = [unit for unit in hats if abs(unit - before) <= 16]
+        reference = float(np.median([peak(unit_time(unit, shift, beats), 0.01) for unit in near]))
+        for unit in range(before + step, after, step):
+            if (unit, 'cymbal') in taken:
+                continue
+            time = unit_time(unit, shift, beats)
+            window = HIHAT_FILL_SHARE * (unit_time(unit + step, shift, beats) - time)
+            # A snare on the same sixteenth also rings in this band, so it must reach a full hi-hat's level.
+            needed = reference * (1.0 if (unit, 'snare') in taken else HIHAT_LEVEL)
+            if reference > 0 and peak(time, window) >= needed:
+                added.append({'unit': unit, 'drum': 'hihat'})
+    return sorted(hits + added, key=lambda hit: (hit['unit'], hit['drum']))
+
+
+def drum_part(activity, beats, path):
     hits, shift = drum_units(drum_times(activity), beats)
-    return {'chords': [], 'notes': [], 'hits': hits, 'patterns': bar_patterns(activity, beats, shift, bar)}
+    return {'chords': [], 'notes': [], 'hits': fill_hihats(hits, shift, beats, hihat_band(path))}
+
+
+def slash_chords(chords, bass_chroma, bass_level, frames):
+    """Writes the bass note under a chord (C/E) where the bass clearly plays a note other than the root."""
+    audible = bass_level[:frames] > np.percentile(bass_level[:frames], 95) * 0.03
+    named = []
+    for index, chord in enumerate(chords):
+        first = int(chord['start'] / SECONDS)
+        last = int(chords[index + 1]['start'] / SECONDS) if index + 1 < len(chords) else frames
+        name = chord['name']
+        span = slice(first, max(first + 1, min(last, frames)))
+        if audible[span].mean() > 0.5:
+            mean = bass_chroma[:, span].mean(axis=1)
+            low = int(mean.argmax())
+            root = NOTES.index(name[:2] if name[1:2] in ('#', 'b') else name[:1])
+            if low != root and mean[low] / max(mean.sum(), 1e-9) >= SLASH_SHARE:
+                name = f'{name}/{NOTES[low]}'
+        named.append({'start': chord['start'], 'name': name})
+    return named
+
+
+def ensemble_part(stems, names, chromas, levels, frames, loudest, floor, beats):
+    """Guitar, piano and other heard together: one key, one chord progression, one melody line."""
+    import soundfile
+    import tempfile
+    harmony = sum(normalized(chromas[name][:, :frames]) for name in names)
+    together = sum(chromas[name][:, :frames] for name in names)
+    chroma = harmony + (0.6 * normalized(chromas['bass'][:, :frames]) if 'bass' in chromas else 0)
+    audible = (loudest > floor)
+    chords = chord_changes(chord_path(chroma, key_bonus(together, shapes=RICH_SHAPES), shapes=RICH_SHAPES), audible)
+    if 'bass' in chromas:
+        chords = slash_chords(chords, chromas['bass'], levels['bass'], frames)
+    mix = None
+    for name in names:
+        audio, rate = librosa.load(stems[name], sr=22050, mono=True)
+        mix = audio if mix is None else mix[:len(audio)] + audio[:len(mix)]
+    with tempfile.NamedTemporaryFile(suffix='.wav') as file:
+        soundfile.write(file.name, mix / max(float(np.abs(mix).max()), 1e-6) * 0.95, rate)
+        events = [event for event in note_events(file.name)
+                  if event[2] >= MELODY_LOWEST and audible[min(int(event[0] / SECONDS), frames - 1)]]
+    root, minor = song_key(together)
+    return {'key': f"{NOTES[root]}{'m' if minor else ''}", 'chords': chords, 'notes': note_values(clear_line(events), beats)}
 
 
 def normalized(chroma):
@@ -220,7 +315,7 @@ def normalized(chroma):
 def analyze(stems, only=None, grid=None):
     """Every part, or with only and the song's grid, just that part; other stems are context for its chords."""
     if only == 'drums':
-        part = drum_part(drum_activity(stems['drums']), grid['beats'], grid['firstBar'])
+        part = drum_part(drum_activity(stems['drums']), grid['beats'], stems['drums'])
         return {'beats': grid['beats'], 'firstBar': grid['firstBar'], 'stems': {'drums': part}}
     chromas, levels = {}, {}
     harmonic_stems = [name for name in stems if name not in ('bass', 'drums')]
@@ -237,16 +332,7 @@ def analyze(stems, only=None, grid=None):
     together = sum(chromas[name][:, :frames] for name in harmonic_stems)
     bonus = key_bonus(together)
     result = {}
-    for name in harmonic_stems:
-        if only and name != only:
-            continue
-        audible = (levels[name][:frames] > loudest * BLEED_SHARE) & (levels[name][:frames] > floor)
-        notes = []
-        if name in MELODY_STEMS:
-            events = [event for event in note_events(stems[name])
-                      if audible[min(int(event[0] / SECONDS), frames - 1)]]
-            notes = note_values(clear_line(events), beats)
-        result[name] = {'chords': chord_changes(chord_path(chromas[name][:, :frames], bonus), audible), 'notes': notes}
+    ensemble = ensemble_part(stems, harmonic_stems, chromas, levels, frames, loudest, floor, beats) if only is None else None
     if 'bass' in stems and only in (None, 'bass'):
         # A bass mostly plays roots, so the other stems supply major or minor; it follows only the bass's sound.
         bass_chroma = normalized(chromas['bass'][:, :frames]) + normalized(together)
@@ -256,8 +342,11 @@ def analyze(stems, only=None, grid=None):
         bar = grid['firstBar']
     else:
         bar = first_bar(result['bass']['notes'], drum_units(drum_times(activity), beats)[0])
-        result['drums'] = drum_part(activity, beats, bar)
-    return {'beats': [round(beat, 3) for beat in beats], 'firstBar': bar, 'stems': result}
+        result['drums'] = drum_part(activity, beats, stems['drums'])
+    found = {'beats': [round(beat, 3) for beat in beats], 'firstBar': bar, 'stems': result}
+    if ensemble:
+        found['ensemble'] = ensemble
+    return found
 
 
 if __name__ == '__main__':

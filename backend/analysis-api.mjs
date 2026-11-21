@@ -11,7 +11,7 @@ import { STEM_WINDOW_MS } from './stem-shared.mjs';
 export const ANALYSES = {
   lyrics: { label: 'Lyrics', folder: 'lyrics', notReady: 'Find lyrics after the stems are ready.', noStart: 'Unable to start lyrics recognition. Please try again.' },
   // Bump version when the result format changes: older results are ignored, so they get redone.
-  harmony: { version: 3, label: 'Chords', folder: 'harmony', notReady: 'Find chords after the stems are ready.', noStart: 'Unable to start chord analysis. Please try again.' },
+  harmony: { version: 4, label: 'Chords', folder: 'harmony', notReady: 'Find chords after the stems are ready.', noStart: 'Unable to start chord analysis. Please try again.' },
 };
 
 const RUNNING = ['queued', 'processing'];
@@ -29,8 +29,9 @@ function checkEditedLyrics(lines, duration) {
   }
 }
 
-const REGENERATED_STEMS = ['guitar', 'piano', 'other', 'bass', 'drums'];
-const NOT_REGENERABLE = 'Choose guitar, piano, other, bass or drums to regenerate.';
+// Guitar, piano and other share the ensemble part, so only bass and drums are redone on their own.
+const REGENERATED_STEMS = ['bass', 'drums'];
+const NOT_REGENERABLE = 'Choose bass or drums to regenerate.';
 
 async function visibleRecords(type, parent, database) {
   const now = Date.now();

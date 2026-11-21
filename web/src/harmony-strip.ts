@@ -231,19 +231,20 @@ function drumRests(hits: DrumHit[], firstBar: number): ScoreRest[] {
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="harmony-strip" [class.chords-only]="!written()" #strip role="img" [attr.aria-label]="label()">
+    <div class="harmony-strip" [class.chords-only]="!written()" [style.height.px]="frame().height" #strip role="img" [attr.aria-label]="label()">
       @if (written()) {
         <svg class="staff-lines" aria-hidden="true">
-          @for (y of staffLines; track y) { <line x1="0" x2="100%" [attr.y1]="y" [attr.y2]="y"></line> }
+          @for (y of staffLines; track y) { <line x1="0" x2="100%" [attr.y1]="y - frame().top" [attr.y2]="y - frame().top"></line> }
         </svg>
       }
       <div class="harmony-window">
-        <svg class="harmony-flow" #flow aria-hidden="true" [attr.width]="width()" height="128">
+        <svg class="harmony-flow" #flow aria-hidden="true" [attr.width]="width()" [attr.height]="frame().height">
+          <g [attr.transform]="'translate(0 ' + -frame().top + ')'">
           @for (x of barLines(); track x) {
             <line class="score-bar" [attr.x1]="x" [attr.x2]="x" [attr.y1]="staffLines[4]" [attr.y2]="staffLines[0]"></line>
           }
           @for (chord of chords(); track $index) {
-            <text class="score-chord" text-anchor="middle" y="18" [attr.x]="chord.x">{{ chord.name }}</text>
+            <text class="score-chord" text-anchor="middle" [attr.y]="frame().chordY" [attr.x]="chord.x">{{ chord.name }}</text>
           }
           @for (rest of rests(); track $index) {
             <g class="score-rest">
@@ -302,12 +303,14 @@ function drumRests(hits: DrumHit[], firstBar: number): ScoreRest[] {
               }
             </g>
           }
+          </g>
         </svg>
       </div>
       @if (isDrums()) {
-        <span class="drum-clef" aria-hidden="true"></span>
+        <span class="drum-clef" [style.top.px]="staffLines[4] - frame().top + 8" aria-hidden="true"></span>
       } @else if (written()) {
-        <span class="staff-clef" [class]="'staff-clef ' + clef()" aria-hidden="true">{{ clef() === 'bass' ? '𝄢' : '𝄞' }}</span>
+        <span class="staff-clef" [class]="'staff-clef ' + clef()" [style.top.px]="staffLines[4] - frame().top - (clef() === 'bass' ? 16 : 10)"
+          aria-hidden="true">{{ clef() === 'bass' ? '𝄢' : '𝄞' }}</span>
       }
       <span class="staff-now" aria-hidden="true"></span>
     </div>
@@ -320,16 +323,33 @@ export class HarmonyStrip {
   readonly time = input.required<number>();
   readonly middleLineY = MIDDLE_LINE_Y;
   readonly staffLines = [0, 1, 2, 3, 4].map(line => BOTTOM_LINE_Y - line * LINE_GAP);
+  // The strip shows only rows the song uses: from just above its chord names to just below its lowest mark,
+  // as in the app (mobile/src/score-view.tsx).
+  readonly frame = computed(() => {
+    if (!this.written()) return { top: 0, height: 30, chordY: 18 };
+    let low = this.staffLines[4], high = this.staffLines[0];
+    const reach = (...ys: number[]) => { for (const y of ys) { low = Math.min(low, y); high = Math.max(high, y); } };
+    for (const piece of this.notes().flat()) {
+      reach(piece.y - 5, piece.y + 5, ...piece.ledgers);
+      if (piece.stem) reach(piece.stem.end);
+      if (piece.tie) reach(piece.y - 15, piece.y + 15);
+    }
+    for (const stroke of this.drums().strokes) {
+      reach(...stroke.heads.flatMap(head => [head.y - 5, head.y + 5]), ...stroke.stems.flatMap(stem => [stem.from, stem.to]));
+      if (stroke.ledger) reach(CYMBAL_LEDGER);
+    }
+    for (const beam of this.drums().beams) reach(beam.y, beam.y + BEAM_HEIGHT);
+    const chordY = low - 6, top = (this.chords().length ? chordY - 15 : low) - 6;
+    return { top, height: high + 6 - top, chordY };
+  });
   readonly isDrums = computed(() => this.stem() === 'drums');
   readonly written = computed(() => this.part().notes.length > 0 || !!this.part().hits?.length);
   readonly clef = computed(() => CLEFS[this.stem()]?.clef);
   readonly notes = computed(() => this.part().notes.map(note => notePieces(this.stem(), note, this.grid().firstBar)));
   readonly drums = computed<DrumScore>(() => drumScore(this.part().hits ?? [], this.grid().firstBar));
   readonly rests = computed(() => this.isDrums() ? this.drums().rests : scoreRests(this.part().notes, this.grid().firstBar));
-  // A drum score's bars carry the letter of their repeating pattern where others carry chords.
-  readonly chords = computed(() => this.isDrums() ? (this.part().patterns ?? []).map(pattern => ({
-    name: pattern.label, unit: pattern.unit, x: pattern.unit * UNIT_WIDTH + UNIT_WIDTH / 2,
-  })) : this.part().chords.map(chord => ({
+  // Drums have no chords; the score is written from the hits alone.
+  readonly chords = computed(() => this.isDrums() ? [] : this.part().chords.map(chord => ({
     name: chord.name,
     // Chords land on the nearest eighth note, so they line up with the notes below.
     unit: Math.round(positionAt(this.grid().beats, chord.start) / 2) * 2,

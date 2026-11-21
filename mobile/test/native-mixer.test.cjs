@@ -46,6 +46,7 @@ function fixture() {
     createStereoPanner() { return this.make(); }
     createWaveShaper() { return this.make(); }
     createConvolver() { const node = this.make(); node.isConvolver = true; return node; }
+    createRecorderAdapter() { return this.make(); }
     createBuffer(channels, length) {
       const data = Array.from({ length: channels }, () => new Float32Array(length));
       return { getChannelData: channel => data[channel] };
@@ -86,6 +87,10 @@ function fixture() {
     AudioContext: Context, MediaElementAudioSourceNode: Node,
     GainNode: constructed(), BiquadFilterNode: constructed(), StereoPannerNode: constructed(), WaveShaperNode: constructed(),
     ConvolverNode: constructed(node => { node.isConvolver = true; }),
+    AnalyserNode: constructed(node => {
+      node.frequencyBinCount = 1024; node.analysed = 0;
+      node.getFloatFrequencyData = data => { node.analysed++; data.fill(-40); };
+    }),
     AudioManager: { setAudioSessionOptions() {}, observeAudioInterruptions() {},
       addSystemEventListener: () => ({ remove() {} }) },
     PlaybackNotificationManager: {
@@ -331,8 +336,9 @@ test('a take plays from the matching point and the stems follow its tempo log', 
   assert.ok(take.disposed);
   assert.ok(Math.abs(early.currentTime - 0.53) < 1e-9, `${early.currentTime}`);
   assert.equal(mixer.rate, 1);
-  mixer.setTakeLevel({ muted: true });
-  assert.deepEqual(mixer.takeLevel, { volume: 0.8, muted: true });
+  // The take plays through the live channel, which mutes it like a stem.
+  mixer.setLiveChannel({ muted: true });
+  assert.equal(mixer.liveChannel.muted, true);
   await mixer.removeTake();
   assert.ok(!mixer.hasTake);
   assert.ok(early.disposed);
@@ -512,4 +518,47 @@ test('discarding failed edits prevents unmount cleanup from saving them again', 
   store.discard();
   assert.equal(await store.flush(), true);
   assert.equal(writes, 1); assert.equal(store.dirty, false);
+});
+
+test('the live input is a channel: solo on it silences the stems, and the input plays through its effects', async () => {
+  const f = fixture(), mixer = await f.load('player').Mixer.create(f.paths, 'Live');
+  const context = f.contexts.at(-1);
+  const input = mixer.createInputMonitor();
+  assert.equal(input.connections.length, 1, 'The input feeds one node: the live channel');
+  mixer.setLiveChannel({ solo: true });
+  assert.equal(mixer.liveChannel.solo, true);
+  assert.equal(mixer.stemLevels(), null, 'Nothing to compare while stopped');
+  await mixer.play();
+  const levels = mixer.stemLevels();
+  assert.deepEqual(Object.keys(levels).sort(), Object.keys(f.paths).sort());
+  assert.ok(context.nodes.filter(node => node.analysed).length >= Object.keys(f.paths).length, 'Every stem is analysed');
+  mixer.setLiveChannel({ solo: false, muted: true });
+  assert.equal(mixer.liveChannel.muted, true);
+  await mixer.close();
+});
+
+test('resetting gives a silenced band part back and turns the entry\'s option off', async () => {
+  const f = fixture(), mixer = await f.load('player').Mixer.create(f.paths, 'Release');
+  mixer.setReplacePart(true); mixer.setReplacedStem('vocals');
+  mixer.releaseReplacedStem();
+  assert.equal(mixer.replacedStem, null);
+  assert.equal(mixer.replacePart, false);
+  mixer.setReplacePart(true); mixer.setReplacedStem('vocals');
+  mixer.reset();
+  assert.equal(mixer.replacedStem, null, 'The whole-song reset releases it too');
+  assert.equal(mixer.replacePart, false);
+  await mixer.close();
+});
+
+test('the live mix and the band-part option are saved with the scene entry, not the song', async () => {
+  const f = fixture(), { snapshot, restore } = f.load('mixer-settings');
+  const mixer = await f.load('player').Mixer.create(f.paths, 'Scene');
+  mixer.setLiveChannel({ volume: 0.5, muted: true, reverb: 30 }); mixer.setReplacePart(true);
+  const saved = snapshot(mixer);
+  assert.equal(saved.live.volume, 50); assert.equal(saved.live.muted, true); assert.equal(saved.live.replace, true);
+  assert.ok(!('useCleaned' in saved.live), 'The server rejects useCleaned on the live channel');
+  const other = await f.load('player').Mixer.create(f.paths, 'Restored');
+  restore(other, saved);
+  assert.equal(other.liveChannel.volume, 0.5); assert.equal(other.liveChannel.reverb, 30); assert.equal(other.replacePart, true);
+  await other.close();
 });

@@ -1,4 +1,4 @@
-import { Stack, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { Text } from 'react-native';
 import { StemScrollView } from '../../stem-scroll';
@@ -11,9 +11,9 @@ export default function SongMixer() {
   const [song, setSong] = useState<Song | null>(null);
   const { ink } = useTheme();
   const name = song ? `${song.title || 'Untitled song'}${song.author ? ` by ${song.author}` : ''}` : '';
-  return <StemScrollView contentContainerStyle={{ padding: 16, gap: 16 }}>
-    <Stack.Screen options={{ headerTitle: () => <Text numberOfLines={1} accessibilityRole="header"
-      style={{ color: ink, fontSize: 17, fontWeight: '600', maxWidth: 280 }}>{name}</Text> }} />
+  return <StemScrollView contentContainerStyle={{ paddingVertical: 16, paddingHorizontal: 2, gap: 16 }}>
+    {/* The song's name heads the page; the Music tab above leads back to the list. */}
+    {!!name && <Text numberOfLines={2} accessibilityRole="header" style={{ color: ink, fontSize: 20, fontWeight: '700', paddingHorizontal: 4 }}>{name}</Text>}
     <MixerView key={id} jobId={id} onSong={setSong} />
   </StemScrollView>;
 }

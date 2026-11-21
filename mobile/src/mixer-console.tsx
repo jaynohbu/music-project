@@ -51,15 +51,17 @@ export function Timeline({ label, duration, start, end, position, peaks, disable
   const minimum = Math.min(.05, duration);
   const toTime = (x: number) => width > 0 ? clamp(x / width, 0, 1) * duration : 0;
   const toX = (time: number) => duration > 0 ? clamp(time / duration, 0, 1) * width : 0;
+  // A drag distance keeps its sign; toTime clamps to the rail, which turned every leftward drag into 0.
+  const toSeconds = (dx: number) => width > 0 ? dx / width * duration : 0;
   const shown = scrub ?? position;
 
   const startDrag = useDrag({
     grant: () => { origin.current.value = start; },
-    move: (_, g) => { if (!disabled) onSection(clamp(origin.current.value + toTime(g.dx), 0, end - minimum), end); },
+    move: (_, g) => { if (!disabled) onSection(clamp(origin.current.value + toSeconds(g.dx), 0, end - minimum), end); },
   });
   const endDrag = useDrag({
     grant: () => { origin.current.value = end; },
-    move: (_, g) => { if (!disabled) onSection(start, clamp(origin.current.value + toTime(g.dx), start + minimum, duration)); },
+    move: (_, g) => { if (!disabled) onSection(start, clamp(origin.current.value + toSeconds(g.dx), start + minimum, duration)); },
   });
   const scrubTo = (x: number) => clamp(toTime(x), start, end);
   const waveDrag = useDrag({
@@ -141,7 +143,8 @@ export function Timeline({ label, duration, start, end, position, peaks, disable
   </View>;
 }
 
-const WELL = 150, THUMB_HEIGHT = 24;
+// 60% of the first design's 150pt well, so the faders take less of the screen; the knob keeps its size.
+const WELL = 90, THUMB_HEIGHT = 24;
 export function ChannelStrip({ label, display, value, min, max, step, disabled, note, onChange }: {
   label: string; display: string; value: number; min: number; max: number; step: number;
   disabled?: boolean; note: string; onChange: (value: number) => void;
@@ -157,7 +160,8 @@ export function ChannelStrip({ label, display, value, min, max, step, disabled, 
     grant: () => { origin.current = knobCentre; },
     move: (_, g) => { if (!disabled) onChange(fromY(origin.current + g.dy)); },
   });
-  const scale = [1, .75, .5, .25, 0];
+  // Three marks fit the shorter well without the labels touching.
+  const scale = [1, .5, 0];
   const format = (number: number) => Number.isInteger(number) ? String(number) : number.toFixed(1);
   return <View style={[styles.strip, disabled && { opacity: .5 }]}>
     <Text style={styles.stripName} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={.7}>{label.toUpperCase()}</Text>
@@ -207,15 +211,16 @@ export function MasterFader({ value, onChange, label }: { value: number; onChang
   </View>;
 }
 
-export function LampSwitch({ label, on, onPress, disabled, accessibilityLabel }: {
-  label: string; on: boolean; onPress: () => void; disabled?: boolean; accessibilityLabel?: string;
+// `small` is for the console's per-stem switches, which sit under the faders and should not compete with them.
+export function LampSwitch({ label, on, onPress, disabled, accessibilityLabel, small }: {
+  label: string; on: boolean; onPress: () => void; disabled?: boolean; accessibilityLabel?: string; small?: boolean;
 }) {
   const styles = useStyles(makeStyles);
   return <Pressable onPress={onPress} disabled={disabled} accessibilityRole="switch"
-    accessibilityLabel={accessibilityLabel ?? label} accessibilityState={{ checked: on, disabled }}
-    style={({ pressed }) => [styles.switch, pressed && { opacity: .75 }, disabled && { opacity: .45 }]}>
-    <View style={[styles.lamp, on && styles.lampOn]} />
-    <Text style={styles.switchText}>{label.toUpperCase()}</Text>
+    accessibilityLabel={accessibilityLabel ?? label} accessibilityState={{ checked: on, disabled }} hitSlop={small ? 6 : 0}
+    style={({ pressed }) => [styles.switch, small && styles.switchSmall, pressed && { opacity: .75 }, disabled && { opacity: .45 }]}>
+    <View style={[styles.lamp, small && styles.lampSmall, on && styles.lampOn]} />
+    <Text style={[styles.switchText, small && styles.switchTextSmall]}>{label.toUpperCase()}</Text>
   </Pressable>;
 }
 
@@ -318,16 +323,20 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   thumb: { position: 'absolute', width: 36, height: THUMB_HEIGHT, borderRadius: 3, borderWidth: 1, borderColor: '#718198', backgroundImage: THUMB,
     shadowColor: '#000', shadowOpacity: .35, shadowRadius: 2, shadowOffset: { width: 0, height: 2 } },
   note: { fontSize: 9, color: t.consoleMuted, marginTop: 6 },
-  master: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 8 },
-  masterWell: { flex: 1, height: 44, justifyContent: 'center' },
+  // A slim bar, so the master control takes little height above the channel strips.
+  master: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 4 },
+  masterWell: { flex: 1, height: 28, justifyContent: 'center' },
   masterTrack: { position: 'absolute', left: 12, right: 12, height: 4, backgroundColor: '#35445a', borderRadius: 2, borderWidth: 1, borderColor: '#1d2836' },
-  masterThumb: { position: 'absolute', width: 24, height: 36, borderRadius: 3, borderWidth: 1, borderColor: '#718198', backgroundImage: THUMB_SIDE,
+  masterThumb: { position: 'absolute', width: 24, height: 20, borderRadius: 3, borderWidth: 1, borderColor: '#718198', backgroundImage: THUMB_SIDE,
     shadowColor: '#000', shadowOpacity: .35, shadowRadius: 2, shadowOffset: { width: 0, height: 2 } },
   switch: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, minHeight: 44, paddingHorizontal: 10, borderRadius: 5, borderWidth: 1, borderColor: t.keyBorder,
     backgroundImage: t.key },
   lamp: { width: 28, height: 18, borderRadius: 3, borderWidth: 2, borderColor: '#697b92', backgroundColor: '#8e9aab' },
   lampOn: { backgroundColor: '#a3c5ff', borderColor: '#3459c9', shadowColor: '#5d8dff', shadowOpacity: .9, shadowRadius: 5, shadowOffset: { width: 0, height: 0 } },
   switchText: { fontSize: 11, fontWeight: '800', letterSpacing: .5, color: t.keyInk },
+  switchSmall: { minHeight: 28, paddingHorizontal: 8, gap: 5 },
+  lampSmall: { width: 16, height: 10, borderWidth: 1.5, borderRadius: 2 },
+  switchTextSmall: { fontSize: 10 },
 });
 
 // A text box with save and close keys; nothing changes until save is pressed.

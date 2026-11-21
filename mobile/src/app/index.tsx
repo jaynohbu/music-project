@@ -1,11 +1,12 @@
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
-import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { type Song, type Usage, deleteSong, getUsage, listSongs } from '../api';
+import { type Song, type Usage, deleteSong, getUsage, listSongs, updateSongDetails } from '../api';
 import { forgetSong } from '../cache';
 import { useLanguage } from '../language';
 import { deleteTake } from '../live-take';
+import { IconButton } from '../mixer-console';
 import { Button, ButtonRow, Centered, Loading, errorText, formatTime, useConfirm } from '../ui';
 import { type Theme, useStyles, useTheme } from '../theme';
 
@@ -22,6 +23,8 @@ export default function Songs() {
   const pages = useRef(1);
   const confirm = useConfirm();
   const [deleting, setDeleting] = useState(false);
+  // The song whose title and artist are being edited, one at a time.
+  const [editing, setEditing] = useState<string | null>(null);
 
   // Reloads every page shown so far, as the website's list does.
   const load = useCallback(async () => {
@@ -104,7 +107,12 @@ export default function Songs() {
             accessibilityRole="button" accessibilityLabel={t('songs.openFor', { title: song.title || t('common.untitledSong') })}
           >
             <View style={styles.rowText}>
-              <Text style={styles.title} numberOfLines={1}>{song.title || t('common.untitledSong')}</Text>
+              <View style={styles.titleRow}>
+                <Text style={[styles.title, styles.grow]} numberOfLines={1}>{song.title || t('common.untitledSong')}</Text>
+                {(song.status === 'completed' || song.status === 'failed') && <IconButton bare icon="edit" on={editing === song.jobId}
+                  accessibilityLabel={t('songs.editFor', { title: song.title || t('common.untitledSong') })}
+                  onPress={() => setEditing(editing === song.jobId ? null : song.jobId)} />}
+              </View>
               <Text style={styles.detail} numberOfLines={2}>
                 {[
                   song.status !== 'completed' && t(`songs.status.${song.status}`),
@@ -116,6 +124,8 @@ export default function Songs() {
               {song.status === 'failed' && !!song.error && <Text style={styles.error}>{song.error}</Text>}
             </View>
           </Pressable>
+          {editing === song.jobId && <SongDetails song={song} onClose={() => setEditing(null)}
+            onSaved={details => setSongs(current => current?.map(item => item.jobId === song.jobId ? { ...item, ...details } : item) ?? null)} />}
           <ButtonRow>
             {song.status === 'completed' && <Button label={t('songs.open')} onPress={() => router.push({ pathname: '/song/[id]', params: { id: song.jobId } })} />}
             {(song.status === 'completed' || song.status === 'failed') && <Button kind="danger" label={t('songs.delete')} disabled={deleting} onPress={() => void remove(song)} />}
@@ -135,8 +145,46 @@ export default function Songs() {
   );
 }
 
+// Title and artist of one song, edited in place in the list.
+function SongDetails({ song, onSaved, onClose }: {
+  song: Song; onSaved: (details: { title: string; author: string }) => void; onClose: () => void;
+}) {
+  const styles = useStyles(makeStyles), theme = useTheme(), { t } = useLanguage();
+  const [title, setTitle] = useState(song.title ?? '');
+  const [author, setAuthor] = useState(song.author ?? '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const save = async () => {
+    if (!title.trim()) { setError(t('songs.titleRequired')); return; }
+    setSaving(true); setError('');
+    try {
+      onSaved(await updateSongDetails(song.jobId, { title: title.trim(), author: author.trim() }));
+      onClose();
+    } catch (failure) { setError(errorText(failure)); }
+    finally { setSaving(false); }
+  };
+  return <View style={styles.editor}>
+    <Text style={styles.label}>{t('songs.titleLabel')}</Text>
+    <TextInput value={title} onChangeText={setTitle} maxLength={200} autoFocus editable={!saving} returnKeyType="next"
+      accessibilityLabel={t('songs.titleLabel')} style={styles.input} placeholderTextColor={theme.muted} placeholder={t('common.untitledSong')} />
+    <Text style={styles.label}>{t('songs.artistLabel')}</Text>
+    <TextInput value={author} onChangeText={setAuthor} maxLength={200} editable={!saving} returnKeyType="done" onSubmitEditing={() => void save()}
+      accessibilityLabel={t('songs.artistLabel')} style={styles.input} placeholderTextColor={theme.muted} placeholder={t('songs.artistPlaceholder')} />
+    {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
+    <ButtonRow>
+      <Button label={saving ? t('common.pleaseWait') : t('songs.saveDetails')} disabled={saving} onPress={() => void save()} />
+      <Button kind="plain" label={t('common.cancel')} disabled={saving} onPress={onClose} />
+    </ButtonRow>
+  </View>;
+}
+
 const makeStyles = (t: Theme) => StyleSheet.create({
   page: { flex: 1 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  grow: { flex: 1, minWidth: 0 },
+  editor: { gap: 6 },
+  label: { fontSize: 13, fontWeight: '600', color: t.ink },
+  input: { backgroundColor: t.input, borderWidth: 1, borderColor: t.line, borderRadius: 8, paddingHorizontal: 12, height: 44, color: t.ink, fontSize: 16 },
   headerLink: { color: t.accent, fontSize: 16 },
   row: {
     padding: 18, backgroundColor: t.surface, borderRadius: 14,

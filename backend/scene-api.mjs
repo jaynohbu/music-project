@@ -28,6 +28,8 @@ export const TRACK_RANGES = {
 };
 export const TRACK_FLAGS = ['muted', 'solo', 'bypassed', 'useCleaned'];
 const SETTINGS_KEYS = ['masterVolume', 'sectionStart', 'sectionEnd', 'loop', 'tracks'];
+// The app's live input is mixed like a stem; its mix belongs to the scene entry, as the stems' does.
+const LIVE_KEY = 'live';
 
 export class SceneInputError extends Error {
   constructor(message, statusCode = 400) { super(message); this.name = 'SceneInputError'; this.statusCode = statusCode; }
@@ -58,9 +60,22 @@ export function sceneName(value) {
   return value.trim();
 }
 
+function track(value, at, flags = TRACK_FLAGS) {
+  if (!isObject(value)) fail(`${at} must be an object.`);
+  exactKeys(value, [...Object.keys(TRACK_RANGES), ...flags], at);
+  const result = {};
+  for (const [key, [min, max]] of Object.entries(TRACK_RANGES)) result[key] = number(value[key], `${at}.${key}`, min, max);
+  for (const key of flags) {
+    if (typeof value[key] !== 'boolean') fail(`${at}.${key} must be true or false.`);
+    result[key] = value[key];
+  }
+  return result;
+}
+
 export function sceneSettings(value, duration, path = 'settings') {
   if (!isObject(value)) fail(`${path} must be an object.`);
-  exactKeys(value, SETTINGS_KEYS, path);
+  const { [LIVE_KEY]: live, ...rest } = value;
+  exactKeys(rest, SETTINGS_KEYS, path);
   const limit = Number.isFinite(duration) && duration > 0 ? duration : STEM_MAX_DURATION;
   number(value.masterVolume, `${path}.masterVolume`, 0, 100);
   number(value.sectionStart, `${path}.sectionStart`, 0, limit);
@@ -70,18 +85,11 @@ export function sceneSettings(value, duration, path = 'settings') {
   if (!isObject(value.tracks)) fail(`${path}.tracks must be an object.`);
   exactKeys(value.tracks, STEM_NAMES, `${path}.tracks`);
   const tracks = {};
-  for (const stem of STEM_NAMES) {
-    const track = value.tracks[stem], at = `${path}.tracks.${stem}`;
-    if (!isObject(track)) fail(`${at} must be an object.`);
-    exactKeys(track, [...Object.keys(TRACK_RANGES), ...TRACK_FLAGS], at);
-    tracks[stem] = {};
-    for (const [key, [min, max]] of Object.entries(TRACK_RANGES)) tracks[stem][key] = number(track[key], `${at}.${key}`, min, max);
-    for (const key of TRACK_FLAGS) {
-      if (typeof track[key] !== 'boolean') fail(`${at}.${key} must be true or false.`);
-      tracks[stem][key] = track[key];
-    }
-  }
-  return { masterVolume: value.masterVolume, sectionStart: value.sectionStart, sectionEnd: value.sectionEnd, loop: value.loop, tracks };
+  for (const stem of STEM_NAMES) tracks[stem] = track(value.tracks[stem], `${path}.tracks.${stem}`);
+  const result = { masterVolume: value.masterVolume, sectionStart: value.sectionStart, sectionEnd: value.sectionEnd, loop: value.loop, tracks };
+  // Optional: scenes saved before the live input, and by the website, have none.
+  if (live !== undefined) result[LIVE_KEY] = track(live, `${path}.${LIVE_KEY}`, [...TRACK_FLAGS.filter(key => key !== 'useCleaned'), 'replace']);
+  return result;
 }
 
 // Shape-only validation; song ownership and duration checks happen against the table.

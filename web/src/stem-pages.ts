@@ -2,7 +2,7 @@ import { Component, ElementRef, EventEmitter, Injector, Input, OnChanges, OnDest
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
-import { HARMONY_STEMS, HarmonyGrid, HarmonyPart, Job, LyricLine, SceneEntry, SceneSettings, STEM_NAMES, StemName, StemsService, errorMessage } from './services';
+import { ENSEMBLE_STEMS, HARMONY_STEMS, HarmonyGrid, REGENERATED_STEMS, HarmonyPart, Job, LyricLine, SceneEntry, SceneSettings, STEM_NAMES, StemName, StemsService, errorMessage } from './services';
 import { ConfirmationService } from './confirmation';
 import { captureSceneSettings, restoredSceneInterval } from './scene-settings';
 import { HarmonyStrip } from './harmony-strip';
@@ -36,6 +36,17 @@ const STEM_DOWNLOAD_POOL = 4;
           [(ngModel)]="title" [disabled]="busy()">
         <p class="hint">Maximum 55 MB (55,000,000 bytes) and 15 minutes. Your browser checks duration before upload;
           the service also validates the actual media.</p>
+        @if (!file()) {
+          <section class="stores" aria-labelledby="stores-title">
+            <h2 id="stores-title">Need a song file?</h2>
+            <p class="hint">Buy a download from one of these stores, then choose it above. Songs from streaming subscriptions cannot be used.</p>
+            <ul>
+              @for (store of stores; track store.name) {
+                <li><a [href]="store.url" target="_blank" rel="noopener">{{ store.name }}</a> <span class="hint">{{ store.note }}</span></li>
+              }
+            </ul>
+          </section>
+        }
         @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
         @if (notice()) { <p class="success" role="status">{{ notice() }}</p> }
         @if (retryJobId()) {
@@ -68,6 +79,13 @@ export class SplitPage implements OnDestroy {
   private controller?: AbortController;
   private destroyed = false;
   readonly file = signal<File | null>(null);
+  // Stores that sell songs as DRM-free files, for songs the user does not already have (as in the app).
+  readonly stores = [
+    { name: 'Amazon Digital Music', url: 'https://www.amazon.com/MP3-Music-Download/b?node=163856011',
+      note: 'Buy songs and albums and download them as MP3. Separate from Amazon Music subscriptions.' },
+    { name: 'Bandcamp', url: 'https://bandcamp.com', note: 'Lots of independent music. After buying, choose MP3 320 kbps, WAV, FLAC and more.' },
+    { name: '7digital', url: 'https://us.7digital.com', note: 'A download store selling MP3 and high-resolution files.' },
+  ];
   titleValue = '';
   readonly busy = signal(false);
   readonly uploading = signal(false);
@@ -406,7 +424,7 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                         aria-label="Find chords and melody for guitar, piano, other and bass, and the drum score">{{ track.name === 'drums' ? 'Drum score' : 'Chords & melody' }}</button>
                     }
                   }
-                  @if (isHarmonic(track.name) && harmonyParts()) {
+                  @if (isRegenerable(track.name) && harmonyParts()) {
                     @if (regenerating(track.name)) {
                       <button type="button" class="secondary" disabled>Regenerating...</button>
                     } @else {
@@ -450,7 +468,11 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                 @if (track.name === 'drums' && !parts['drums'] && !regenerating('drums')) {
                   <p class="hint">Press Regenerate drum score to write this song's drums.</p>
                 } @else if (hasMusic(parts[track.name])) {
-                  <app-harmony-strip [part]="parts[track.name]" [stem]="track.name" [grid]="harmonyGrid()!" [time]="position()"></app-harmony-strip>
+                  @if (parts[track.name].key; as key) {
+                    <p class="hint">Key {{ key }} · Guitar, piano and other instruments share this score.</p>
+                  }
+                  <!-- The ensemble is written at concert pitch on a treble staff, the same on all three tracks. -->
+                  <app-harmony-strip [part]="parts[track.name]" [stem]="isEnsemble(track.name) ? 'piano' : track.name" [grid]="harmonyGrid()!" [time]="position()"></app-harmony-strip>
                 } @else if (parts[track.name]) {
                   <p class="hint">No clear chords or notes were found in this stem.</p>
                 }
@@ -544,7 +566,7 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                   [attr.aria-controls]="'mixer-panel-' + track.name"
                   (click)="toggleMixer(track.name)">
                   <span class="console-title"><span class="console-chevron" aria-hidden="true"></span>
-                    Mixer <span class="console-action">{{ expandedStem() === track.name ? 'Hide controls' : 'Show controls' }}</span>
+                    {{ track.label }} mixer <span class="console-action">{{ expandedStem() === track.name ? 'Hide controls' : 'Show controls' }}</span>
                   </span>
                   <span class="console-status">
                     <span class="console-volume">{{ track.volume }}%</span>
@@ -768,8 +790,11 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   }
 
   private snapshotSettings(): SceneSettings {
-    return captureSceneSettings(this.masterVolume(), this.sectionStart(), this.sectionEndTime(),
+    const settings = captureSceneSettings(this.masterVolume(), this.sectionStart(), this.sectionEndTime(),
       this.loopSection(), this.tracks(), this.job()?.duration);
+    // Keep the app's live-input mix; saving from the website must not erase it.
+    const live = this.sceneEntry?.settings?.live;
+    return live ? { ...settings, live } : settings;
   }
 
   async resetSong(): Promise<void> {
@@ -1011,10 +1036,11 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     try {
       const response = await fetch(url);
       if (!response.ok) throw new Error(`Chords request failed (HTTP ${response.status}).`);
-      const { stems, ...grid } = await response.json() as HarmonyGrid & { stems: Record<string, HarmonyPart> };
+      const { stems, ensemble, beats, firstBar } = await response.json() as HarmonyGrid & { stems: Record<string, HarmonyPart>; ensemble?: HarmonyPart };
       if (!this.destroyed && generation === this.generation) {
-        this.harmonyGrid.set(grid);
-        this.harmonyParts.set(stems);
+        this.harmonyGrid.set({ beats, firstBar });
+        // Guitar, piano and other show one shared score, so the song reads as one flow.
+        this.harmonyParts.set(ensemble ? { ...stems, ...Object.fromEntries(ENSEMBLE_STEMS.map(name => [name, ensemble])) } : stems);
         void this.loadParts(generation);
       }
     } catch (error) {
@@ -1027,8 +1053,11 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   }
 
   regenerateLabel(name: string): string {
-    return name === 'other' ? 'Regenerate chords' : name === 'drums' ? 'Regenerate drum score' : 'Regenerate chords & melody';
+    return name === 'drums' ? 'Regenerate drum score' : 'Regenerate chords & melody';
   }
+
+  isEnsemble(name: string): boolean { return ENSEMBLE_STEMS.includes(name); }
+  isRegenerable(name: string): boolean { return REGENERATED_STEMS.includes(name); }
 
   regenerating(name: string): boolean {
     const status = this.job()?.harmony?.stems?.[name]?.status;

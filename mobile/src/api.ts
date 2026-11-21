@@ -38,10 +38,13 @@ export interface LyricLine { start: number; end: number; words: LyricWord[] }
 export interface HarmonyNote { start: number; end: number; pitch: number; unit: number; length: number }
 export type DrumName = 'kick' | 'snare' | 'tom' | 'hihat' | 'cymbal';
 export interface DrumHit { unit: number; drum: DrumName }
-export interface BarPattern { unit: number; label: string }
-export interface HarmonyPart { chords: { start: number; name: string }[]; notes: HarmonyNote[]; hits?: DrumHit[]; patterns?: BarPattern[] }
+// `key` is set on the ensemble part: guitar, piano and other heard together, which those three stems share.
+export interface HarmonyPart { chords: { start: number; name: string }[]; notes: HarmonyNote[]; hits?: DrumHit[]; key?: string }
 export interface HarmonyGrid { beats: number[]; firstBar: number }
 export const HARMONY_STEMS: readonly string[] = ['guitar', 'piano', 'other', 'bass', 'drums'];
+export const ENSEMBLE_STEMS: readonly string[] = ['guitar', 'piano', 'other'];
+// The ensemble is found with the whole song; only bass and drums can be redone on their own.
+export const REGENERATED_STEMS: readonly string[] = ['bass', 'drums'];
 
 export const createLyrics = (jobId: string) => request('POST', `/stems/jobs/${jobId}/lyrics`, {});
 export const saveLyrics = (jobId: string, lines: LyricLine[]) => request('POST', `/stems/jobs/${jobId}/lyrics`, { lines });
@@ -57,9 +60,12 @@ export async function fetchResult<T>(url: string, what: string): Promise<T> {
   return await response.json() as T;
 }
 export interface SceneTrack extends Effects { muted: boolean; solo: boolean; bypassed: boolean; useCleaned: boolean }
+// The live input's mix in this entry; `replace` silences the band part the player stands in for.
+export interface SceneLive extends Omit<SceneTrack, 'useCleaned'> { replace: boolean }
 export interface SceneSettings {
   masterVolume: number; sectionStart: number; sectionEnd: number; loop: boolean;
   tracks: Record<string, SceneTrack>;
+  live?: SceneLive;
 }
 export interface SceneEntry { id: string; jobId: string; title?: string; settings?: SceneSettings }
 export interface Scene { id: string; name: string; revision: number; entries: SceneEntry[]; createdAt: string }
@@ -138,6 +144,10 @@ export const getSong = async (jobId: string) =>
 export const getUsage = async () => (await request<{ usage: Usage }>('GET', '/stems/usage')).usage;
 
 export const deleteSong = (jobId: string) => request<{ deleted: boolean }>('DELETE', `/stems/jobs/${jobId}`);
+
+// Title is required (1–200 characters); artist may be empty. The server answers with what it saved.
+export const updateSongDetails = async (jobId: string, details: { title: string; author: string }) =>
+  (await request<{ metadata: { title: string; author: string } }>('PATCH', `/stems/jobs/${jobId}`, details)).metadata;
 
 // Starts the split. Safe to call again after a failure; it does not upload again.
 export const startSplit = async (jobId: string) =>

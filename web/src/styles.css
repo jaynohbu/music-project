@@ -168,8 +168,7 @@ progress { width: 100%; height: 12px; accent-color: #3459c9; }
 .lyrics-word { color: #697b92; font-size: 1rem; line-height: 1.5; }
 .lyrics-word.near { color: #5f7fd6; }
 .lyrics-word.active { color: #2447b8; font-weight: 700; }
-.harmony-strip { position: relative; height: 128px; margin-top: 10px; border-radius: 6px; background: #f1f4f9; overflow: hidden; }
-.harmony-strip.chords-only { height: 30px; }
+.harmony-strip { position: relative; margin-top: 10px; border-radius: 6px; background: #f1f4f9; overflow: hidden; }
 .staff-lines { position: absolute; inset: 0; width: 100%; height: 100%; }
 .staff-lines line { stroke: #8a99ad; stroke-width: 1; }
 .harmony-window { position: absolute; inset: 0 0 0 44px; overflow: hidden; -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); }
@@ -186,11 +185,10 @@ progress { width: 100%; height: 12px; accent-color: #3459c9; }
 .score-note text { font-size: 13px; }
 .score-note line, .score-note path { fill: none; stroke: currentColor; stroke-width: 1.2; }
 .staff-clef { position: absolute; left: 6px; color: #42536b; font-size: 44px; line-height: 52px; pointer-events: none; }
-.staff-clef.treble { top: 46px; }
-.staff-clef.bass { top: 40px; font-size: 34px; }
+.staff-clef.bass { font-size: 34px; }
 .score-beam { fill: #2c3a4e; }
 .score-note .score-cross { stroke-width: 1.5; }
-.drum-clef { position: absolute; left: 12px; top: 64px; width: 4px; height: 16px; border-left: 3px solid #42536b; border-right: 3px solid #42536b; box-sizing: content-box; pointer-events: none; }
+.drum-clef { position: absolute; left: 12px; width: 4px; height: 16px; border-left: 3px solid #42536b; border-right: 3px solid #42536b; box-sizing: content-box; pointer-events: none; }
 .staff-now { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: #3459c9; opacity: .45; pointer-events: none; }
 .console-transport { padding: 10px 14px; border-bottom: 1px solid #aebacb; }
 .lyrics-editor { width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 64px); padding: 0; border: 1px solid #aebacb; border-radius: 10px; overflow: hidden; }
@@ -247,3 +245,43 @@ footer { text-align: center; color: #64748b; padding: 20px var(--page-gutter); f
   .stem-heading { flex-wrap: wrap; }
   .scene-editor app-stem-mixer > .card { padding: 18px 0 0; }
 }
+
+/* Account usage on the Music page, and the store suggestions on the upload page. */
+.usage { margin: 4px 0 0; font-size: .9rem; font-weight: 600; color: #42536b; }
+.stores { margin-top: 12px; padding: 12px 14px; border: 1px solid #dce3ed; border-radius: 8px; background: #f8fafd; }
+.stores h2 { margin: 0 0 4px; font-size: 1rem; }
+.stores ul { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 6px; }
+
+/* Themes, the same as the app's (mobile/src/theme.tsx): a background picture, a page tint, text and accent colours.
+   Simple keeps the default look above. The mixer console keeps its own hardware panel in every theme. */
+:root[data-theme="heavy_metal"] { --theme-image: url('/themes/heavy_metal.jpg'); --overlay: #00000099; --ink: #f2f2f2; --muted: #c2c4ca;
+  --surface: #141418c7; --surface-soft: #26262cb3; --line: #ffffff2e; --header: #0a0a0ce6; --accent: #d3d7dd; --on-accent: #121317; --tab: #ffffff1f; color-scheme: dark; }
+:root[data-theme="rock"] { --theme-image: url('/themes/rock.jpg'); --overlay: #0b06038c; --ink: #f7ece0; --muted: #cfb49b;
+  --surface: #1c120cd6; --surface-soft: #2b1c13d9; --line: #ff9a4a33; --header: #120b07e6; --accent: #ff8a2a; --on-accent: #1a0d04; --tab: #ff8a2a26; color-scheme: dark; }
+:root[data-theme="jazz_band"] { --theme-image: url('/themes/jazz_band.jpg'); --overlay: #05081399; --ink: #f6ecd6; --muted: #c9b88f;
+  --surface: #121a30e0; --surface-soft: #1d2640e0; --line: #d6a74040; --header: #0c1326e6; --accent: #d9a63c; --on-accent: #1b1206; --tab: #d6a74033; color-scheme: dark; }
+:root[data-theme="pop"] { --theme-image: url('/themes/pop.jpg'); --overlay: #ffffff73; --ink: #2b1142; --muted: #6d5088;
+  --surface: #ffffffe6; --surface-soft: #fbe9f7; --line: #f0d0ee; --header: #ffffffe6; --accent: #e0248f; --on-accent: #ffffff; --tab: #ffe0f2; }
+:root[data-theme="christian"] { --theme-image: url('/themes/christian.jpg'); --overlay: #fffdf880; --ink: #2e2a20; --muted: #6e6655;
+  --surface: #ffffffe6; --surface-soft: #f8f1e2; --line: #eadfc4; --header: #fffdf8e6; --accent: #b4862a; --on-accent: #ffffff; --tab: #fbf0d8; }
+
+:root[data-theme]:not([data-theme="simple"]) { color: var(--ink); background: #000; }
+:root[data-theme]:not([data-theme="simple"]) body {
+  min-height: 100vh; background: linear-gradient(var(--overlay), var(--overlay)), var(--theme-image) center / cover fixed; }
+:root[data-theme]:not([data-theme="simple"]) header { background: var(--header); border-bottom-color: var(--line); }
+:root[data-theme]:not([data-theme="simple"]) :is(.card, .library li) { background: var(--surface); border-color: var(--line); color: var(--ink); }
+:root[data-theme]:not([data-theme="simple"]) :is(p, .hint, .usage, footer, .brand small, .scene-entry-name label, .waveform-times) { color: var(--muted); }
+:root[data-theme]:not([data-theme="simple"]) .scene-create { background: var(--surface-soft); border-color: var(--line); }
+:root[data-theme]:not([data-theme="simple"]) :is(.eyebrow, a, .library h2 a:hover) { color: var(--accent); }
+:root[data-theme]:not([data-theme="simple"]) :is(.library h2 a, .brand) { color: var(--ink); }
+:root[data-theme]:not([data-theme="simple"]) nav a { color: var(--muted); }
+:root[data-theme]:not([data-theme="simple"]) nav a:hover { background: var(--tab); }
+:root[data-theme]:not([data-theme="simple"]) nav a.active { color: var(--accent); background: var(--tab); box-shadow: inset 0 0 0 1px var(--line); }
+:root[data-theme]:not([data-theme="simple"]) :is(button, .button-link) { background: var(--accent); color: var(--on-accent); }
+:root[data-theme]:not([data-theme="simple"]) .secondary { background: var(--tab); color: var(--accent); }
+:root[data-theme]:not([data-theme="simple"]) :is(input:not(.console-fader), select) { background: var(--surface-soft); border-color: var(--line); color: var(--ink); }
+:root[data-theme]:not([data-theme="simple"]) :is(.library .download, .stores) { background: var(--surface-soft); border-color: var(--line); }
+:root[data-theme]:not([data-theme="simple"]) .mixer-page > .section-heading:first-child { border-bottom-color: var(--line); }
+
+.theme-picker { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; font-size: .85rem; font-weight: 650; }
+.theme-picker select { width: auto; padding: 8px 10px; border: 1px solid #cbd5e3; border-radius: 8px; font: inherit; background: #fff; color: inherit; }

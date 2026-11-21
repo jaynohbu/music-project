@@ -316,6 +316,30 @@ test('entry settings follow the mixer ranges exactly', async () => {
   assert.equal(message, 'entries[0].settings.tracks.drums.pan must be a number from -100 to 100.');
 });
 
+test('an entry may carry the live input\'s mix, which is checked like a stem\'s', async () => {
+  const { database, scenes, storage } = setup();
+  seedSong(database, storage, A, SONG);
+  const scene = await makeScene(scenes);
+  let revision = 1;
+  const save = async value => {
+    const result = await call(scenes, A, 'PATCH', `/api/scenes/${scene.id}`,
+      { revision, entries: [{ id: uuid(301), jobId: SONG, settings: value }] });
+    if (result.status === 200) revision = result.body.scene.revision;
+    return result;
+  };
+  const { useCleaned: _cleaned, ...liveTrack } = track();
+  const live = { ...liveTrack, volume: 65, muted: true, replace: true };
+  const saved = await save(settings({ live }));
+  assert.equal(saved.status, 200);
+  assert.deepEqual(saved.body.scene.entries[0].settings.live, live);
+  assert.equal((await save(settings())).body.scene.entries[0].settings.live, undefined, 'Scenes without it stay valid');
+  for (const bad of [{ ...live, volume: 101 }, { ...live, replace: 'yes' }, liveTrack, { ...live, useCleaned: false }, 'x']) {
+    const result = await save(settings({ live: bad }));
+    assert.equal(result.status, 400, JSON.stringify(bad));
+    assert.match(result.body.message, /settings\.live/);
+  }
+});
+
 test('entries must reference the caller\'s own completed songs', async () => {
   const { database, scenes, storage } = setup();
   seedSong(database, storage, A, SONG);

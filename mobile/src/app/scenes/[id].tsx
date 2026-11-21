@@ -1,4 +1,4 @@
-import { Stack, useLocalSearchParams, usePreventRemove } from 'expo-router';
+import { useLocalSearchParams, usePreventRemove } from 'expo-router';
 import { useEffect, useReducer, useRef, useState, type ComponentRef } from 'react';
 import { AppState, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { randomUUID } from 'expo-crypto';
@@ -117,10 +117,11 @@ function SceneEditor({ id }: { id: string }) {
     setPicker(false);
   };
   return <StemScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
-    <Stack.Screen options={{ headerTitle: () => <View style={styles.headerTitle}>
-      <Text numberOfLines={1} accessibilityRole="header" style={styles.headerText}>{scene?.name || t('title.scene')}</Text>
+    {/* The scene's name heads the page, with its rename button; the Scenes tab above leads back to the list. */}
+    <View style={styles.headerTitle}>
+      <Text numberOfLines={2} accessibilityRole="header" style={styles.headerText}>{scene?.name || t('title.scene')}</Text>
       {scene && <IconButton bare icon="edit" accessibilityLabel={t('scene.editName')} on={renaming} onPress={() => setRenaming(value => !value)} />}
-    </View> }} />
+    </View>
     {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
     {!scene ? error ? <Button label={t('scene.retryLoad')} onPress={() => { setError(''); setReload(value => value + 1); }} />
       : <Text style={styles.description}>{t('scene.loading')}</Text> : <>
@@ -192,12 +193,12 @@ function SceneEditor({ id }: { id: string }) {
   </StemScrollView>;
 }
 const makeStyles = (t: Theme) => StyleSheet.create({
-  page: { padding: 16, gap: 14 },
+  page: { paddingVertical: 16, paddingHorizontal: 2, gap: 14 },
   heading: { color: t.ink, fontSize: 26, fontWeight: '700' },
   label: { color: t.ink, fontSize: 15, fontWeight: '600' },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
-  headerTitle: { flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: 280 },
-  headerText: { color: t.ink, fontSize: 17, fontWeight: '600', flexShrink: 1 },
+  headerTitle: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 4 },
+  headerText: { color: t.ink, fontSize: 20, fontWeight: '700', flexShrink: 1 },
   addTab: { paddingVertical: 0, paddingHorizontal: 20, justifyContent: 'center' },
   addLabel: { fontSize: 24, lineHeight: 28, fontWeight: '500' },
   songControls: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },

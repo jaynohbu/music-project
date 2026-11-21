@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   createHarmony, createLyrics, createRestoration, fetchResult, getSong, saveLyrics as sendLyrics,
-  type HarmonyGrid, type HarmonyPart, type LyricLine, type Song, type StemName,
+  ENSEMBLE_STEMS, type HarmonyGrid, type HarmonyPart, type LyricLine, type Song, type StemName,
 } from './api';
 import { t, type TextKey } from './i18n';
 import { errorText } from './ui';
@@ -14,8 +14,7 @@ export const working = (song: Song | null) => !!song && (running(song.lyrics?.st
   Object.values(song.harmony?.stems ?? {}).some(part => running(part?.status)) ||
   (song.restorations ?? []).some(item => running(item.status)));
 export const hasMusic = (part?: HarmonyPart) => !!part && (part.chords.length > 0 || part.notes.length > 0 || !!part.hits?.length);
-export const regenerateLabel = (name: string) =>
-  t(name === 'other' ? 'tasks.regenChords' : name === 'drums' ? 'tasks.regenDrums' : 'tasks.regenChordsMelody');
+export const regenerateLabel = (name: string) => t(name === 'drums' ? 'tasks.regenDrums' : 'tasks.regenChordsMelody');
 export const stemName = (name: string) => t(`stem.${name}` as TextKey);
 
 // Finds, loads and saves a song's lyrics and score, polling the song while the API works on them.
@@ -69,8 +68,13 @@ export function useSongTasks(initial: Song | null) {
   useEffect(() => {
     if (!chordsUrl || parts || loading.current.chords || chordsLoadError) return;
     loading.current.chords = true;
-    fetchResult<HarmonyGrid & { stems: Record<string, HarmonyPart> }>(chordsUrl, 'Chords')
-      .then(({ stems, beats, firstBar }) => { if (alive.current) { setGrid({ beats, firstBar }); setParts(stems); } })
+    fetchResult<HarmonyGrid & { stems: Record<string, HarmonyPart>; ensemble?: HarmonyPart }>(chordsUrl, 'Chords')
+      .then(({ stems, ensemble, beats, firstBar }) => {
+        if (!alive.current) return;
+        setGrid({ beats, firstBar });
+        // Guitar, piano and other show one shared score, so the song reads as one flow.
+        setParts(ensemble ? { ...stems, ...Object.fromEntries(ENSEMBLE_STEMS.map(name => [name, ensemble])) } : stems);
+      })
       .catch(failure => { if (alive.current) setChordsLoadError(t('tasks.loadChordsFailed', { error: errorText(failure) })); })
       .finally(() => { loading.current.chords = false; });
   }, [chordsUrl, parts, chordsLoadError]);

@@ -89,7 +89,7 @@ export const INSTRUMENTS: { id: InstrumentId; label: string; stem: StemName | nu
 export const instrument = (id: string | undefined) => INSTRUMENTS.find(item => item.id === id) ?? INSTRUMENTS[0];
 
 // In-place radix-2 FFT; `real` and `imag` have a power-of-two length.
-function fft(real: Float64Array, imag: Float64Array) {
+export function fft(real: Float64Array, imag: Float64Array) {
   const n = real.length;
   for (let index = 1, swap = 0; index < n; index++) {
     let bit = n >> 1;

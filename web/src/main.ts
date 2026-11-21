@@ -1,3 +1,4 @@
+import { THEMES, ThemeService, type ThemeId } from './themes';
 import { Component, effect, inject, signal } from '@angular/core';
 import { bootstrapApplication } from '@angular/platform-browser';
 import { provideHttpClient } from '@angular/common/http';
@@ -29,6 +30,11 @@ const anonymous: CanActivateFn = () =>
         <nav aria-label="Main navigation">
           <a routerLink="/list" routerLinkActive="active">Music</a>
           <a routerLink="/scenes" routerLinkActive="active">Scenes</a>
+          <label class="theme-picker"><span>Theme</span>
+            <select [value]="themes.theme()" (change)="pickTheme($event)" aria-label="Theme">
+              @for (item of themeList; track item.id) { <option [value]="item.id">{{ item.name }}</option> }
+            </select>
+          </label>
           <button class="secondary" (click)="logout()" [disabled]="busy()">Log out</button>
         </nav>
       }
@@ -44,6 +50,9 @@ const anonymous: CanActivateFn = () =>
 })
 class AppComponent {
   readonly auth = inject(AuthService);
+  readonly themes = inject(ThemeService);
+  readonly themeList = THEMES;
+  pickTheme(event: Event): void { this.themes.apply((event.target as HTMLSelectElement).value as ThemeId); }
   private readonly router = inject(Router);
   readonly error = signal('');
   readonly busy = signal(false);

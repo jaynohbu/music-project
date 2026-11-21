@@ -2,11 +2,11 @@ import { File, Paths } from 'expo-file-system';
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
 import { ImageBackground, StyleSheet, View, type ImageSourcePropType } from 'react-native';
 
-export type ThemeId = 'simple' | 'heavy_metal' | 'pop' | 'jazz_band' | 'christian';
+export type ThemeId = 'simple' | 'heavy_metal' | 'rock' | 'pop' | 'jazz_band' | 'christian';
 
 export interface Theme {
   id: ThemeId; name: string; dark: boolean;
-  // Page backdrop: a photo (assets/theme_<id>.png) when one is registered below, else the gradient.
+  // Page backdrop: a picture (assets/theme_<id>) when one is registered below, else the gradient.
   background: string; gradient?: string; image?: ImageSourcePropType; overlay: string;
   header: string; tabOn: string; surface: string; surfaceMuted: string; input: string; dialog: string; backdrop: string;
   ink: string; muted: string; line: string;
@@ -21,9 +21,14 @@ export interface Theme {
   strip: string; note: string; staff: string; scoreInk: string; wordDim: string; wordNear: string; wordActive: string;
 }
 
-// Background photos must be required statically. To add one, drop assets/theme_<id>.png in and list it here.
+// Background pictures must be required statically. To add one, drop assets/theme_<id>.(png|jpg) in and list it here.
+// Rock, pop, jazz club and worship are rendered by scripts (stage lighting, haze and silhouettes), not photos.
 const IMAGES: Partial<Record<ThemeId, ImageSourcePropType>> = {
   heavy_metal: require('../assets/theme_heavy_metal.png'),
+  rock: require('../assets/theme_rock.jpg'),
+  pop: require('../assets/theme_pop.jpg'),
+  jazz_band: require('../assets/theme_jazz_band.jpg'),
+  christian: require('../assets/theme_christian.jpg'),
 };
 
 const simple: Theme = {
@@ -44,6 +49,7 @@ const CHROME = 'linear-gradient(180deg, #f4f6f8 0%, #b9bec6 42%, #8c929b 52%, #d
 
 const heavyMetal: Theme = {
   id: 'heavy_metal', name: 'Heavy metal', dark: true,
+  // Black stage, brushed chrome and a red warning-light playhead.
   background: '#09090b', gradient: 'linear-gradient(180deg, #1a1a1d 0%, #09090b 60%, #16161a 100%)', overlay: '#00000059',
   header: '#0a0a0cd9', tabOn: '#ffffff1f', surface: '#14141880', surfaceMuted: '#26262c99', input: '#1c1c20cc', dialog: '#17171b', backdrop: '#000000b3',
   ink: '#f2f2f2', muted: '#c2c4ca', line: '#ffffff2e',
@@ -56,9 +62,26 @@ const heavyMetal: Theme = {
   strip: '#18181c', note: '#ececec', staff: '#6c6c74', scoreInk: '#c4c4cc', wordDim: '#8b8b93', wordNear: '#d6dae0', wordActive: '#ffffff',
 };
 
+// A sweaty club gig: worn leather and denim under amber stage lights, with an orange-red amp glow.
+const rock: Theme = {
+  id: 'rock', name: 'Rock', dark: true,
+  background: '#140d09', gradient: 'linear-gradient(175deg, #2a160c 0%, #140d09 55%, #23110d 100%)', overlay: '#0b06036b',
+  header: '#120b07e0', tabOn: '#ff8a2a26', surface: '#1c120cd0', surfaceMuted: '#2b1c13d9', input: '#22160f', dialog: '#1d130d', backdrop: '#080402b3',
+  ink: '#f7ece0', muted: '#cfb49b', line: '#ff9a4a33',
+  accent: '#ff8a2a', accentSoft: '#ff8a2a26', onAccent: '#1a0d04',
+  accentImage: 'linear-gradient(180deg, #ffb35c 0%, #ff8a2a 48%, #d65a12 100%)', onConsoleAccent: '#1a0d04',
+  danger: '#ff5a4a', dangerSoft: '#ff5a4a26', errorInk: '#ff8a7c',
+  metal: 'linear-gradient(180deg, #4a3326e6 0%, #2a1b13e6 45%, #3f2b20e6 55%, #1b110ce6 100%)',
+  key: 'linear-gradient(180deg, #5a4334 0%, #2c1e16 100%)', keyBorder: '#8a6a52', keyInk: '#f5e6d6', consoleAccent: '#ff8a2a',
+  consoleInk: '#f5e6d6', consoleMuted: '#c4a48a', consoleLine: '#5c4233',
+  wave: '#140c0899', waveLine: '#ffffff1f', waveBar: '#ffb35c', waveBarDim: '#6e4a30', start: '#5fb8ff', end: '#7ee08f', playhead: '#ff3b2f',
+  strip: '#1c120c', note: '#f5e6d6', staff: '#7a5a45', scoreInk: '#e0c8b0', wordDim: '#9c8270', wordNear: '#ffc58a', wordActive: '#ffe2b8',
+};
+
 const pop: Theme = {
   id: 'pop', name: 'Pop', dark: false,
-  background: '#ffd6ef', gradient: 'linear-gradient(160deg, #ff9fd8 0%, #c9a2ff 50%, #86e6ff 100%)', overlay: '#ffffff33',
+  // Bright arena pop: candy pink to lilac to cyan, glossy white cards.
+  background: '#ffd6ef', gradient: 'linear-gradient(160deg, #ff9fd8 0%, #c9a2ff 50%, #86e6ff 100%)', overlay: '#ffffff59',
   header: '#ffffffd9', tabOn: '#ffe0f2', surface: '#ffffffe0', surfaceMuted: '#fbe9f7', input: '#ffffff', dialog: '#ffffff', backdrop: '#3a145599',
   ink: '#2b1142', muted: '#6d5088', line: '#f0d0ee',
   accent: '#e0248f', accentSoft: '#ffe3f3', onAccent: '#ffffff',
@@ -71,8 +94,9 @@ const pop: Theme = {
 };
 
 const jazzBand: Theme = {
-  id: 'jazz_band', name: 'Jazz band', dark: true,
-  background: '#0f1830', gradient: 'linear-gradient(170deg, #0e1832 0%, #261031 55%, #4a1320 100%)', overlay: 'transparent',
+  id: 'jazz_band', name: 'Jazz club', dark: true,
+  // A late-night club: midnight blue and burgundy velvet, brass hardware, warm lamp light on the words.
+  background: '#0f1830', gradient: 'linear-gradient(170deg, #0e1832 0%, #261031 55%, #4a1320 100%)', overlay: '#05081380',
   header: '#0c1326e6', tabOn: '#d6a74033', surface: '#121a30e0', surfaceMuted: '#1d2640e0', input: '#151d33', dialog: '#141c32', backdrop: '#050813b3',
   ink: '#f6ecd6', muted: '#c9b88f', line: '#d6a74040',
   accent: '#d9a63c', accentSoft: '#d9a63c2e', onAccent: '#1b1206',
@@ -85,8 +109,9 @@ const jazzBand: Theme = {
 };
 
 const christian: Theme = {
-  id: 'christian', name: 'Christian', dark: false,
-  background: '#fdf6e6', gradient: 'linear-gradient(180deg, #fffaf0 0%, #fbeccb 45%, #d8e8f8 100%)', overlay: '#ffffff26',
+  id: 'christian', name: 'Worship', dark: false,
+  // Morning light in a sanctuary: ivory and soft gold, with a sky-blue lift; calm rather than showy.
+  background: '#fdf6e6', gradient: 'linear-gradient(180deg, #fffaf0 0%, #fbeccb 45%, #d8e8f8 100%)', overlay: '#fffdf866',
   header: '#fffdf8e6', tabOn: '#fbf0d8', surface: '#ffffffe6', surfaceMuted: '#f8f1e2', input: '#ffffff', dialog: '#fffdf8', backdrop: '#3a311f80',
   ink: '#2e2a20', muted: '#6e6655', line: '#eadfc4',
   accent: '#b4862a', accentSoft: '#fbf1dc', onAccent: '#ffffff',
@@ -98,14 +123,16 @@ const christian: Theme = {
   strip: '#faf3e3', note: '#3a3324', staff: '#c4b38e', scoreInk: '#5e543e', wordDim: '#9a8f76', wordNear: '#c9a24e', wordActive: '#8a6212',
 };
 
-export const THEMES: Theme[] = [simple, heavyMetal, pop, jazzBand, christian].map(theme => ({ ...theme, image: IMAGES[theme.id] }));
+// Heavy metal first: it is the default look.
+export const THEMES: Theme[] = [heavyMetal, rock, pop, jazzBand, christian, simple].map(theme => ({ ...theme, image: IMAGES[theme.id] }));
 
+const DEFAULT_THEME: ThemeId = 'heavy_metal';
 const saved = new File(Paths.document, 'theme.json');
 function load(): ThemeId {
   try {
     const id = saved.exists ? JSON.parse(saved.textSync()).theme : null;
-    return THEMES.some(theme => theme.id === id) ? id : 'simple';
-  } catch { return 'simple'; }
+    return THEMES.some(theme => theme.id === id) ? id : DEFAULT_THEME;
+  } catch { return DEFAULT_THEME; }
 }
 
 const Context = createContext<{ theme: Theme; setTheme: (id: ThemeId) => void }>({ theme: THEMES[0], setTheme: () => {} });

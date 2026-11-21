@@ -15,6 +15,12 @@
         "EXPO_PUBLIC_MIXER_DIAGNOSTIC": "0"
       }
     },
+    "simulator": {
+      "extends": "staging",
+      "ios": {
+        "simulator": true
+      }
+    },
     "engine-trial": {
       "extends": "staging",
       "env": {

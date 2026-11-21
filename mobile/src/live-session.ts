@@ -1,5 +1,6 @@
 // Recording a live take: the player's input is saved as-is while the stems follow their tempo.
-import { AudioManager, AudioRecorder, FileDirectory, FileFormat, type GainNode } from 'react-native-audio-api';
+import { AudioManager, AudioRecorder, FileDirectory, FileFormat, type RecorderAdapterNode } from 'react-native-audio-api';
+import { InstrumentDetector } from './instrument-detect';
 import { Follower, OnsetDetector, instrument as findInstrument, type FollowStatus, type InstrumentId, type TempoPoint } from './live-follow';
 import { discardRecording, saveTake, takePath, takeSubDirectory, type LiveTake } from './live-take';
 import { t } from './i18n';
@@ -18,7 +19,8 @@ const SAMPLE_RATE = 44100;
 const BUFFER = 512;
 const IDLE_MS = 50;
 
-export interface LiveStatus extends FollowStatus { seconds: number; level: number; notes: number }
+// `instrument` is null until enough has been played to tell what it is.
+export interface LiveStatus extends FollowStatus { seconds: number; level: number; notes: number; instrument: InstrumentId | null }
 
 const recordingError = (message: string) => new Error(t('live.recordingFailed', { error: message }));
 
@@ -37,8 +39,10 @@ export class LiveSession {
   private readonly points: TempoPoint[] = [];
   private readonly follower: Follower;
   private detector: OnsetDetector | null = null;
+  private identifier: InstrumentDetector | null = null;
+  private instrument: InstrumentId | null = null;
   private recorder = new AudioRecorder();
-  private monitor: GainNode | null = null;
+  private monitor: RecorderAdapterNode | null = null;
   private idleTimer: ReturnType<typeof setInterval> | null = null;
   private unsubscribe: (() => void) | null = null;
   private recordStart = 0;
@@ -47,25 +51,26 @@ export class LiveSession {
   private notes = 0;
   // Called when playback stops by itself (end of song or section), with the saved take.
   onFinished: ((take: LiveTake | null, error?: string) => void) | null = null;
+  // Called once the input's instrument is known.
+  onInstrument: ((instrument: InstrumentId) => void) | null = null;
 
   private constructor(private readonly mixer: Mixer, private readonly jobId: string, beats: number[], strength: number,
-    private readonly previous: LiveTake | null, private readonly instrument: InstrumentId, private readonly replace: boolean) {
+    private readonly previous: LiveTake | null, private readonly replace: boolean) {
     this.follower = new Follower(beats, strength);
   }
 
   static async start(options: {
-    mixer: Mixer; jobId: string; beats: number[]; strength: FollowStrength; monitor: boolean; previous: LiveTake | null;
-    instrument: InstrumentId; replace: boolean;
+    mixer: Mixer; jobId: string; beats: number[]; strength: FollowStrength; previous: LiveTake | null; replace: boolean;
   }) {
     if (!await microphoneAllowed()) throw new Error(t('live.micDenied'));
     const strength = STRENGTHS.find(item => item.id === options.strength)?.value ?? 0.5;
-    const session = new LiveSession(options.mixer, options.jobId, options.beats, strength, options.previous, options.instrument, options.replace);
-    try { await session.begin(options.monitor); }
+    const session = new LiveSession(options.mixer, options.jobId, options.beats, strength, options.previous, options.replace);
+    try { await session.begin(); }
     catch (failure) { await session.cleanUp(); throw failure; }
     return session;
   }
 
-  private async begin(monitor: boolean) {
+  private async begin() {
     const { mixer } = this;
     await mixer.pause();
     await mixer.suspendTake(true);
@@ -80,18 +85,28 @@ export class LiveSession {
     const ready = this.recorder.onAudioReady({ sampleRate: SAMPLE_RATE, bufferLength: BUFFER, channelCount: 1 }, event => {
       const samples = event.buffer.getChannelData(0).subarray(0, event.numFrames);
       // The device may deliver a different rate than asked for.
-      this.detector ??= new OnsetDetector(event.buffer.sampleRate, findInstrument(this.instrument).onsets);
+      const rate = event.buffer.sampleRate;
+      this.identifier ??= new InstrumentDetector(rate, () => mixer.stemLevels());
+      if (!this.instrument) {
+        this.identifier.push(samples);
+        const found = this.identifier.detection;
+        if (found.confident && found.instrument) {
+          this.instrument = found.instrument;
+          // Notes are heard with the instrument's own settings from here on.
+          this.detector = null;
+          this.onInstrument?.(found.instrument);
+        }
+      }
+      this.detector ??= new OnsetDetector(rate, findInstrument(this.instrument ?? 'other').onsets);
       let peak = 0;
       for (let index = 0; index < samples.length; index++) peak = Math.max(peak, Math.abs(samples[index]));
       this.level = Math.max(20 * Math.log10(peak + 1e-9), this.level - 3);
       for (const at of this.detector.push(samples, event.when)) this.hear(at);
     });
     if (ready.status === 'error') throw recordingError(ready.message);
-    if (monitor) {
-      const route = mixer.createInputMonitor(1);
-      this.recorder.connect(route.input);
-      this.monitor = route.gain;
-    }
+    // The input is always heard, through the player's channel in the mixer.
+    this.monitor = mixer.createInputMonitor();
+    this.recorder.connect(this.monitor);
     const started = await this.recorder.start();
     if (started.status === 'error') throw recordingError(started.message);
     this.recordStart = mixer.contextTime;
@@ -129,7 +144,8 @@ export class LiveSession {
   }
 
   get status(): LiveStatus {
-    return { ...this.follower.status, rate: this.mixer.rate, seconds: Math.max(0, this.mixer.contextTime - this.recordStart), level: this.level, notes: this.notes };
+    return { ...this.follower.status, rate: this.mixer.rate, seconds: Math.max(0, this.mixer.contextTime - this.recordStart), level: this.level,
+      notes: this.notes, instrument: this.instrument };
   }
 
   subscribe(listener: () => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
@@ -153,7 +169,8 @@ export class LiveSession {
     }
     const take: LiveTake = {
       version: 1, file, recordedAt: Date.now(), duration: result.duration, latency: DEFAULT_LATENCY,
-      points: this.points, volume: this.previous?.volume ?? 0.9, muted: false, instrument: this.instrument, replace: this.replace,
+      points: this.points, volume: this.previous?.volume ?? 0.9, muted: false,
+      instrument: this.instrument ?? this.identifier?.detection.instrument ?? this.previous?.instrument ?? 'other', replace: this.replace,
     };
     saveTake(this.jobId, take);
     await this.mixer.suspendTake(false);

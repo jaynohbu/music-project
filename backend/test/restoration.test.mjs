@@ -535,14 +535,14 @@ test('harmony results from the old format are ignored, so they get redone', asyn
   });
   assert.equal((await call(parentId, undefined, 'GET')).body.job.harmony, undefined);
   assert.equal((await call(`${parentId}/harmony`, {})).status, 202);
-  assert.equal(database.get('owner', (await call(parentId, undefined, 'GET')).body.job.harmony.id).version, 3);
+  assert.equal(database.get('owner', (await call(parentId, undefined, 'GET')).body.job.harmony.id).version, 4);
   assert.equal(started.length, 1);
 });
 
 function regeneration() {
   const context = setup();
   const finished = (id, fields) => context.database.put({
-    userId: 'owner', jobId: id, type: 'harmony', version: 3, parentJobId: parentId, status: 'completed', title: 'Chords',
+    userId: 'owner', jobId: id, type: 'harmony', version: 4, parentJobId: parentId, status: 'completed', title: 'Chords',
     key: `users/owner/harmony/${parentId}/${id}.json`, generatedAt: new Date(Date.now() - 60000).toISOString(), ...fields,
   });
   finished(lyricsId);
@@ -554,7 +554,8 @@ test('regenerating one stem needs a finished song result and a harmonic stem', a
   const { call, started } = setup();
   assert.equal((await call(`${parentId}/harmony`, { stem: 'bass' })).status, 409);
   const { call: callDone } = regeneration();
-  for (const stem of ['vocals', 'kazoo', 1]) assert.equal((await callDone(`${parentId}/harmony`, { stem })).status, 400, String(stem));
+  // Guitar, piano and other share the ensemble part, so they are not redone on their own.
+  for (const stem of ['vocals', 'kazoo', 1, 'guitar', 'piano', 'other']) assert.equal((await callDone(`${parentId}/harmony`, { stem })).status, 400, String(stem));
   assert.equal(started.length, 0);
 });
 
@@ -568,7 +569,7 @@ test('regenerating starts only that stem, keeps the song result, and repeats saf
   assert.equal(child.sourceKey, undefined);
   assert.equal((await call(`${parentId}/harmony`, { stem: 'bass' })).status, 200);
   assert.equal(started.length, 1);
-  assert.equal((await call(`${parentId}/harmony`, { stem: 'guitar' })).status, 202, 'other stems run at the same time');
+  assert.equal((await call(`${parentId}/harmony`, { stem: 'drums' })).status, 202, 'other stems run at the same time');
   assert.equal(started.length, 2);
   assert.equal((await call(`${parentId}/harmony`, {})).status, 200, 'the whole song is not redone');
   assert.equal(started.length, 2);
@@ -576,8 +577,8 @@ test('regenerating starts only that stem, keeps the song result, and repeats saf
   assert.equal(job.harmony.id, lyricsId);
   assert.equal(job.harmony.status, 'completed');
   assert.equal(job.harmony.stems.bass.status, 'queued');
-  assert.equal(job.harmony.stems.guitar.status, 'queued');
-  assert.equal(job.harmony.stems.piano, undefined);
+  assert.equal(job.harmony.stems.drums.status, 'queued');
+  assert.equal(job.harmony.stems.guitar, undefined);
 });
 
 test('a failed regeneration reports its error and keeps the last good result of that stem', async () => {
@@ -593,21 +594,21 @@ test('a failed regeneration reports its error and keeps the last good result of 
   const kept = await call(`${parentId}/harmony`, { stem: 'bass' });
   assert.equal(kept.status, 200, 'a stem regenerated once from this source is not redone');
   assert.equal(kept.body.harmony.resultId, otherId);
-  finished('88888888-8888-4888-8888-888888888888', { stem: 'piano', status: 'failed', error: 'x', generatedAt: new Date().toISOString(), failedAt: new Date().toISOString() });
-  assert.equal((await call(`${parentId}/harmony`, { stem: 'piano' })).status, 202, 'a failed one can be tried again');
+  finished('88888888-8888-4888-8888-888888888888', { stem: 'drums', status: 'failed', error: 'x', generatedAt: new Date().toISOString(), failedAt: new Date().toISOString() });
+  assert.equal((await call(`${parentId}/harmony`, { stem: 'drums' })).status, 202, 'a failed one can be tried again');
 });
 
 test('regenerating from the cleaned version uses the newest finished cleanup of that stem', async () => {
   const { call, database } = regeneration();
-  assert.equal((await call(`${parentId}/harmony`, { stem: 'guitar', cleaned: true })).status, 409);
+  assert.equal((await call(`${parentId}/harmony`, { stem: 'bass', cleaned: true })).status, 409);
   const cleanup = (jobId, stem, generatedAt, status = 'completed') => database.put({
     userId: 'owner', jobId, type: 'restoration', parentJobId: parentId, stem, status, generatedAt, key: `users/owner/restored/${jobId}.wav`,
   });
-  cleanup('66666666-6666-4666-8666-666666666666', 'guitar', '2026-01-01T00:00:00.000Z');
-  cleanup('77777777-7777-4777-8777-777777777777', 'guitar', '2026-02-01T00:00:00.000Z');
-  cleanup('88888888-8888-4888-8888-888888888888', 'guitar', '2026-03-01T00:00:00.000Z', 'failed');
-  cleanup('99999999-9999-4999-8999-999999999999', 'piano', '2026-04-01T00:00:00.000Z');
-  const made = await call(`${parentId}/harmony`, { stem: 'guitar', cleaned: true });
+  cleanup('66666666-6666-4666-8666-666666666666', 'bass', '2026-01-01T00:00:00.000Z');
+  cleanup('77777777-7777-4777-8777-777777777777', 'bass', '2026-02-01T00:00:00.000Z');
+  cleanup('88888888-8888-4888-8888-888888888888', 'bass', '2026-03-01T00:00:00.000Z', 'failed');
+  cleanup('99999999-9999-4999-8999-999999999999', 'drums', '2026-04-01T00:00:00.000Z');
+  const made = await call(`${parentId}/harmony`, { stem: 'bass', cleaned: true });
   assert.equal(made.status, 202);
   assert.equal(database.get('owner', made.body.harmony.id).sourceKey, 'users/owner/restored/77777777-7777-4777-8777-777777777777.wav');
 });
@@ -881,4 +882,16 @@ test('the template keeps delete permission away from original stems', () => {
   const api = template.slice(template.indexOf('Deliberately excludes users/*/stems/*'), template.indexOf('Lets HEAD on a missing'));
   assert.ok(api.includes("users/*/restored/*"));
   assert.equal(api.includes('stems/*\''), false);
+});
+
+test('the ensemble part is checked like a stem part, with a key', async () => {
+  const { checkHarmony } = await import('../stem-analysis.mjs');
+  const base = { beats: [0, 1], firstBar: 0, stems: { bass: { chords: [], notes: [] } } };
+  const ensemble = { key: 'F#m', chords: [{ start: 0, name: 'Cmaj7/E' }], notes: [{ start: 0.5, end: 1, pitch: 69, unit: 2, length: 2 }] };
+  assert.ok(checkHarmony({ ...base, ensemble }, 2));
+  assert.ok(checkHarmony(base, 2), 'Bass or drums regenerated alone have no ensemble');
+  for (const bad of [{ ...ensemble, key: 'H' }, { ...ensemble, key: undefined }, { ...ensemble, chords: [{ start: 0, name: '' }] },
+    { ...ensemble, notes: [{ start: 0, end: 1, pitch: 200, unit: 0, length: 1 }] }, null]) {
+    assert.throws(() => checkHarmony({ ...base, ensemble: bad }, 2), /Invalid harmony/, JSON.stringify(bad));
+  }
 });

@@ -1,18 +1,18 @@
 import { useIsFocused } from 'expo-router';
 import { useEffect, useLayoutEffect, useReducer, useRef, useState, type ComponentRef } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { HARMONY_STEMS, STEM_NAMES, getSong, type LyricLine, type SceneEntry, type SceneSettings, type Song, type StemName } from './api';
+import { ENSEMBLE_STEMS, HARMONY_STEMS, REGENERATED_STEMS, STEM_NAMES, getSong, type LyricLine, type SceneEntry, type SceneSettings, type Song, type StemName } from './api';
 import { addCleanedFile, holdSong, songFiles, stemPaths } from './cache';
 import { EFFECT_CONTROLS } from './effects';
 import { t as text } from './i18n';
 import { useT } from './language';
 import { LivePanel } from './live-panel';
-import { Mixer, defaultChannel } from './player';
+import { Mixer, defaultChannel, type Channel } from './player';
 import { ChannelStrip, IconButton, LampSwitch, MasterFader, Timeline } from './mixer-console';
 import { useStemScroll } from './stem-scroll';
 import { focusedStem } from './stem-focus';
 import { stemPeaks } from './waveform';
-import { Button, ButtonRow, Centered, errorText, useConfirm } from './ui';
+import { Button, Centered, errorText, useConfirm } from './ui';
 
 import { snapshot, restore } from './mixer-settings';
 import { HarmonyStrip, LyricsEditor, LyricsStrip } from './score-view';
@@ -92,13 +92,14 @@ function MountedMixer({ jobId, title, entry, onSettings, onEnded, onReady, onSon
     <Button label={t('mixer.retryLoad')} onPress={() => { setMixer(null); setFraction(null); setPeaks({}); setError(''); setAttempt(value => value + 1); }} />
   </View>;
   if (!mixer) return <Centered><Text style={styles.detail}>{fraction === null ? t('mixer.loading') : t('mixer.downloading', { percent: Math.round(fraction * 100) })}</Text></Centered>;
-  return <MixerControls mixer={mixer} song={song} peaks={peaks} />;
+  return <MixerControls mixer={mixer} song={song} peaks={peaks} inScene={!!entry} />;
 }
 
 // Whether the Live input card is shown; remembered while the app is open.
 let liveShown = false;
 
-export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; song?: Song | null; peaks?: StemPeaks }) {
+// `inScene`: opened from a scene, where the mix is saved. From Music nothing is saved, so the song has no reset.
+export function MixerControls({ mixer, song = null, peaks, inScene = false }: { mixer: Mixer; song?: Song | null; peaks?: StemPeaks; inScene?: boolean }) {
   const styles = useStyles(makeStyles), theme = useTheme(), t = useT();
   const [, refresh] = useReducer(count => count + 1, 0);
   const [position, setPosition] = useState(0);
@@ -141,6 +142,7 @@ export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; son
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
   const [liveOpen, setLiveOpen] = useState(liveShown);
+  const [liveExpanded, setLiveExpanded] = useState(false);
   const toggleLive = () => { liveShown = !liveOpen; setLiveOpen(liveShown); };
   const locked = busy || recording;
   const [error, setError] = useState('');
@@ -202,7 +204,8 @@ export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; son
     setEditingLyrics(false);
   };
   const allMuted = STEM_NAMES.every(name => mixer.channel(name).muted);
-  const soloing = STEM_NAMES.some(name => mixer.channel(name).solo);
+  const soloing = mixer.liveChannel.solo || STEM_NAMES.some(name => mixer.channel(name).solo);
+  const liveChannel = mixer.liveChannel;
   const inside = position > mixer.sectionStart && position < mixer.sectionEnd;
   return <View style={styles.page}>
     {!!(error || mixer.error || tasks.error) && <Text accessibilityRole="alert" style={styles.error}>{error || mixer.error || tasks.error}</Text>}
@@ -213,7 +216,11 @@ export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; son
         accessibilityLabel={t('mixer.liveInputHint')} />
       {!liveOpen && mixer.hasTake && <Text style={styles.liveNote}>{t('mixer.takePlays')}</Text>}
     </View>}
-    {song && <LivePanel key={song.jobId} open={liveOpen} mixer={mixer} song={song} tasks={tasks} position={position} onRecording={setRecording} />}
+    {song && <LivePanel key={song.jobId} open={liveOpen} mixer={mixer} song={song} tasks={tasks} position={position} onRecording={setRecording}
+      console={heard => <ChannelConsole {...{ mixer, locked, inside, position, allMuted, soloing, run: operation => void run(operation), onReset: inScene ? () => void reset() : undefined }} label={t('mixer.liveInput')} channel={liveChannel}
+        expanded={liveExpanded} live={heard && !liveChannel.muted && !(soloing && !liveChannel.solo)}
+        onToggle={() => setLiveExpanded(value => !value)} setChannel={change => mixer.setLiveChannel(change)}
+        resetChannel={() => mixer.setLiveChannel(defaultChannel())} />} />}
     {STEM_NAMES.map(name => {
       const channel = mixer.channel(name);
       const label = t(`stem.${name}`);
@@ -251,65 +258,87 @@ export function MixerControls({ mixer, song = null, peaks }: { mixer: Mixer; son
           disabled={locked} onSection={(start, end) => mixer.setSection(start, end)}
           onSeek={time => void run(() => mixer.seek(time))}
           onReset={() => mixer.setSection(0, mixer.duration)} />
-        <Pressable onPress={() => { if (!expanded) openStem(name); }} style={styles.consoleHeading}
-          accessibilityRole="button" accessibilityLabel={t('mixer.controlsFor', { stem: label })} accessibilityState={{ expanded }}>
-          <View style={styles.consoleTitleRow}>
-            <Text style={styles.consoleChevron}>{expanded ? '▾' : '▸'}</Text>
-            <Text style={styles.consoleTitle}>{t('mixer.mixer')}</Text>
-            {!expanded && <Text style={styles.consoleAction}>{t('mixer.showControls')}</Text>}
-          </View>
-          <View style={styles.consoleStatus}>
-            <Text style={styles.statusText}>{Math.round(channel.volume * 100)}%</Text>
-            {channel.muted && <Text style={styles.statusState}>{t('mixer.muted')}</Text>}
-            {channel.solo && <Text style={styles.statusState}>{t('mixer.solo')}</Text>}
-            {replaced && <Text style={styles.statusState}>{t('mixer.yourPart')}</Text>}
-            <View style={[styles.led, live && styles.ledOn]} />
-            <Text style={styles.statusText}>{channel.bypassed ? t('mixer.fxOff') : t('mixer.fxOn')}</Text>
-          </View>
-        </Pressable>
-        {expanded && <View style={styles.console}>
-          <View style={styles.transport}>
-            <IconButton primary icon={mixer.isPlaying ? 'pause' : 'play'} disabled={locked}
-              accessibilityLabel={t(mixer.isPlaying ? 'mixer.pauseAll' : inside ? 'mixer.resumeAll' : 'mixer.playAll')}
-              onPress={() => void run(() => mixer.isPlaying ? mixer.pause() : mixer.play())} />
-            <IconButton icon="stop" disabled={locked || (!mixer.isPlaying && position === mixer.sectionStart)}
-              accessibilityLabel={t('mixer.stopAll')} onPress={() => void run(() => mixer.stop())} />
-            <IconButton icon="mute" accessibilityLabel={t('mixer.muteStem', { stem: label })} on={channel.muted}
-              onPress={() => mixer.setChannel(name, { muted: !channel.muted })} />
-            <IconButton icon="muteAll" accessibilityLabel={t('mixer.muteAll')} on={allMuted}
-              onPress={() => STEM_NAMES.forEach(stem => mixer.setChannel(stem, { muted: !allMuted }))} />
-            <IconButton icon="solo" accessibilityLabel={t('mixer.soloStem', { stem: label })} on={channel.solo}
-              onPress={() => mixer.setChannel(name, { solo: !channel.solo })} />
-            <IconButton icon="loop" accessibilityLabel={t('mixer.loopAll')} on={mixer.loop}
-              onPress={() => mixer.setLoop(!mixer.loop)} />
-            <IconButton icon="reset" accessibilityLabel={t('mixer.resetSettings')} onPress={() => void reset()} />
-          </View>
-          <MasterFader value={Math.round(mixer.volume * 100)} onChange={value => mixer.setVolume(value / 100)} />
-          <ScrollView horizontal style={styles.channels} contentContainerStyle={styles.channelRow}
-            accessibilityLabel={t('mixer.faders', { stem: label })}>
-            {EFFECT_CONTROLS.map(control => {
-              const value = control.key === 'volume' ? Math.round(channel.volume * 100) : channel[control.key];
-              const disabled = channel.bypassed && control.key !== 'volume';
-              return <ChannelStrip key={control.key} label={t(`effect.${control.key}`)} display={displayValue(control.key, value, t('mixer.center'))}
-                value={value} min={control.min} max={control.max} step={control.step} disabled={disabled}
-                note={disabled ? t('mixer.bypassed') : UNITS[control.key]}
-                onChange={next => mixer.setChannel(name, { [control.key]: control.key === 'volume' ? next / 100 : next })} />;
-            })}
-          </ScrollView>
-          <ButtonRow style={styles.switches}>
-            <LampSwitch label={t('mixer.bypass')} accessibilityLabel={t('mixer.bypassFor', { stem: label })} on={channel.bypassed}
-              onPress={() => mixer.setChannel(name, { bypassed: !channel.bypassed })} />
-            <LampSwitch label={t('common.reset')} accessibilityLabel={t('mixer.resetFor', { stem: label })} on={false}
-              onPress={() => mixer.setChannel(name, { ...defaultChannel(), useCleaned: channel.useCleaned })} />
-          </ButtonRow>
-          <Text style={styles.consoleNote}>
-            {t(replaced ? 'mixer.noteReplaced' : channel.bypassed ? 'mixer.noteBypassed'
-              : soloing && !channel.solo ? 'mixer.noteSoloed' : 'mixer.noteDefault')}
-          </Text>
-        </View>}
+        <ChannelConsole {...{ mixer, locked, inside, position, allMuted, soloing, run: operation => void run(operation), onReset: inScene ? () => void reset() : undefined }} label={label} channel={channel} expanded={expanded} live={live} replaced={replaced}
+          onToggle={() => { if (!expanded) openStem(name); }} setChannel={change => mixer.setChannel(name, change)}
+          resetChannel={() => {
+            mixer.setChannel(name, { ...defaultChannel(), useCleaned: channel.useCleaned });
+            if (replaced) mixer.releaseReplacedStem();
+          }} />
       </View>;
     })}
   </View>;
+}
+
+// The mixer console under a stem, and under the live input, which is mixed like a stem.
+interface ConsoleProps {
+  mixer: Mixer; label: string; channel: Channel; expanded: boolean; live: boolean; replaced?: boolean; locked: boolean;
+  inside: boolean; position: number; allMuted: boolean; soloing: boolean;
+  onToggle: () => void; setChannel: (change: Partial<Channel>) => void; resetChannel: () => void;
+  run: (operation: () => Promise<void>) => void;
+  // The whole-song reset; only given in a scene.
+  onReset?: () => void;
+}
+function ChannelConsole({ mixer, label, channel, expanded, live, replaced = false, locked, inside, position, allMuted, soloing,
+  onToggle, setChannel, resetChannel, run, onReset }: ConsoleProps) {
+  const styles = useStyles(makeStyles), t = useT();
+  return <>
+    <Pressable onPress={onToggle} style={styles.consoleHeading}
+      accessibilityRole="button" accessibilityLabel={t('mixer.controlsFor', { stem: label })} accessibilityState={{ expanded }}>
+      <View style={styles.consoleTitleRow}>
+        <Text style={styles.consoleChevron}>{expanded ? '▾' : '▸'}</Text>
+        <Text style={styles.consoleTitle} numberOfLines={1}>{t('mixer.mixerFor', { stem: label })}</Text>
+        {!expanded && <Text style={styles.consoleAction}>{t('mixer.showControls')}</Text>}
+      </View>
+      <View style={styles.consoleStatus}>
+        <Text style={styles.statusText}>{Math.round(channel.volume * 100)}%</Text>
+        {channel.muted && <Text style={styles.statusState}>{t('mixer.muted')}</Text>}
+        {channel.solo && <Text style={styles.statusState}>{t('mixer.solo')}</Text>}
+        {replaced && <Text style={styles.statusState}>{t('mixer.yourPart')}</Text>}
+        <View style={[styles.led, live && styles.ledOn]} />
+        <Text style={styles.statusText}>{channel.bypassed ? t('mixer.fxOff') : t('mixer.fxOn')}</Text>
+      </View>
+    </Pressable>
+    {expanded && <View style={styles.console}>
+      <View style={styles.transport}>
+        <IconButton primary icon={mixer.isPlaying ? 'pause' : 'play'} disabled={locked}
+          accessibilityLabel={t(mixer.isPlaying ? 'mixer.pauseAll' : inside ? 'mixer.resumeAll' : 'mixer.playAll')}
+          onPress={() => void run(() => mixer.isPlaying ? mixer.pause() : mixer.play())} />
+        <IconButton icon="stop" disabled={locked || (!mixer.isPlaying && position === mixer.sectionStart)}
+          accessibilityLabel={t('mixer.stopAll')} onPress={() => void run(() => mixer.stop())} />
+        <IconButton icon="mute" accessibilityLabel={t('mixer.muteStem', { stem: label })} on={channel.muted}
+          onPress={() => setChannel({ muted: !channel.muted })} />
+        <IconButton icon="muteAll" accessibilityLabel={t('mixer.muteAll')} on={allMuted}
+          onPress={() => STEM_NAMES.forEach(stem => mixer.setChannel(stem, { muted: !allMuted }))} />
+        <IconButton icon="solo" accessibilityLabel={t('mixer.soloStem', { stem: label })} on={channel.solo}
+          onPress={() => setChannel({ solo: !channel.solo })} />
+        <IconButton icon="loop" accessibilityLabel={t('mixer.loopAll')} on={mixer.loop}
+          onPress={() => mixer.setLoop(!mixer.loop)} />
+        {onReset && <IconButton icon="reset" accessibilityLabel={t('mixer.resetSettings')} onPress={onReset} />}
+      </View>
+      <MasterFader value={Math.round(mixer.volume * 100)} onChange={value => mixer.setVolume(value / 100)} />
+      <ScrollView horizontal style={styles.channels} contentContainerStyle={styles.channelRow}
+        accessibilityLabel={t('mixer.faders', { stem: label })}>
+        {EFFECT_CONTROLS.map(control => {
+          const value = control.key === 'volume' ? Math.round(channel.volume * 100) : channel[control.key];
+          const disabled = channel.bypassed && control.key !== 'volume';
+          return <ChannelStrip key={control.key} label={t(`effect.${control.key}`)} display={displayValue(control.key, value, t('mixer.center'))}
+            value={value} min={control.min} max={control.max} step={control.step} disabled={disabled}
+            note={disabled ? t('mixer.bypassed') : UNITS[control.key]}
+            onChange={next => setChannel({ [control.key]: control.key === 'volume' ? next / 100 : next })} />;
+        })}
+      </ScrollView>
+      <View style={styles.switches}>
+        <LampSwitch small label={t('mixer.bypass')} accessibilityLabel={t('mixer.bypassFor', { stem: label })} on={channel.bypassed}
+          onPress={() => setChannel({ bypassed: !channel.bypassed })} />
+        <LampSwitch small label={t('common.reset')} accessibilityLabel={t('mixer.resetFor', { stem: label })} on={false}
+          onPress={resetChannel} />
+      </View>
+      <Text style={styles.consoleNote}>
+        {t(replaced ? 'mixer.noteReplaced' : channel.bypassed ? 'mixer.noteBypassed'
+          : soloing && !channel.solo ? 'mixer.noteSoloed' : 'mixer.noteDefault')}
+      </Text>
+    </View>}
+  </>;
 }
 
 // The website's lyrics and 악보 controls for one stem: find, edit or regenerate, then the scrolling strip.
@@ -328,18 +357,21 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
     : !parts ? tasks.findingChords ? { label: t('tasks.findingNotes') }
       : { label: t(name === 'drums' ? 'tasks.drumScore' : 'tasks.chordsMelody'), onPress: tasks.findChords, hint: t('tasks.findHint') }
       : regenerating ? { label: t('tasks.regenerating') }
-        : { label: regenerateLabel(name), onPress: () => tasks.regenerate(name, cleaned),
-          hint: t('tasks.regenerateFor', { action: regenerateLabel(name), stem: label }) };
+        : !REGENERATED_STEMS.includes(name) ? null
+          : { label: regenerateLabel(name), onPress: () => tasks.regenerate(name, cleaned),
+            hint: t('tasks.regenerateFor', { action: regenerateLabel(name), stem: label }) };
   const failure = vocals ? tasks.lyricsFailure : tasks.chordsFailure ?? tasks.partFailure(name);
   const note = vocals ? !tasks.lyrics && tasks.findingLyrics && t('tasks.lyricsNote') : (parts ? regenerating : tasks.findingChords) && t('tasks.chordsNote');
   return <View>
-    <View style={styles.taskRow}>
+    {action && <View style={styles.taskRow}>
       <Pressable onPress={action.onPress} disabled={!action.onPress || disabled} accessibilityRole="button"
         accessibilityLabel={action.hint ?? action.label} accessibilityState={{ disabled: !action.onPress || disabled }}
         style={[styles.taskButton, (!action.onPress || disabled) && { opacity: 0.5 }]}>
         <Text style={styles.taskButtonText}>{action.label}</Text>
       </Pressable>
-    </View>
+    </View>}
+    {/* The ensemble is written at concert pitch on a treble staff, the same on all three cards. */}
+    {!!part?.key && <Text style={styles.taskHint}>{t('tasks.ensembleNote', { key: part.key })}</Text>}
     {!!failure && <Text accessibilityRole="alert" style={[styles.error, styles.taskError]}>{failure}</Text>}
     {!!note && <Text accessibilityRole="text" style={styles.taskNote}>{note}</Text>}
     {vocals && tasks.lyrics && (tasks.lyrics.length
@@ -347,7 +379,7 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
       : <Text style={styles.taskHint}>{t('tasks.noLyrics')}</Text>)}
     {harmonic && parts && (name === 'drums' && !part && !regenerating
       ? <Text style={styles.taskHint}>{t('tasks.pressDrums')}</Text>
-      : hasMusic(part) && tasks.grid ? <HarmonyStrip part={part!} stem={name} grid={tasks.grid} time={position} />
+      : hasMusic(part) && tasks.grid ? <HarmonyStrip part={part!} stem={ENSEMBLE_STEMS.includes(name) ? 'piano' : name} grid={tasks.grid} time={position} />
         : part ? <Text style={styles.taskHint}>{t('tasks.noChords')}</Text> : null)}
   </View>;
 }
@@ -386,7 +418,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   ledOn: { backgroundColor: '#5cf08a', shadowColor: '#5cf08a', shadowOpacity: 1, shadowRadius: 4, shadowOffset: { width: 0, height: 0 } },
   console: { backgroundImage: t.metal, borderTopWidth: 1, borderTopColor: t.consoleLine, paddingVertical: 10, gap: 8 },
   transport: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14 },
-  switches: { paddingHorizontal: 14 },
+  switches: { flexDirection: 'row', gap: 8, paddingHorizontal: 14 },
   channels: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: t.consoleLine },
   channelRow: { flexDirection: 'row' },
   consoleNote: { fontSize: 12, color: t.consoleMuted, paddingHorizontal: 14 },

@@ -2,7 +2,7 @@ import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
-import { AuthService, Job, LibraryService, ScenesService, StemsService, errorMessage } from './services';
+import { AuthService, Job, LibraryService, ScenesService, StemsService, errorMessage, Usage } from './services';
 import { ConfirmationService } from './confirmation';
 
 @Component({
@@ -79,6 +79,10 @@ export class LoginPage {
       </div>
       <p class="hint">Jobs refresh every 5 seconds while this page is open.
         Failed jobs disappear 10 minutes after failure.</p>
+      @if (usage(); as usage) {
+        <p class="usage" role="status">Splits this month {{ usage.splits.used }}/{{ usage.splits.limit }} ·
+          Songs {{ usage.songs.used }}/{{ usage.songs.limit }}{{ usage.plan === 'premium' ? ' · Premium' : '' }}</p>
+      }
       @if (error()) { <p role="alert" class="error">{{ error() }}</p> }
       @if (busy() && !jobs().length) { <p role="status">Loading your library...</p> }
       @if (!busy() && !jobs().length && !error()) {
@@ -124,6 +128,7 @@ export class ListPage implements OnInit, OnDestroy {
   private destroyed = false;
   private loadedPages = 1;
   readonly jobs = signal<Job[]>([]);
+  readonly usage = signal<Usage | null>(null);
   readonly cursor = signal<string | null>(null);
   readonly busy = signal(false);
   readonly error = signal('');
@@ -164,7 +169,10 @@ export class ListPage implements OnInit, OnDestroy {
         cursor = page.cursor;
         if (!cursor || this.destroyed) break;
       }
+      // The usage line is a convenience; the list still shows if it cannot be read.
+      const usage = await this.stems.usage().catch(() => null);
       if (!this.destroyed) {
+        this.usage.set(usage);
         this.jobs.set([...new Map(jobs.map(job => [job.jobId, job])).values()]);
         this.cursor.set(cursor);
         this.error.set('');

@@ -1,14 +1,15 @@
-// Play along live: the band follows the player's tempo, and the take is kept as the song's user stem.
-import { useEffect, useReducer, useRef, useState } from 'react';
+// Play along live: the input is heard and mixed like a stem, its instrument is found automatically,
+// the band follows the player's tempo, and the take is kept as the song's user stem.
+import { useEffect, useReducer, useRef, useState, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Line, Path } from 'react-native-svg';
 import type { Song } from './api';
-import { INSTRUMENTS, MAX_RATE, MIN_RATE, instrument, type InstrumentId } from './live-follow';
+import { MAX_RATE, MIN_RATE, instrument, type InstrumentId } from './live-follow';
 import { LiveSession, STRENGTHS, type FollowStrength } from './live-session';
 import { deleteTake, loadTake, saveTake, takePath, type LiveTake } from './live-take';
 import { t as text } from './i18n';
 import { useLanguage } from './language';
-import { IconButton, LampSwitch, MasterFader } from './mixer-console';
+import { IconButton, LampSwitch } from './mixer-console';
 import type { Mixer } from './player';
 import type { useSongTasks } from './song-tasks';
 import { type Theme, useStyles, useTheme } from './theme';
@@ -19,8 +20,10 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.fl
 const track = (jobId: string, take: LiveTake) => ({ path: takePath(jobId, take), duration: take.duration, latency: take.latency,
   points: take.points, volume: take.volume, muted: take.muted });
 
-export function LivePanel({ open, mixer, song, tasks, position, onRecording }: {
+export function LivePanel({ open, mixer, song, tasks, position, onRecording, console: mixerConsole }: {
   open: boolean; mixer: Mixer; song: Song; tasks: ReturnType<typeof useSongTasks>; position: number; onRecording: (recording: boolean) => void;
+  // The same mixer console the stems have; `heard` is whether the input or the take is sounding.
+  console: (heard: boolean) => ReactNode;
 }) {
   const styles = useStyles(makeStyles), theme = useTheme(), { t, language } = useLanguage();
   const confirm = useConfirm();
@@ -28,35 +31,38 @@ export function LivePanel({ open, mixer, song, tasks, position, onRecording }: {
   // The panel is keyed by song, so the saved take is read once.
   const [saved] = useState(() => loadTake(jobId));
   const [take, setTake] = useState(saved);
-  // One take per song: the take's instrument is the song's, and the picker relabels it.
-  const [chosen, setChosen] = useState<InstrumentId>(saved?.instrument ?? 'guitar');
-  const [replace, setReplace] = useState(saved?.replace ?? true);
+  // Found from the input while recording; a saved take keeps the instrument it was played on.
+  const [detected, setDetected] = useState<InstrumentId | null>(saved?.instrument ?? null);
+  // Part of the scene entry's mix (mixer-settings.ts), so it is kept per scene, not per song. Off by default:
+  // the instrument is guessed, and a wrong guess would silence a band part.
+  const replace = mixer.replacePart;
   const [session, setSession] = useState<LiveSession | null>(null);
   const [strength, setStrength] = useState<FollowStrength>('normal');
-  const [monitor, setMonitor] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState('');
   const [, refresh] = useReducer(count => count + 1, 0);
   const active = useRef<LiveSession | null>(null);
 
   useEffect(() => {
-    if (saved) mixer.attachTake(track(jobId, saved)).catch(failure => setError(text('live.loadFailed', { error: errorText(failure) })));
+    if (!saved) return;
+    mixer.attachTake(track(jobId, saved)).catch(failure => setError(text('live.loadFailed', { error: errorText(failure) })));
   }, [saved, jobId, mixer]);
   // Leaving the screen mid-take keeps what was played.
   useEffect(() => () => { void active.current?.stop(true).catch(failure => console.warn('Live take was not saved', failure)); }, []);
   useEffect(() => session?.subscribe(refresh), [session]);
 
-  const current = instrument(chosen);
+  const { muted } = mixer.liveChannel;
+
+  const current = detected ? instrument(detected) : null;
   const recording = !!session;
   // The band's matching part goes quiet while the player is heard: live, or through an unmuted take.
-  const replacedStem = replace && current.stem && (recording || (take && !take.muted)) ? current.stem : null;
+  const replacedStem = replace && current?.stem && (recording || (take && !muted)) ? current.stem : null;
   useEffect(() => { mixer.setReplacedStem(replacedStem); }, [mixer, replacedStem]);
   useEffect(() => () => mixer.setReplacedStem(null), [mixer]);
-
   const finished = (saved: LiveTake | null, failure?: string) => {
     active.current = null;
     setSession(null); onRecording(false);
-    if (saved) setTake(saved);
+    if (saved) { setTake(saved); setDetected(saved.instrument); }
     if (failure) setError(failure);
   };
   const record = async () => {
@@ -64,9 +70,11 @@ export function LivePanel({ open, mixer, song, tasks, position, onRecording }: {
     if (take && !await confirm(t('live.newTitle'), t('live.newMessage'), t('live.newAction'))) return;
     setError(''); setStarting(true);
     try {
-      const started = await LiveSession.start({ mixer, jobId, beats: tasks.grid.beats, strength, monitor, previous: take, instrument: chosen, replace });
+      const started = await LiveSession.start({ mixer, jobId, beats: tasks.grid.beats, strength, previous: take, replace });
       started.onFinished = finished;
+      started.onInstrument = setDetected;
       active.current = started;
+      setDetected(null);
       setSession(started); onRecording(true);
     } catch (failure) { setError(errorText(failure)); }
     finally { setStarting(false); }
@@ -81,25 +89,29 @@ export function LivePanel({ open, mixer, song, tasks, position, onRecording }: {
     try { await mixer.removeTake(); deleteTake(jobId); setTake(null); }
     catch (failure) { setError(errorText(failure)); }
   };
-  const choose = (id: InstrumentId) => { setChosen(id); update({ instrument: id }); };
-  const toggleReplace = () => { setReplace(!replace); update({ replace: !replace }); };
+  const toggleReplace = () => mixer.setReplacePart(!replace);
   const update = (change: Partial<LiveTake>) => {
     if (!take) return;
     const next = { ...take, ...change };
     setTake(next);
     saveTake(jobId, next);
     if (change.latency !== undefined) void mixer.attachTake(track(jobId, next)).catch(failure => setError(errorText(failure)));
-    else if (change.volume !== undefined || change.muted !== undefined) mixer.setTakeLevel({ volume: next.volume, muted: next.muted });
   };
 
   // Hidden, the panel still loads the take and keeps the band's part silenced while it plays.
   if (!open && !recording) return null;
   const status = session?.status;
-  const stemLabel = current.stem ? t(`stem.${current.stem}`) : '';
+  const stemLabel = current?.stem ? t(`stem.${current.stem}`) : '';
+  const instrumentLabel = current ? t(`instrument.${current.id}`) : '';
   return <View style={styles.card}>
     <View style={styles.header}>
       <View style={styles.titleBlock}>
-        <Text style={styles.title}>{current.id === 'other' ? t('live.titleOther') : t('live.title', { instrument: t(`instrument.${current.id}`) })}</Text>
+        <View style={styles.titleRow}>
+          <Text style={styles.title}>{t('mixer.liveInput')}</Text>
+          <Text style={[styles.badge, !current && styles.badgeWaiting]} accessibilityLiveRegion="polite">
+            {current ? instrumentLabel : recording ? t('live.detecting') : t('live.autoInstrument')}
+          </Text>
+        </View>
         <Text style={styles.subtitle} numberOfLines={1}>
           {recording ? t('live.recordingStatus')
             : take ? t('live.yourTake', { length: clock(take.duration), date: new Date(take.recordedAt).toLocaleDateString(language) })
@@ -112,66 +124,55 @@ export function LivePanel({ open, mixer, song, tasks, position, onRecording }: {
         accessibilityLabel={t(recording ? 'live.stopSave' : take ? 'live.recordNew' : 'live.record')}
         onPress={() => void (recording ? stop() : record())} />
     </View>
-    {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
-    {!tasks.grid && !recording && <View style={styles.row}>
-      <Text style={[styles.note, styles.grow]}>
-        {t(tasks.findingChords ? 'live.findingBeats' : 'live.needBeats')}
-      </Text>
-      {!tasks.findingChords && <Pressable onPress={tasks.findChords} accessibilityRole="button" style={styles.chip}>
-        <Text style={styles.chipText}>{t('live.findBeats')}</Text>
-      </Pressable>}
-    </View>}
-    {recording && status && <View style={styles.readout} accessibilityLiveRegion="polite">
-      <View style={[styles.recLamp, status.seconds % 1 < .5 && styles.recLampOn]} />
-      <Text style={styles.readoutText}>{clock(status.seconds)}</Text>
-      <Text style={styles.readoutText}>{t('live.band', { rate: status.rate.toFixed(2) })}</Text>
-      <Text style={styles.readoutText}>{status.locked ? t('live.beat', { beat: Math.max(1, Math.round(status.beat) + 1) }) : t(status.notes ? 'live.listening' : 'live.waiting')}</Text>
-      <View style={styles.meter} accessibilityLabel={t('live.level')}>
-        <View style={[styles.meterFill, { width: `${Math.max(0, Math.min(100, (status.level + 60) / 60 * 100))}%` }]} />
-      </View>
-    </View>}
-    {!recording && <View style={styles.row} accessibilityRole="radiogroup" accessibilityLabel={t('live.yourInstrument')}>
-      {INSTRUMENTS.map(item => <Pressable key={item.id} onPress={() => choose(item.id)} accessibilityRole="radio"
-        accessibilityState={{ checked: chosen === item.id }} style={[styles.pick, chosen === item.id && styles.segmentOn]}>
-        <Text style={[styles.segmentText, chosen === item.id && { color: theme.onAccent }]}>{t(`instrument.${item.id}`)}</Text>
-      </Pressable>)}
-    </View>}
-    {!recording && !!current.stem && <View style={styles.row}>
-      <LampSwitch label={t('live.bandOff', { stem: stemLabel })} on={replace} onPress={toggleReplace}
-        accessibilityLabel={t('live.silenceHint', { stem: stemLabel })} />
-      <Text style={[styles.note, styles.grow]}>{t(replace ? 'live.stemOff' : 'live.stemOn', { stem: stemLabel })}</Text>
-    </View>}
-    {!recording && !!tasks.grid && <View style={styles.row}>
-      <Text style={styles.label}>{t('live.follow')}</Text>
-      <View style={styles.segments} accessibilityRole="radiogroup" accessibilityLabel={t('live.followHint')}>
-        {STRENGTHS.map(item => <Pressable key={item.id} onPress={() => setStrength(item.id)} accessibilityRole="radio"
-          accessibilityState={{ checked: strength === item.id }} style={[styles.segment, strength === item.id && styles.segmentOn]}>
-          <Text style={[styles.segmentText, strength === item.id && { color: theme.onAccent }]}>{t(`follow.${item.id}`)}</Text>
-        </Pressable>)}
-      </View>
-      <LampSwitch label={t('live.hear')} on={monitor} onPress={() => setMonitor(value => !value)}
-        accessibilityLabel={t('live.hearHint')} />
-    </View>}
-    {take && !recording && <>
-      <TempoLine take={take} duration={mixer.duration} position={position} />
-      <View style={styles.row}>
-        <IconButton icon="mute" on={take.muted} accessibilityLabel={t('live.mute')} onPress={() => update({ muted: !take.muted })} />
-        <View style={styles.grow}>
-          <MasterFader label={t('live.take')} value={Math.round(take.volume * 100)} onChange={value => update({ volume: value / 100 })} />
+    <View style={styles.body}>
+      {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
+      {!tasks.grid && !recording && <View style={styles.row}>
+        <Text style={[styles.note, styles.grow]}>
+          {t(tasks.findingChords ? 'live.findingBeats' : 'live.needBeats')}
+        </Text>
+        {!tasks.findingChords && <Pressable onPress={tasks.findChords} accessibilityRole="button" style={styles.chip}>
+          <Text style={styles.chipText}>{t('live.findBeats')}</Text>
+        </Pressable>}
+      </View>}
+      {recording && status && <View style={styles.readout} accessibilityLiveRegion="polite">
+        <View style={[styles.recLamp, status.seconds % 1 < .5 && styles.recLampOn]} />
+        <Text style={styles.readoutText}>{clock(status.seconds)}</Text>
+        <Text style={styles.readoutText}>{t('live.band', { rate: status.rate.toFixed(2) })}</Text>
+        <Text style={styles.readoutText}>{status.locked ? t('live.beat', { beat: Math.max(1, Math.round(status.beat) + 1) }) : t(status.notes ? 'live.listening' : 'live.waiting')}</Text>
+        <View style={styles.meter} accessibilityLabel={t('live.level')}>
+          <View style={[styles.meterFill, { width: `${Math.max(0, Math.min(100, (status.level + 60) / 60 * 100))}%` }]} />
         </View>
-      </View>
-      <View style={styles.row}>
-        <Text style={styles.label}>{t('live.sync')}</Text>
-        <Pressable onPress={() => update({ latency: Math.max(-0.3, take.latency - SYNC_STEP) })} accessibilityRole="button"
-          accessibilityLabel={t('live.earlierHint')} style={styles.chip}><Text style={styles.chipText}>{t('live.earlier')}</Text></Pressable>
-        <Text style={styles.readoutValue}>{Math.round(take.latency * 1000)} ms</Text>
-        <Pressable onPress={() => update({ latency: Math.min(0.5, take.latency + SYNC_STEP) })} accessibilityRole="button"
-          accessibilityLabel={t('live.laterHint')} style={styles.chip}><Text style={styles.chipText}>{t('live.later')}</Text></Pressable>
-      </View>
-    </>}
-    {!recording && <Text style={styles.note}>
-      {t(`live.hint.${current.id}`)} {t('live.headphones')}
-    </Text>}
+      </View>}
+      {!recording && !!current?.stem && <View style={styles.row}>
+        <LampSwitch label={t('live.bandOff', { stem: stemLabel })} on={replace} onPress={toggleReplace}
+          accessibilityLabel={t('live.silenceHint', { stem: stemLabel })} />
+        <Text style={[styles.note, styles.grow]}>{t(replace ? 'live.stemOff' : 'live.stemOn', { stem: stemLabel })}</Text>
+      </View>}
+      {!recording && !!tasks.grid && <View style={styles.row}>
+        <Text style={styles.label}>{t('live.follow')}</Text>
+        <View style={styles.segments} accessibilityRole="radiogroup" accessibilityLabel={t('live.followHint')}>
+          {STRENGTHS.map(item => <Pressable key={item.id} onPress={() => setStrength(item.id)} accessibilityRole="radio"
+            accessibilityState={{ checked: strength === item.id }} style={[styles.segment, strength === item.id && styles.segmentOn]}>
+            <Text style={[styles.segmentText, strength === item.id && { color: theme.onAccent }]}>{t(`follow.${item.id}`)}</Text>
+          </Pressable>)}
+        </View>
+      </View>}
+      {take && !recording && <>
+        <TempoLine take={take} duration={mixer.duration} position={position} />
+        <View style={styles.row}>
+          <Text style={styles.label}>{t('live.sync')}</Text>
+          <Pressable onPress={() => update({ latency: Math.max(-0.3, take.latency - SYNC_STEP) })} accessibilityRole="button"
+            accessibilityLabel={t('live.earlierHint')} style={styles.chip}><Text style={styles.chipText}>{t('live.earlier')}</Text></Pressable>
+          <Text style={styles.readoutValue}>{Math.round(take.latency * 1000)} ms</Text>
+          <Pressable onPress={() => update({ latency: Math.min(0.5, take.latency + SYNC_STEP) })} accessibilityRole="button"
+            accessibilityLabel={t('live.laterHint')} style={styles.chip}><Text style={styles.chipText}>{t('live.later')}</Text></Pressable>
+        </View>
+      </>}
+      {!recording && <Text style={styles.note}>
+        {t(`live.hint.${current?.id ?? 'other'}`)} {t('live.headphones')}
+      </Text>}
+    </View>
+    {mixerConsole(recording || (!!take && mixer.isPlaying))}
   </View>;
 }
 
@@ -210,8 +211,13 @@ function TempoLine({ take, duration, position }: { take: LiveTake; duration: num
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
-  card: { backgroundColor: t.surface, borderRadius: 10, borderWidth: 1, borderColor: t.line, padding: 14, gap: 10 },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  // The same card as a stem's (mixer-view.tsx), so the live input reads as one more part of the mix.
+  card: { backgroundColor: t.surface, borderRadius: 10, borderWidth: 1, borderColor: t.line, overflow: 'hidden', paddingTop: 12 },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, minHeight: 36 },
+  body: { paddingHorizontal: 14, paddingTop: 10, gap: 10 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  badge: { fontSize: 12, fontWeight: '700', color: t.onAccent, backgroundColor: t.accent, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, overflow: 'hidden' },
+  badgeWaiting: { color: t.muted, backgroundColor: t.surfaceMuted },
   titleBlock: { flex: 1, minWidth: 0 },
   title: { fontSize: 16, fontWeight: '700', color: t.ink },
   subtitle: { fontSize: 12, color: t.muted, marginTop: 2 },

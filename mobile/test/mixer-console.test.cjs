@@ -75,19 +75,19 @@ test('vertical channel fader maps touch to web range, snaps to step and clamps',
   const fader = find(view.tree, byLabel('Bass'));
   assert.equal(fader.props.accessibilityRole, 'adjustable');
   const thumb = () => fader.props.children[1].props.style[1].top;
-  assert.equal(thumb(), 63, 'Centre value sits halfway along the 126pt travel');
+  assert.equal(thumb(), 33, 'Centre value sits halfway along the 66pt travel');
   const responder = fader.props.responder;
   assert.equal(responder.onStartShouldSetPanResponder({ nativeEvent: { locationY: 12 } }), false,
     'Touching the track away from the knob lets the page scroll');
   assert.equal(responder.onMoveShouldSetPanResponder({ nativeEvent: {} }, { dx: 0, dy: 40 }), false);
   // Dragging the knob up to the top reaches the maximum, and down past the bottom the minimum.
-  drag(fader, { locationY: 75 }, [{ dx: 0, dy: -63 }, { dx: 0, dy: 0 }, { dx: 0, dy: 500 }]);
+  drag(fader, { locationY: 45 }, [{ dx: 0, dy: -33 }, { dx: 0, dy: 0 }, { dx: 0, dy: 500 }]);
   assert.deepEqual(changes, [12, 0, -12]);
   changes.length = 0;
-  drag(fader, { locationY: 75 }, [{ dx: 0, dy: -10 }]);
+  drag(fader, { locationY: 45 }, [{ dx: 0, dy: -10 }]);
   assert.ok(changes.every(next => Number.isInteger(next * 2)), `Values snap to 0.5 dB: ${changes}`);
   view.rerender();
-  assert.ok(find(view.tree, byLabel('Bass')).props.children[1].props.style[1].top < 63, 'Thumb moves up for a higher value');
+  assert.ok(find(view.tree, byLabel('Bass')).props.children[1].props.style[1].top < 33, 'Thumb moves up for a higher value');
 });
 
 test('bypassed faders ignore drags', () => {
@@ -142,4 +142,19 @@ test('S/E arrow markers keep a valid interval and the playhead seeks only on rel
   assert.equal(find(view.tree, props => props.children?.[0] === 'Playing ')?.props.children[1], '60.00');
   timeline.props.responder.onPanResponderRelease({ nativeEvent: {} }, { dx: 300, dy: 0 });
   assert.deepEqual(seeks, [80], 'Release seeks once, clamped to the interval');
+});
+
+test('S and E markers move left as well as right', () => {
+  const h = harness(), sections = [];
+  let start = 0, end = 100;
+  const view = h.mount(h.Timeline, () => ({ label: 'Bass', duration: 100, start, end, position: 0,
+    onSection: (a, b) => { sections.push([a, b]); start = a; end = b; }, onSeek() {}, onReset() {} }));
+  find(view.tree, props => !!props.onLayout).props.onLayout({ nativeEvent: { layout: { width: 200 } } });
+  drag(find(view.tree, byLabel('Bass end marker')), {}, [{ dx: -50, dy: 0 }]);
+  assert.deepEqual(sections.at(-1), [0, 75], 'E at the end of the song moves left');
+  view.rerender();
+  drag(find(view.tree, byLabel('Bass start marker')), {}, [{ dx: 60, dy: 0 }]);
+  view.rerender();
+  drag(find(view.tree, byLabel('Bass start marker')), {}, [{ dx: -20, dy: 0 }]);
+  assert.deepEqual(sections.at(-1), [20, 75], 'S moves back left after moving right');
 });

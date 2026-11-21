@@ -93,7 +93,8 @@ export function LyricsStrip({ lines, time }: { lines: LyricLine[]; time: number 
 // The score is drawn in chunks of four bars, and only those near the playhead are mounted.
 const CHUNK = UNITS_PER_BAR * 4 * UNIT_WIDTH;
 const MARGIN = 320;
-const HEIGHT = 128;
+// A strip with chord names only, before any notes are found.
+const CHORDS_ONLY = 30;
 const chunkOf = (x: number) => Math.floor(x / CHUNK);
 
 interface Score {
@@ -105,14 +106,34 @@ interface Score {
   rests: ScoreRest[];
   bars: number[];
   spans: { unit: number; length: number }[];
+  // The strip shows only rows the song uses: from just above its chord names to just below its lowest mark.
+  top: number; height: number; chordY: number;
+}
+
+const CHORD_TEXT = 15, CHORD_GAP = 6, EDGE = 6;
+// The highest and lowest y any mark of the score reaches, staff included.
+function extent(notes: NotePiece[][], strokes: Score['strokes'], beams: Score['beams']) {
+  let low = STAFF_LINES[4], high = STAFF_LINES[0];
+  const reach = (...ys: number[]) => { for (const y of ys) { low = Math.min(low, y); high = Math.max(high, y); } };
+  for (const piece of notes.flat()) {
+    reach(piece.y - 5, piece.y + 5, ...piece.ledgers);
+    if (piece.stem) reach(piece.stem.end);
+    if (piece.tie) reach(piece.y - 15, piece.y + 15);
+  }
+  for (const stroke of strokes) {
+    reach(...stroke.heads.flatMap(head => [head.y - 5, head.y + 5]), ...stroke.stems.flatMap(stem => [stem.from, stem.to]));
+    if (stroke.ledger) reach(CYMBAL_LEDGER);
+  }
+  for (const beam of beams) reach(beam.y, beam.y + BEAM_HEIGHT);
+  return { low, high };
 }
 
 function layout(part: HarmonyPart, stem: string, grid: HarmonyGrid): Score {
   const drums = stem === 'drums';
   const written = part.notes.length > 0 || !!part.hits?.length;
   const drawn = drumScore(part.hits ?? [], grid.firstBar);
-  const chords = drums
-    ? (part.patterns ?? []).map(pattern => ({ name: pattern.label, unit: pattern.unit, x: pattern.unit * UNIT_WIDTH + UNIT_WIDTH / 2 }))
+  // Drums have no chords; the score is written from the hits alone.
+  const chords = drums ? []
     // Chords land on the nearest eighth note, so they line up with the notes below.
     : part.chords.map(chord => {
       const unit = Math.round(positionAt(grid.beats, chord.start) / 2) * 2;
@@ -122,12 +143,19 @@ function layout(part: HarmonyPart, stem: string, grid: HarmonyGrid): Score {
   if (written) {
     for (let unit = grid.firstBar * 4; unit < grid.beats.length * 4; unit += UNITS_PER_BAR) bars.push(unit * UNIT_WIDTH - UNIT_WIDTH / 2);
   }
+  const notes = drums ? [] : part.notes.map(note => notePieces(stem, note, grid.firstBar));
+  const strokes = drums ? drawn.strokes : [], beams = drums ? drawn.beams : [];
+  let top = 0, height = CHORDS_ONLY, chordY = 18;
+  if (written) {
+    const { low, high } = extent(notes, strokes, beams);
+    chordY = low - CHORD_GAP;
+    top = (chords.length ? chordY - CHORD_TEXT : low) - EDGE;
+    height = high + EDGE - top;
+  }
   return {
-    drums, written, chords, bars,
-    notes: drums ? [] : part.notes.map(note => notePieces(stem, note, grid.firstBar)),
-    strokes: drums ? drawn.strokes : [], beams: drums ? drawn.beams : [],
+    drums, written, chords, bars, notes, strokes, beams,
     rests: drums ? drawn.rests : scoreRests(part.notes, grid.firstBar),
-    spans: drums ? drawn.strokes : part.notes,
+    spans: drums ? drawn.strokes : part.notes, top, height, chordY,
   };
 }
 
@@ -184,9 +212,9 @@ const Chunk = memo(function Chunk({ score, chunk, activeChord, activeNote }: {
   const theme = useTheme();
   const inside = (x: number) => chunkOf(x) === chunk;
   const left = chunk * CHUNK - MARGIN, width = CHUNK + 2 * MARGIN;
-  return <Svg width={width} height={HEIGHT} viewBox={`${left} 0 ${width} ${HEIGHT}`} style={{ position: 'absolute', left, top: 0 }}>
+  return <Svg width={width} height={score.height} viewBox={`${left} ${score.top} ${width} ${score.height}`} style={{ position: 'absolute', left, top: 0 }}>
     {score.bars.filter(inside).map(x => <Line key={x} x1={x} x2={x} y1={STAFF_LINES[4]} y2={STAFF_LINES[0]} stroke={theme.staff} strokeWidth={1} />)}
-    {score.chords.map((chord, index) => inside(chord.x) && <SvgText key={index} x={chord.x} y={18} textAnchor="middle" fontWeight="700"
+    {score.chords.map((chord, index) => inside(chord.x) && <SvgText key={index} x={chord.x} y={score.chordY} textAnchor="middle" fontWeight="700"
       fontSize={index === activeChord ? 16 : 14} fill={index === activeChord ? theme.accent : theme.scoreInk}>{chord.name}</SvgText>)}
     {score.rests.map((rest, index) => inside(rest.x) && <RestMark key={index} rest={rest} />)}
     {score.beams.map((beam, index) => inside(beam.x) && <Rect key={index} x={beam.x} y={beam.y} width={beam.width} height={BEAM_HEIGHT} fill={theme.note} />)}
@@ -214,18 +242,20 @@ export function HarmonyStrip({ part, stem, grid, time }: { part: HarmonyPart; st
   const clef = CLEFS[stem]?.clef;
   const label = score.drums ? t('score.drumLabel', { count: score.strokes.length })
     : t('score.chordsLabel', { chords: part.chords.map(item => item.name).slice(0, 40).join(', ') });
-  return <View style={[styles.harmony, !score.written && styles.chordsOnly]} onLayout={event => setWidth(event.nativeEvent.layout.width)}
+  const staffTop = STAFF_LINES[4] - score.top;
+  return <View style={[styles.harmony, { height: score.height }]} onLayout={event => setWidth(event.nativeEvent.layout.width)}
     accessible accessibilityRole="image" accessibilityLabel={label}>
-    {score.written && STAFF_LINES.map(y => <View key={y} style={[styles.staffLine, { top: y }]} />)}
+    {score.written && STAFF_LINES.map(y => <View key={y} style={[styles.staffLine, { top: y - score.top }]} />)}
     <View style={styles.window}>
-      <Animated.View style={[styles.flow, { opacity: width ? 1 : 0, transform: [{ translateX: offset }] }]}>
+      <Animated.View style={[styles.flow, { height: score.height, opacity: width ? 1 : 0, transform: [{ translateX: offset }] }]}>
         {chunks.map(chunk => <Chunk key={chunk} score={score} chunk={chunk}
           activeChord={chord >= 0 && chunkOf(score.chords[chord].x) === chunk ? chord : -1}
           activeNote={activeNote >= 0 && chunkOf(noteX(activeNote)) === chunk ? activeNote : -1} />)}
       </Animated.View>
     </View>
-    {score.drums ? <View style={styles.drumClef} />
-      : score.written && <Text style={[styles.clef, clef === 'bass' ? styles.bassClef : styles.trebleClef]}>{clef === 'bass' ? '𝄢' : '𝄞'}</Text>}
+    {score.drums ? <View style={[styles.drumClef, { top: staffTop + 8 }]} />
+      : score.written && <Text style={[styles.clef, clef === 'bass' ? styles.bassClef : styles.trebleClef,
+        { top: staffTop - (clef === 'bass' ? 16 : 10) }]}>{clef === 'bass' ? '𝄢' : '𝄞'}</Text>}
     <Fades />
     <View pointerEvents="none" style={styles.now} />
   </View>;
@@ -301,15 +331,14 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   word: { color: t.wordDim, fontSize: 16, lineHeight: 24 },
   wordNear: { color: t.wordNear },
   wordActive: { color: t.wordActive, fontWeight: '700' },
-  harmony: { height: HEIGHT, marginTop: 10, marginHorizontal: 14, borderRadius: 6, backgroundColor: t.strip, overflow: 'hidden' },
-  chordsOnly: { height: 30 },
+  harmony: { marginTop: 10, marginHorizontal: 14, borderRadius: 6, backgroundColor: t.strip, overflow: 'hidden' },
   staffLine: { position: 'absolute', left: 0, right: 0, height: 1, marginTop: -0.5, backgroundColor: t.staff },
   window: { position: 'absolute', top: 0, bottom: 0, left: 44, right: 0, overflow: 'hidden' },
-  flow: { position: 'absolute', left: -44, top: 0, height: HEIGHT, width: 1 },
+  flow: { position: 'absolute', left: -44, top: 0, width: 1 },
   clef: { position: 'absolute', left: 6, color: t.scoreInk },
-  trebleClef: { top: 46, fontSize: 44, lineHeight: 52 },
-  bassClef: { top: 40, fontSize: 34, lineHeight: 52 },
-  drumClef: { position: 'absolute', left: 12, top: 64, width: 10, height: 16, borderLeftWidth: 3, borderRightWidth: 3, borderColor: t.scoreInk },
+  trebleClef: { fontSize: 44, lineHeight: 52 },
+  bassClef: { fontSize: 34, lineHeight: 52 },
+  drumClef: { position: 'absolute', left: 12, width: 10, height: 16, borderLeftWidth: 3, borderRightWidth: 3, borderColor: t.scoreInk },
   now: { position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, backgroundColor: t.accent, opacity: 0.45 },
   editor: { flex: 1, backgroundColor: t.dialog, paddingTop: 56 },
   editorHeader: { paddingHorizontal: 18, paddingBottom: 12, gap: 4, borderBottomWidth: 1, borderBottomColor: t.line },

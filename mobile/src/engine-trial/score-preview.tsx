@@ -20,7 +20,7 @@ const BASS: HarmonyPart = {
     { start: 2, end: 3, pitch: 41, unit: 8, length: 3 }, { start: 3, end: 4, pitch: 42, unit: 12, length: 8 }],
 };
 const DRUMS: HarmonyPart = {
-  chords: [], notes: [], patterns: [{ unit: 0, label: 'A' }, { unit: 16, label: 'A' }, { unit: 32, label: 'B' }],
+  chords: [], notes: [],
   hits: Array.from({ length: 48 }, (_, unit): DrumHit[] => [
     ...(unit % 2 === 0 ? [{ unit, drum: 'hihat' as const }] : []),
     ...(unit % 8 === 0 ? [{ unit, drum: 'kick' as const }] : []),
