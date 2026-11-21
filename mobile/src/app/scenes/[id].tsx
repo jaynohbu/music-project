@@ -10,7 +10,7 @@ import type { Mixer } from '../../player';
 import { useT } from '../../language';
 import { SceneStore } from '../../scene-store';
 import { Button, ButtonRow, errorText, useConfirm } from '../../ui';
-import { type Theme, useStyles, useTheme } from '../../theme';
+import { type Theme, ThemeBackground, useStyles, useTheme } from '../../theme';
 
 export default function ScenePlayer() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -178,9 +178,10 @@ function SceneEditor({ id }: { id: string }) {
       </> : <Text style={styles.description}>{t('scene.empty')}</Text>}
     </>}
     <Modal visible={picker} animationType="slide" onRequestClose={() => setPicker(false)}>
-      <ScrollView contentContainerStyle={styles.picker}>
+      {/* A modal starts on a plain white page, so it needs the theme's backdrop to show the theme's text. */}
+      <ThemeBackground><ScrollView contentContainerStyle={styles.picker}>
         <Text style={styles.heading}>{t('scene.pickerTitle')}</Text>
-        {songs.map(song => <Pressable key={song.jobId} style={styles.choice}
+        {songs.map(song => <Pressable key={song.jobId} style={[styles.choice, selected.has(song.jobId) && styles.chosen]}
           accessibilityRole="checkbox" accessibilityState={{ checked: selected.has(song.jobId) }}
           onPress={() => setSelected(current => { const next = new Set(current); if (next.has(song.jobId)) next.delete(song.jobId); else next.add(song.jobId); return next; })}>
           <Text style={styles.label}>{selected.has(song.jobId) ? '✓ ' : '○ '}{song.title}</Text>
@@ -188,7 +189,7 @@ function SceneEditor({ id }: { id: string }) {
         {!songs.length && <Text style={styles.description}>{t('scene.noSongs')}</Text>}
         <ButtonRow><Button kind="plain" label={t('common.cancel')} onPress={() => setPicker(false)} />
           <Button label={t('scene.addSelected')} disabled={!selected.size} onPress={add} /></ButtonRow>
-      </ScrollView>
+      </ScrollView></ThemeBackground>
     </Modal>
   </StemScrollView>;
 }
@@ -212,5 +213,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   activeTab: { backgroundColor: t.tabOn, borderBottomColor: t.accent, borderBottomWidth: 3, zIndex: 2 },
   tabLabel: { fontSize: 15, fontWeight: '600', color: t.muted },
   picker: { paddingHorizontal: 20, paddingTop: 64, paddingBottom: 40, gap: 16 },
-  choice: { padding: 16, borderWidth: 1, borderColor: t.line, borderRadius: 10, minHeight: 48 },
+  choice: { padding: 16, borderWidth: 1, borderColor: t.line, borderRadius: 10, minHeight: 48, backgroundColor: t.surface },
+  chosen: { borderColor: t.accent, backgroundColor: t.accentSoft },
 });
