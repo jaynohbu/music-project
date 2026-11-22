@@ -79,6 +79,8 @@ export const CLEFS: Record<string, { clef: 'treble' | 'bass'; bottomStep: number
 export interface NotePiece {
   unit: number; value: number; x: number; y: number; hollow: boolean; stem?: { x: number; end: number };
   flags: string[]; dot?: { x: number; y: number }; tie?: string; ledgers: number[]; accidental: string;
+  // Filled in by the vote among repeated passages: drawn lighter.
+  voted?: boolean;
 }
 export interface ScoreRest { x: number; units: number }
 
@@ -136,7 +138,7 @@ export function notePieces(stem: string, note: HarmonyNote, firstBar: number, vo
       stem: part.value === 16 ? undefined : { x: stemX, end },
       dot: [3, 6, 12].includes(part.value) ? { x: x + 9, y: Math.round(y / LINE_GAP) * LINE_GAP === y ? y - 4 : y } : undefined,
       tie: next ? `M${x + 5} ${y + bow} Q${(x + next.unit * UNIT_WIDTH) / 2} ${y + bow * 2} ${next.unit * UNIT_WIDTH - 5} ${y + bow}` : undefined,
-      accidental: index === 0 ? accidental : '',
+      accidental: index === 0 ? accidental : '', voted: note.voted,
     };
   });
 }
@@ -487,7 +489,7 @@ export function transposePart(part: HarmonyPart, semitones: number, songKey?: st
                 @for (y of piece.ledgers; track y) {
                   <line [attr.x1]="piece.x - 8" [attr.x2]="piece.x + 8" [attr.y1]="y" [attr.y2]="y"></line>
                 }
-                <ellipse rx="5.2" ry="3.8" [class.hollow]="piece.hollow" [attr.cx]="piece.x" [attr.cy]="piece.y"
+                <ellipse rx="5.2" ry="3.8" [class.hollow]="piece.hollow" [class.voted]="piece.voted" [attr.cx]="piece.x" [attr.cy]="piece.y"
                   [attr.transform]="'rotate(-20 ' + piece.x + ' ' + piece.y + ')'"></ellipse>
                 @if (piece.stem; as stem) { <line [attr.x1]="stem.x" [attr.x2]="stem.x" [attr.y1]="piece.y" [attr.y2]="stem.end"></line> }
                 @for (flag of piece.flags; track $index) { <path [attr.d]="flag"></path> }

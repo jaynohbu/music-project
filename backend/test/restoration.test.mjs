@@ -544,7 +544,7 @@ test('harmony results from an older version stay shown until a new run finishes'
   assert.ok(stale.url.endsWith(`${lyricsId}.json`));
   assert.equal((await call(`${parentId}/harmony`, {})).status, 202);
   const running = (await call(parentId, undefined, 'GET')).body.job.harmony;
-  assert.equal(database.get('owner', running.id).version, 14);
+  assert.equal(database.get('owner', running.id).version, 15);
   assert.equal(running.status, 'queued');
   assert.equal(running.stale, undefined);
   assert.equal(running.previous.id, lyricsId, 'The old score is shown while the new one is found');
@@ -558,7 +558,7 @@ test('harmony results from an older version stay shown until a new run finishes'
 function regeneration() {
   const context = setup();
   const finished = (id, fields) => context.database.put({
-    userId: 'owner', jobId: id, type: 'harmony', version: 14, parentJobId: parentId, status: 'completed', title: 'Chords',
+    userId: 'owner', jobId: id, type: 'harmony', version: 15, parentJobId: parentId, status: 'completed', title: 'Chords',
     key: `users/owner/harmony/${parentId}/${id}.json`, generatedAt: new Date(Date.now() - 60000).toISOString(), ...fields,
   });
   finished(lyricsId);
@@ -975,17 +975,17 @@ test('chords are named in the key: sharps in sharp keys, flats in flat keys', { 
   assert.deepEqual(names, ['G#m7/D#', 'Db', 'N.C.', 'G#m', 'Ebm', [4, 8, 11], null]);
 });
 
-test('overtones go; real attacks stay, one top note per sixteenth, weak ones go', { skip: !hasHarmony }, () => {
+test('overtones go; real attacks stay as one chord per sixteenth, weak ones and weak inner notes go', { skip: !hasHarmony }, () => {
   const notes = harmony(`events = [(0.0, 0.9, 52, 0.9), (0.0, 0.9, 64, 0.5), (0.0, 0.9, 71, 0.4), (0.01, 0.9, 56, 0.8),
           (0.0, 0.9, 59, 0.5), (0.0, 0.9, 62, 0.8), (0.5, 0.9, 59, 0.7), (0.75, 0.85, 56, 0.39),
           (1.0, 1.3, 60, 0.9), (1.0, 1.3, 57, 0.7), (2.5, 3, 60, 0.9)]
 chords = [{'start': 0, 'name': 'E'}, {'start': 1.0, 'name': 'Am'}, {'start': 2.0, 'name': 'N.C.'}]
 beats = [i * 0.5 for i in range(10)]
-print(json.dumps([(n['unit'], n['length'], n['pitch']) for n in h.chord_notes(h.without_overtones(events), chords, beats)]))`);
-  // E3's octave and twelfth are overtones; D is not in E; B struck again while it rings is one held B, as strong
-  // as its stronger attack; the soft G# on the second half of beat 2 is no real attack; Am's notes last as long
-  // as they sound; nothing after N.C. Of each chord only the top note is written.
-  assert.deepEqual(notes, [[0, 8, 59], [8, 2, 60]]);
+print(json.dumps([(n['unit'], n['length'], n['pitch']) for n in h.chord_notes(h.without_overtones(events), chords, beats)[0]]))`);
+  // E3's octave and twelfth are overtones; D is not in E but heard clearly, so it stays; B struck again while it
+  // rings is one held B, as strong as its stronger attack; the soft G# on the second half of beat 2 is no real
+  // attack; Am's notes last as long as they sound; nothing after N.C.
+  assert.deepEqual(notes, [[0, 8, 52], [0, 8, 56], [0, 8, 59], [0, 8, 62], [8, 2, 57], [8, 2, 60]]);
 });
 
 test('the same pitch again right after a note is that note held', { skip: !hasHarmony }, () => {
@@ -993,22 +993,23 @@ test('the same pitch again right after a note is that note held', { skip: !hasHa
   assert.deepEqual(joined, [[0, 0.75, 64, 0.8], [0.3, 0.6, 60, 0.6], [1.2, 1.4, 64, 0.5]]);
 });
 
-test('upper and lower notes starting close together are one chord: its top note is written, held where it goes on', { skip: !hasHarmony }, () => {
-  const notes = harmony(`events = [(0.44, 0.9, 52, 0.8), (0.5, 0.9, 59, 0.8), (0.52, 0.9, 64, 0.8), (1.5, 1.9, 64, 0.8),
-          (2.0, 2.5, 59, 0.8), (2.0, 2.5, 67, 0.8), (2.5, 2.9, 67, 0.8), (2.5, 2.9, 60, 0.8)]
+test('upper and lower notes starting close together are written as one chord', { skip: !hasHarmony }, () => {
+  const notes = harmony(`events = [(0.44, 0.9, 52, 0.8), (0.5, 0.9, 59, 0.8), (0.52, 0.9, 64, 0.8), (1.5, 1.9, 64, 0.8)]
 beats = [i * 0.5 for i in range(10)]
-print(json.dumps([(n['unit'], n['pitch'], n['length']) for n in h.chord_notes(events, [{'start': 0, 'name': 'E'}, {'start': 2.0, 'name': 'C'}], beats)]))`);
+print(json.dumps([(n['unit'], n['pitch']) for n in h.chord_notes(events, [{'start': 0, 'name': 'E'}], beats)[0]]))`);
   // The low E comes a sixteenth early (0.44 s is nearer the sixteenth before beat 1); the strum is still one chord.
-  // The G at 2 s goes on at 2.5 s over a new lower note: one held G, the C under it left out.
-  assert.deepEqual(notes, [[3, 64, 4], [12, 64, 4], [16, 67, 7]]);
+  assert.deepEqual(notes, [[3, 52], [3, 59], [3, 64], [12, 64]]);
 });
 
-test('a low note struck alone an octave or more under the melody line is left out', { skip: !hasHarmony }, () => {
-  const notes = harmony(`events = [(i * 0.5, i * 0.5 + 0.4, 64 if i % 2 else 67, 0.8) for i in range(8)] + [(4.25, 4.4, 52, 0.8), (4.75, 4.9, 57, 0.8)]
+test('a note struck again is two notes, one just ringing on is held; one barely struck and faint is no note', { skip: !hasHarmony }, () => {
+  const found = harmony(`events = [(0.0, 0.45, 64, 0.8), (0.5, 0.9, 64, 0.8), (1.0, 1.45, 67, 0.8), (1.5, 1.9, 67, 0.8), (2.5, 2.9, 60, 0.4), (3.0, 3.4, 60, 0.8)]
+attack = {(0.0, 64): 0.9, (0.5, 64): 0.8, (1.0, 67): 0.9, (1.5, 67): 0.2, (2.5, 60): 0.05, (3.0, 60): 0.9}
 beats = [i * 0.5 for i in range(12)]
-print(json.dumps([n['pitch'] for n in h.chord_notes(events, [{'start': 0, 'name': 'C'}], beats)]))`);
-  // E3 is an octave under the E4/G4 line; A3 is not a chord tone of C.
-  assert.deepEqual(notes, [67, 64, 67, 64, 67, 64, 67, 64]);
+notes, heard = h.chord_notes(events, [{'start': 0, 'name': 'C'}], beats, attack, [(3.5, 3.9, 64, 0.25)])
+print(json.dumps({'notes': [(n['unit'], n['pitch'], n['length'], n['sure']) for n in notes], 'heard': sorted((n['unit'], n['pitch']) for n in heard)}))`);
+  assert.deepEqual(found.notes, [[0, 64, 4, 0.84], [4, 64, 4, 0.8], [8, 67, 7, 0.84], [24, 60, 3, 0.84]],
+    'E twice, G once held; the faint C barely struck goes; confidence from strength and attack');
+  assert.deepEqual(found.heard.at(-1), [28, 64], 'A faint note is heard, for the vote, but not written');
 });
 
 test('a stop is quiet against its own loud level around it; a soft intro is not', { skip: !hasHarmony }, () => {
@@ -1018,14 +1019,14 @@ print(json.dumps([bool(q[100]), bool(q[300]), bool(q[405]), bool(q[500])]))`);
   assert.deepEqual(quiet, [false, false, true, false]);
 });
 
-test('repeats copy chords but not rests: each playing keeps its own', { skip: !hasHarmony }, () => {
+test('voted chords: a beat takes what most playings have there; each playing keeps its own rests', { skip: !hasHarmony }, () => {
   const chords = harmony(`import repeats as r
-beats = [i * 2.0 for i in range(40)]
-chords = [{'start': 0, 'name': 'C'}, {'start': 2, 'name': 'N.C.'}, {'start': 3, 'name': 'G'}, {'start': 8, 'name': 'C'}, {'start': 10, 'name': 'F'},
-          {'start': 12, 'name': 'N.C.'}, {'start': 13, 'name': 'Am'}]
-print(json.dumps([(c['start'], c['name']) for c in r.copy_chords(chords, beats, 0, 1, 0, 1)]))`);
-  // Bars are 8 s. Bar 0 (C, a rest, G) copied over bar 1 (C, F, its own rest): bar 1 gets C and G and keeps its rest, not bar 0's.
-  assert.deepEqual(chords, [[0, 'C'], [2, 'N.C.'], [3, 'G'], [8, 'C'], [11, 'G'], [12, 'N.C.'], [13, 'G'], [16, 'Am']]);
+beats = [i * 1.0 for i in range(60)]
+# Bars are 4 s. Three playings of one bar: C C G G, C C G G, and C F G G with a rest at 13 s.
+chords = [{'start': 0, 'name': 'C'}, {'start': 2, 'name': 'G'}, {'start': 4, 'name': 'C'}, {'start': 6, 'name': 'G'},
+          {'start': 8, 'name': 'C'}, {'start': 9, 'name': 'F'}, {'start': 10, 'name': 'G'}, {'start': 12, 'name': 'C'}, {'start': 13, 'name': 'N.C.'}]
+print(json.dumps([(c['start'], c['name']) for c in r.voted_chords(chords, beats, 0, 1, [0, 1, 2])]))`);
+  assert.deepEqual(chords, [[0, 'C'], [2, 'G'], [4, 'C'], [6, 'G'], [8, 'C'], [10, 'G'], [12, 'C'], [13, 'N.C.']]);
 });
 
 test('a long silence and the end of the song are no chord', { skip: !hasHarmony }, () => {
@@ -1039,40 +1040,41 @@ print(json.dumps([(c['name'], c['start']) for c in h.chord_changes(names, audibl
   assert.deepEqual(changes, [['C', 0], ['G', seconds(50)], ['N.C.', seconds(60)], ['G', seconds(90)], ['F', seconds(100)], ['N.C.', seconds(150)]]);
 });
 
-// Repeated passages: a four-bar phrase played three times, the second time with two notes heard wrong.
+// Repeated passages: a four-bar phrase played three times, the second time with two notes missed and one extra.
 const repeatsPython = (body) => JSON.parse(execFileSync(harmonyPython, ['-c',
   `import json, sys; sys.path.insert(0, ${JSON.stringify(fileURLToPath(new URL('..', import.meta.url)))})
 import repeats as r
 beats = [i * 0.5 for i in range(200)]
 phrase = [(0, 60), (2, 62), (4, 64), (6, 65), (8, 67), (12, 65)]
-def passage(bar, changes={}):
+def passage(bar, missing=(), sure=0.8):
     notes = []
     for b in range(4):
         for unit, pitch in phrase:
-            notes.append({'unit': bar * 16 + b * 16 + unit, 'length': 2, 'pitch': changes.get((b, unit), pitch + b), 'start': 0, 'end': 0, 'sure': 0.9 if bar == 8 else 0.6})
+            if (b, unit) not in missing:
+                notes.append({'unit': bar * 16 + b * 16 + unit, 'length': 2, 'pitch': pitch + b, 'start': 0, 'end': 0, 'sure': sure})
     return notes
+heard_there = lambda pitch, seconds: 0.4 if seconds < 2 else 0.1
 ${body}`], { encoding: 'utf8' }));
 
-test('repeated passages take the clearest playing; the second line inside them goes', { skip: !hasHarmony }, () => {
+test('repeated passages correct one another by vote: a note most playings have is added where the sound has some of it', { skip: !hasHarmony }, () => {
   const found = repeatsPython(`
-notes = passage(0, {(1, 4): 70, (2, 8): 71}) + passage(8) + passage(16)
-second = [{'unit': 16 * 9, 'length': 4, 'pitch': 48, 'start': 0, 'end': 0}, {'unit': 16 * 40, 'length': 4, 'pitch': 48, 'start': 0, 'end': 0}]
-chords = [{'start': 0, 'name': 'C'}, {'start': 2.0, 'name': 'F'}, {'start': 16.0, 'name': 'C'}, {'start': 18.0, 'name': 'G'}, {'start': 32.0, 'name': 'C'}, {'start': 34.0, 'name': 'F'}]
-n, s, c, reps = r.unify(notes, second, chords, beats, 0)
-print(json.dumps({'reps': reps, 'first': [x['pitch'] for x in n if x['unit'] < 64], 'clear': [x['pitch'] for x in n if 128 <= x['unit'] < 192],
-  'second': [x['unit'] for x in s], 'sure': any('sure' in x for x in n), 'chords': [(x['start'], x['name']) for x in c]}))`);
-  assert.deepEqual(found.reps.map(rep => [rep.bars, rep.members, rep.source]), [[4, [0, 8, 16], 8]], 'One family of four bars, the surest member chosen');
-  assert.deepEqual(found.first, found.clear, 'The misheard playing is written like the clear one');
-  assert.deepEqual(found.second, [640], 'Second-line notes inside a repeat are dropped, others kept');
-  assert.equal(found.sure, false, 'The working field is not returned');
-  assert.deepEqual(found.chords.slice(0, 2), [[0, 'C'], [2, 'G']], 'Chords follow the clearest playing too');
+extra = [{'unit': 16 + 10, 'length': 2, 'pitch': 50, 'start': 0, 'end': 0, 'sure': 0.4}, {'unit': 32 + 10, 'length': 2, 'pitch': 52, 'start': 0, 'end': 0, 'sure': 0.9}]
+notes = passage(0, missing={(0, 4), (2, 8)}) + extra + passage(8) + passage(16)
+n, c, reps, changes = r.voted(notes, notes, heard_there, [], beats, 0)
+print(json.dumps({'reps': reps, 'first': sorted((x['unit'], x['pitch']) for x in n if x['unit'] < 64), 'changes': changes,
+  'voted': [(x['unit'], x['pitch'], x['sure']) for x in n if x.get('voted')]}))`);
+  assert.deepEqual(found.reps.map(rep => [rep.bars, rep.members]), [[4, [0, 8, 16]]], 'One family of four bars');
+  assert.deepEqual(found.voted, [[4, 64, 0.4]], 'The missed E in the first second is added: its sound has it; the G at 20 s does not');
+  assert.ok(!found.first.some(([unit, pitch]) => unit === 26 && pitch === 50), 'A faint note no other playing has goes');
+  assert.ok(found.first.some(([unit, pitch]) => unit === 42 && pitch === 52), 'A clear one is a variation and stays');
+  assert.deepEqual(found.changes, { added: 1, removed: [{ unit: 26, pitch: 50, length: 2 }] });
 });
 
 test('passages less than 70% alike, or too sparse, are left alone', { skip: !hasHarmony }, () => {
   const found = repeatsPython(`
 other = [{'unit': 128 + i * 4, 'length': 2, 'pitch': 50 + (i * 7) % 23, 'start': 0, 'end': 0} for i in range(16)]
 sparse = [{'unit': 256 + i * 16, 'length': 2, 'pitch': 60, 'start': 0, 'end': 0} for i in range(8)]
-n, s, c, reps = r.unify(passage(0) + other + sparse, [], [], beats, 0)
+n, c, reps, changes = r.voted(passage(0) + other + sparse, [], heard_there, [], beats, 0)
 print(json.dumps(reps))`);
   assert.deepEqual(found, []);
 });

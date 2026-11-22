@@ -18,7 +18,7 @@ from scipy.signal import find_peaks
 
 from note_lines import (BEAT_DRUMS, LEGATO_UNITS, clear_line, drum_units, first_bar, grid_position, grid_shift,
                         note_values, struck_line)
-from repeats import unify
+from repeats import voted
 
 RATE = 22050
 HOP = 2048
@@ -56,17 +56,25 @@ HIHAT_BAND = (6000, 16000)
 HIHAT_HOP = 128  # About 3 ms at the drum rate; the drum model only sees 10 ms steps.
 # The top line guides the chords; lower notes are mostly accompaniment (arpeggios, bass doubling).
 MELODY_LOWEST = 55  # G3
-# The written notes: chord tones from a guitar's low E up.
+# The written notes: from a guitar's low E up, at most this many at once, the strongest kept. Chord tones, and
+# notes outside the chord heard at least OUTSIDE_SURE (a passing or colour note, not to be thrown away).
 LOWEST_CHORD_NOTE = 40
+MOST_AT_ONCE = 6
+OUTSIDE_SURE = 0.6
 # A chord's strongest note must reach this share of the median of the chords within NEIGHBOURHOOD seconds,
-# and LEAST_ATTACK; its notes weaker than IN_CHORD_SHARE of that strongest are dropped before its top is taken.
+# and LEAST_ATTACK; its notes weaker than IN_CHORD_SHARE of that strongest are dropped.
 NEIGHBOURHOOD = 4.0
 ATTACK_SHARE = 0.85
 LEAST_ATTACK = 0.38
 IN_CHORD_SHARE = 0.7
 JOIN_GAP = 0.12
-# Semitones under the melody line around it from which a top note is left out.
-BELOW_LINE = 12
+# A note's attack: the model's onset signal for its pitch and the stem's spectral flux (against its loud level
+# around), each 0 to 1, the larger counting. The same pitch again right after a note is a new strike only with
+# an attack of RESTRIKE; a note with less than WEAK_ATTACK of one, and not clearly heard, is ringing or bleed.
+RESTRIKE = 0.5
+WEAK_ATTACK = 0.1
+# Notes this faint are not written but count as heard, for the vote among repeated passages.
+CANDIDATE = 0.2
 CHORD_SPREAD = 0.07
 # The stems this far below their loud level around that moment are resting: no chord is written, so the
 # accompaniment rests too.
@@ -328,45 +336,55 @@ def without_overtones(events):
     """Events less what are overtones of a stronger note sounding as they start."""
     kept = []
     for event in events:
-        start, _, pitch, strength = event
+        start, pitch, strength = event[0], event[2], event[3]
         if not any(other[2] == pitch - interval and other[0] <= start + 0.05 and other[1] >= start + 0.05 and other[3] >= strength
                    for interval in OVERTONES for other in events):
             kept.append(event)
     return kept
 
 
-def chord_notes(events, chords, beats):
-    """The melody line of the notes belonging to the chord playing as they start, snapped to sixteenths: notes
-    starting on the same sixteenth (or spread as a strum) are one chord, and only its top note is written, the
-    lower ones being the comping's. A chord is kept when its strongest note is a real attack: at least
-    ATTACK_SHARE of the chords around it (so quiet verses keep theirs) and LEAST_ATTACK; a chord whose top note
-    is under the melody note still ringing is left out. The written length is how long the note sounds,
-    up to the next, which it reaches when the gap is a sixteenth or less; the same note again where it ends is
-    held."""
+def chord_notes(events, chords, beats, attack=None, faint=()):
+    """The notes that matter, snapped to sixteenths, as events: notes starting on the same sixteenth (or spread
+    as a strum) are one chord, a set of pitches on the staff. Notes belong to the chord playing as they start,
+    or are heard clearly enough to stand outside it. A chord is kept when its strongest note is a real attack:
+    at least ATTACK_SHARE of the chords around it (so quiet verses keep theirs) and LEAST_ATTACK; inside it,
+    notes much weaker than its strongest are dropped. Its written length is how long its notes sound, up to the
+    next chord, which it reaches when the gap is a sixteenth or less. Each note's sure is its confidence: how
+    strongly it was heard and how clearly it was struck.
+    attack: (start, pitch) -> 0 to 1; faint: events too weak to write. Returns the notes and every note heard,
+    the faint ones included, for the vote among repeated passages."""
+    attack = attack or {}
     starts = [chord['start'] for chord in chords]
-    heard = []
-    for event in events:
-        start, end, pitch, _ = event
+    struck = lambda event: attack.get((event[0], event[2]), 1.0)
+    def belongs(event):
+        start, end, pitch, strength = event
         index = bisect.bisect_right(starts, start + 0.05) - 1
         tones = tones_of(chords[index]['name']) if index >= 0 else None
-        if tones and pitch >= LOWEST_CHORD_NOTE and end - start >= SHORTEST_CHORD_NOTE and pitch % 12 in tones:
-            heard.append(event)
+        return bool(tones) and pitch >= LOWEST_CHORD_NOTE and end - start >= SHORTEST_CHORD_NOTE \
+            and (pitch % 12 in tones or strength >= OUTSIDE_SURE) and (struck(event) >= WEAK_ATTACK or strength >= 0.5)
+    heard = [event for event in events if belongs(event)]
     if not heard:
-        return []
-    heard = joined_repeats(heard)
+        return [], []
+    heard = joined_repeats(heard, attack)
     shift = grid_shift([{'start': event[0]} for event in heard], beats)
-    stacks = {}
-    first = previous = None
-    for event in sorted(heard):
-        # A note starting within CHORD_SPREAD of the one before is part of its chord, as a strum spreads them,
-        # up to twice that from the chord's first.
-        if first is None or event[0] - previous > CHORD_SPREAD or event[0] - first > 2 * CHORD_SPREAD:
-            first = event[0]
-            unit = max(0, round(grid_position(first, beats) - shift))
-        previous = event[0]
-        stack = stacks.setdefault(unit, {})
-        if event[2] not in stack or event[3] > stack[event[2]][3]:
-            stack[event[2]] = event
+    def stacked(line):
+        stacks = {}
+        first = previous = None
+        for event in sorted(line):
+            # A note starting within CHORD_SPREAD of the one before is part of its chord, as a strum spreads
+            # them, up to twice that from the chord's first.
+            if first is None or event[0] - previous > CHORD_SPREAD or event[0] - first > 2 * CHORD_SPREAD:
+                first = event[0]
+                unit = max(0, round(grid_position(first, beats) - shift))
+            previous = event[0]
+            stack = stacks.setdefault(unit, {})
+            if event[2] not in stack or event[3] > stack[event[2]][3]:
+                stack[event[2]] = event
+        return stacks
+    sure = lambda event: round(min(1.0, 0.6 * event[3] + 0.4 * struck(event)), 2)
+    note = lambda event, unit, length: {'start': round(event[0], 2), 'end': round(event[1], 2), 'pitch': event[2],
+                                        'unit': unit, 'length': length, 'sure': sure(event)}
+    stacks = stacked(heard)
     units = sorted(stacks)
     peaks = [max(event[3] for event in stacks[unit].values()) for unit in units]
     times = [min(event[0] for event in stacks[unit].values()) for unit in units]
@@ -376,50 +394,68 @@ def chord_notes(events, chords, beats):
         high = bisect.bisect_right(times, times[index] + NEIGHBOURHOOD / 2)
         if peaks[index] >= max(LEAST_ATTACK, ATTACK_SHARE * float(np.median(peaks[low:high]))):
             kept.append((unit, [event for event in stacks[unit].values() if event[3] >= IN_CHORD_SHARE * peaks[index]]))
-    tops = []
-    for unit, stack in kept:
-        top = max(stack, key=lambda event: event[2])
-        # A lower note struck while the melody note above still rings is the comping's, not the melody.
-        if tops and top[2] < tops[-1][1][2] and tops[-1][1][1] > top[0] + 0.05:
-            continue
-        tops.append((unit, top))
-    # A top an octave or more under the line around it (median within NEIGHBOURHOOD seconds) is a low note
-    # struck alone, under the melody.
-    times = [top[0] for _, top in tops]
-    line = []
-    for unit, top in tops:
-        low = bisect.bisect_left(times, top[0] - NEIGHBOURHOOD / 2)
-        high = bisect.bisect_right(times, top[0] + NEIGHBOURHOOD / 2)
-        if top[2] > float(np.median([other[2] for _, other in tops[low:high]])) - BELOW_LINE:
-            line.append((unit, top))
-    tops = line
     notes = []
-    for index, (unit, (start, finish, pitch, strength)) in enumerate(tops):
-        end = round(grid_position(finish, beats) - shift)
-        following = tops[index + 1][0] if index + 1 < len(tops) else None
+    for index, (unit, stack) in enumerate(kept):
+        stack = sorted(stack, key=lambda event: -event[3])[:MOST_AT_ONCE]
+        end = max(round(grid_position(event[1], beats) - shift) for event in stack)
+        following = kept[index + 1][0] if index + 1 < len(kept) else None
         if following is not None and (end > following or following - end <= 1):
             end = following
-        last = notes[-1] if notes else None
-        if last and last['pitch'] == pitch and last['unit'] + last['length'] >= unit:
-            last.update(end=round(max(last['end'], finish), 2), length=max(1, end - last['unit']), sure=max(last['sure'], strength))
-            continue
-        # How surely the note was heard, for choosing the clearest of repeated passages (dropped from the result).
-        notes.append({'start': round(start, 2), 'end': round(finish, 2), 'pitch': pitch, 'unit': unit,
-                      'length': max(1, end - unit), 'sure': strength})
-    return notes
+        notes.extend(note(event, unit, max(1, end - unit)) for event in sorted(stack, key=lambda event: event[2]))
+    everything = stacked(heard + [event for event in faint if belongs(event)])
+    candidates = [note(event, unit, 1) for unit, stack in everything.items() for event in stack.values()]
+    return notes, candidates
 
 
-def joined_repeats(events):
+def joined_repeats(events, attack=None):
     """The same pitch starting again within JOIN_GAP of a note's end is that note held: one long note, not a new
-    attack (detection splits a held note, and back-to-back repeats sound busy)."""
+    attack (detection splits a held note, and back-to-back repeats sound busy), unless it is struck again: an
+    attack of RESTRIKE or more."""
+    attack = attack or {}
     joined = []
     for event in sorted(events, key=lambda event: (event[2], event[0])):
-        if joined and joined[-1][2] == event[2] and event[0] <= joined[-1][1] + JOIN_GAP:
+        if joined and joined[-1][2] == event[2] and event[0] <= joined[-1][1] + JOIN_GAP \
+                and attack.get((event[0], event[2]), 0.0) < RESTRIKE:
             start, end, pitch, strength = joined[-1]
             joined[-1] = (start, max(end, event[1]), pitch, max(strength, event[3]))
         else:
             joined.append(tuple(event))
     return sorted(joined)
+
+
+def attacks(events, output, times, flux, flux_rate):
+    """How clearly each event is struck, 0 to 1: the model's onset signal for its pitch just around its start, or
+    the stem's spectral flux there, whichever is larger."""
+    onset = output['onset']
+    found = {}
+    for start, _, pitch, _ in events:
+        frame = int(np.searchsorted(times, start))
+        column = min(max(pitch - FIRST_MODEL_PITCH, 0), onset.shape[1] - 1)
+        model = float(onset[max(0, frame - 2):frame + 3, column].max()) if frame < len(onset) else 0.0
+        at = int(start * flux_rate)
+        sound = float(flux[max(0, at - 2):at + 3].max()) if at < len(flux) else 0.0
+        found[(start, pitch)] = max(model, sound)
+    return found
+
+
+def local_flux(audio, rate, hop=256):
+    """Spectral flux against the stem's own loud level around each moment (LOCAL_SECONDS), 0 to 1."""
+    from scipy.ndimage import percentile_filter
+    flux = librosa.onset.onset_strength(y=audio, sr=rate, hop_length=hop)
+    local = percentile_filter(flux, 95, size=max(3, int(LOCAL_SECONDS * rate / hop)), mode='nearest')
+    return np.clip(flux / np.maximum(local, 1e-6), 0, 1), rate / hop
+
+
+def heard_pitch(output, times):
+    """evidence(pitch, seconds): how much of a pitch the model hears within 50 ms of a moment, 0 to 1."""
+    note = output['note']
+    def evidence(pitch, seconds):
+        low, high = np.searchsorted(times, seconds - 0.05), np.searchsorted(times, seconds + 0.05) + 1
+        column = pitch - FIRST_MODEL_PITCH
+        if not 0 <= column < note.shape[1] or low >= len(note):
+            return 0.0
+        return float(note[low:high, column].max())
+    return evidence
 
 
 def quiet_frames(level):
@@ -430,11 +466,14 @@ def quiet_frames(level):
     return level < local * 10 ** (-QUIET_DB / 20)
 
 
-def note_events(path):
+def note_events(path, model=False):
+    """The model's notes as (start, end, pitch, strength); with model, also its output and frame times."""
     from basic_pitch import ICASSP_2022_MODEL_PATH
     from basic_pitch.inference import predict
-    _, _, events = predict(path, ICASSP_2022_MODEL_PATH)
-    return [(float(start), float(end), int(pitch), float(strength)) for start, end, pitch, strength, _ in events]
+    from basic_pitch.note_creation import model_frames_to_time
+    output, _, events = predict(path, ICASSP_2022_MODEL_PATH)
+    events = [(float(start), float(end), int(pitch), float(strength)) for start, end, pitch, strength, _ in events]
+    return (events, output, model_frames_to_time(len(output['note']))) if model else events
 
 
 def bass_notes(path, beats):
@@ -622,18 +661,26 @@ def ensemble_part(stems, names, chromas, levels, frames, loudest, floor, beats, 
         mix = audio if mix is None else mix[:len(audio)] + audio[:len(mix)]
     with tempfile.NamedTemporaryFile(suffix='.wav') as file:
         soundfile.write(file.name, mix / max(float(np.abs(mix).max()), 1e-6) * 0.95, rate)
-        events = [event for event in note_events(file.name) if audible[min(int(event[0] / SECONDS), frames - 1)]]
-    events = without_overtones([event for event in events if event[3] >= ENSEMBLE_STRENGTH])
+        everything, output, times = note_events(file.name, model=True)
+    everything = without_overtones([event for event in everything if audible[min(int(event[0] / SECONDS), frames - 1)] and event[3] >= CANDIDATE])
+    events = [event for event in everything if event[3] >= ENSEMBLE_STRENGTH]
+    faint = [event for event in everything if event[3] < ENSEMBLE_STRENGTH]
+    flux, flux_rate = local_flux(mix, rate)
     melody = clear_line([event for event in events if event[2] >= MELODY_LOWEST], ENSEMBLE_STRENGTH)
     root, minor = note_key(events) or song_key(together)
     spelled = spelling(root, minor)
-    path = progression_path(chroma, melody_chroma(melody, frames), root, minor, beats, bar)
+    # Every note heard says which chord, not only the top line's (the doc's chroma and note candidates together).
+    heard = [{'start': start, 'end': end, 'pitch': pitch} for start, end, pitch, _ in events if pitch >= LOWEST_CHORD_NOTE]
+    path = progression_path(chroma, np.minimum(melody_chroma(melody, frames) + melody_chroma(heard, frames), 1), root, minor, beats, bar)
     chords = chord_changes([chord_name(*chord, spelled) for chord in path], playing)
     if 'bass' in chromas:
         chords = slash_chords(chords, chromas['bass'], levels['bass'], frames, spelled)
-    # Repeated passages are written the same each time, from their clearest playing.
-    notes, _, chords, found = unify(chord_notes(events, chords, beats), [], chords, beats, bar)
-    return {'key': key_name(root, minor), 'chords': chords, 'notes': notes, 'second': [], 'repeats': found}
+    notes, candidates = chord_notes(events, chords, beats, attacks(events + faint, output, times, flux, flux_rate), faint)
+    # Repeated passages correct one another by vote, each keeping what its own sound clearly says.
+    notes, chords, found, changes = voted(notes, candidates, heard_pitch(output, times), chords, beats, bar)
+    # Each note's confidence (0 to 1) goes out with it; voted marks one the vote added.
+    notes = [{**{key: value for key, value in note.items() if key != 'sure'}, 'confidence': note['sure']} for note in notes]
+    return {'key': key_name(root, minor), 'chords': chords, 'notes': notes, 'second': [], 'repeats': found, 'corrections': changes}
 
 
 def normalized(chroma):

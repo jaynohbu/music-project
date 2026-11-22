@@ -182,6 +182,7 @@ progress { width: 100%; height: 12px; accent-color: #3459c9; }
 .score-note.active { color: var(--m-accent); }
 .score-note ellipse, .score-note circle, .score-note text { fill: currentColor; }
 .score-note ellipse.hollow { fill: none; stroke: currentColor; stroke-width: 1.5; }
+.score-note ellipse.voted { opacity: .45; }
 .score-note text { font-size: 13px; }
 .score-note line, .score-note path { fill: none; stroke: currentColor; stroke-width: 1.2; }
 .staff-clef { position: absolute; left: 6px; color: var(--m-score-ink); font-size: 44px; line-height: 52px; pointer-events: none; }

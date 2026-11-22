@@ -6,6 +6,7 @@ import { ActivityService, ENSEMBLE_STEMS, HARMONY_STEMS, HarmonyGrid, REGENERATE
 import { ConfirmationService } from './confirmation';
 import { captureSceneSettings, restoredSceneInterval } from './scene-settings';
 import { HarmonyStrip, transposeKey, transposePart } from './harmony-strip';
+import { harmonyMidi, harmonyMusicXml } from './score-export';
 import { shiftBuffer } from './pitch-shift';
 import { scoreSheet, sheetFileName } from './score-sheet';
 import {
@@ -467,6 +468,12 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                       [attr.aria-label]="'See the whole ' + track.label + ' score'">Full score</button>
                     <button type="button" class="secondary" (click)="saveScorePdf(track)"
                       [attr.aria-label]="'Save the ' + track.label + ' score as a PDF'">Save PDF</button>
+                    @if (track.name !== 'drums') {
+                      <button type="button" class="secondary" (click)="saveScoreFile(track, 'midi')"
+                        [attr.aria-label]="'Save the ' + track.label + ' score as MIDI'">MIDI</button>
+                      <button type="button" class="secondary" (click)="saveScoreFile(track, 'musicxml')"
+                        [attr.aria-label]="'Save the ' + track.label + ' score as MusicXML'">MusicXML</button>
+                    }
                   }
                   @if (track.hasCleaned) {
                     <div class="version-switch" role="group" [attr.aria-label]="track.label + ' version'">
@@ -505,7 +512,8 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                   <p class="hint">Press Regenerate drum score to write this song's drums.</p>
                 } @else if (hasMusic(parts[track.name])) {
                   @if (parts[track.name].key; as key) {
-                    <p class="hint">Key {{ key }} · Guitars, keys and the other instruments, heard together.</p>
+                    <p class="hint">Key {{ key }} · Guitars, keys and the other instruments, heard together.
+                      @if (repeatSummary(parts[track.name]); as summary) { {{ summary }} }</p>
                   }
                   <!-- The ensemble (other) is written at concert pitch on a treble staff. -->
                   <app-harmony-strip [part]="parts[track.name]" [stem]="track.name" [grid]="harmonyGrid()!" [time]="position()"
@@ -1313,6 +1321,29 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
       view.print();
     };
     document.body.appendChild(frame);
+  }
+
+  // The score as MIDI or MusicXML, in the key it is heard in.
+  saveScoreFile(track: { name: string; label: string }, kind: 'midi' | 'musicxml'): void {
+    const part = this.heardParts()?.[track.name], grid = this.harmonyGrid();
+    if (!part || !grid) return;
+    const title = `${this.sceneTitle || this.job()?.title || 'Score'} - ${track.label}`;
+    const blob = kind === 'midi'
+      ? new Blob([harmonyMidi(part, grid)], { type: 'audio/midi' })
+      : new Blob([harmonyMusicXml({ ...part, key: part.key ?? this.heardKey() }, grid, title)], { type: 'application/vnd.recordare.musicxml+xml' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `${title}.${kind === 'midi' ? 'mid' : 'musicxml'}`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  }
+
+  // What the repeated passages changed: notes they filled in are drawn lighter.
+  repeatSummary(part: HarmonyPart): string {
+    const families = part.repeats?.length ?? 0, added = part.corrections?.added ?? 0, removed = part.corrections?.removed.length ?? 0;
+    if (!families) return '';
+    return `${families} repeated passage${families === 1 ? '' : 's'} checked against each other: ${added} note${added === 1 ? '' : 's'} filled in`
+      + ` (drawn lighter), ${removed} dropped.`;
   }
 
   hasMusic(part?: HarmonyPart): boolean { return !!part && (part.chords.length > 0 || part.notes.length > 0 || !!part.hits?.length); }

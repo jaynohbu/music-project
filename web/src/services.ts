@@ -343,8 +343,12 @@ export interface HarmonyPart {
   key?: string;
   // The ensemble's line under the melody (a counter-melody or the top of the accompaniment).
   second?: HarmonyNote[];
+  // Set on the ensemble part: its repeated passages (bar numbers from the first bar) and what their vote changed.
+  repeats?: { family: number; bars: number; members: number[] }[];
+  corrections?: { added: number; removed: { unit: number; pitch: number; length: number }[] };
 }
-export interface HarmonyNote { start: number; end: number; pitch: number; unit: number; length: number }
+// confidence: how surely the note was heard, 0 to 1; voted: added by the vote among repeated passages.
+export interface HarmonyNote { start: number; end: number; pitch: number; unit: number; length: number; confidence?: number; voted?: boolean }
 export interface HarmonyGrid { beats: number[]; firstBar: number }
 export const HARMONY_STEMS: readonly string[] = ['other', 'bass', 'drums'];
 export const ENSEMBLE_STEMS: readonly string[] = ['other'];

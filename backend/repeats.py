@@ -1,15 +1,18 @@
-"""Repeated passages in the ensemble's notes, found the way BLAST finds similar sequences.
+"""Repeated passages in the Harmonic score, found the way BLAST finds similar sequences, and corrected by vote.
 
 Bars are the letters. A seed is a pair of bars that sound alike; it is extended a bar at a time in both
 directions, crossing a weaker bar or two as BLAST's drop-off does, and the longest reach that keeps the whole
 passage at least 70% alike is kept. Passages that match one another form a family (a chorus heard three
-times, a riff heard eight). The clearest member of each family is copied over the others, notes and chords
-both, and the second line is dropped inside every member: a repeat is played the same way, and the faint
-notes under it are what the detection is least sure of.
+times, a riff heard eight).
 
-Detection hears a repeat a little differently each time, so passages are compared on what sounds rather than
-note by note: for each eighth of a bar, the pitch classes of the notes (and any second line) sounding
-there. Only the notes are copied.
+A repeat is not copied: each playing may really vary. Every note the family's playings write is put to a vote.
+A note most of the other playings have is added where it is missing, if this playing's own sound has some of
+it (the model hears that pitch there, if too faintly to write). A note no other playing has, not even faintly,
+is dropped when it was heard weakly and there are at least three playings to tell; a clearly heard one is a
+variation and stays. Chords are voted beat by beat the same way, and each playing keeps its own rests.
+
+Detection hears a repeat a little differently each time, so passages are found on what sounds rather than
+note by note: for each eighth of a bar, the pitch classes of the notes sounding there.
 """
 import numpy as np
 
@@ -137,94 +140,104 @@ def families(bars):
     return groups
 
 
-def clearest(bars, length, members):
-    """The member most like the others, then the one whose notes were heard most surely."""
-    def score(member):
-        alike = np.mean([similarity(bars, member, other, length) for other in members if other != member])
-        sure = [note.get('sure', 0.5) for index in range(member, member + length) for _, _, note in bars.notes[index]]
-        return alike + 0.5 * (np.mean(sure) if sure else 0)
-    return max(members, key=score)
-
-
 def unit_seconds(unit, beats):
     return float(np.interp(unit / 4, np.arange(len(beats)), beats))
 
 
-def beat_of(seconds, beats):
-    return float(np.interp(seconds, beats, np.arange(len(beats))))
+def chord_at(chords, seconds):
+    current = None
+    for chord in chords:
+        if chord['start'] <= seconds + 1e-6:
+            current = chord['name']
+        else:
+            break
+    return current
 
 
-def copy_chords(chords, beats, source, target, origin, length):
-    """The chords over the target passage become the source's, moved by the bars between them."""
-    def chord_at(seconds):
-        current = None
-        for chord in chords:
-            if chord['start'] <= seconds + 1e-6:
-                current = chord['name']
-        return current
-    start, end = unit_seconds(origin + target * BAR, beats), unit_seconds(origin + (target + length) * BAR, beats)
-    source_start = unit_seconds(origin + source * BAR, beats)
-    source_end = unit_seconds(origin + (source + length) * BAR, beats)
-    shift = (target - source) * 4  # In beats.
-    # Rests (no chord) belong to each playing, not to the passage: the target keeps its own and gets none.
-    moved = [{'start': round(unit_seconds((beat_of(chord['start'], beats) + shift) * 4, beats), 2), 'name': chord['name']}
-             for chord in chords if source_start < chord['start'] < source_end - 1e-6 and chord['name'] != NO_CHORD]
-    opening = chord_at(source_start)
-    opening = None if opening == NO_CHORD else opening
-    following = chord_at(end)
-    kept = [chord for chord in chords if not start <= chord['start'] < end or chord['name'] == NO_CHORD]
-    added = ([{'start': round(start, 2), 'name': opening}] if opening else []) + moved
-    # The target's rests stay silent, and the copied chord comes back where each one ends.
-    rests = [(chord['start'], chords[index + 1]['start'] if index + 1 < len(chords) else float('inf'))
-             for index, chord in enumerate(chords) if chord['name'] == NO_CHORD and start <= chord['start'] < end]
-    def copied_at(seconds):
-        current = None
-        for chord in sorted(added, key=lambda chord: chord['start']):
-            if chord['start'] <= seconds + 1e-6:
-                current = chord['name']
-        return current
-    resumed = [{'start': round(resume, 2), 'name': copied_at(resume)} for _, resume in rests if resume < end and copied_at(resume)]
-    added = [chord for chord in added if not any(rest <= chord['start'] < resume for rest, resume in rests)] + resumed
+def overridden(chords, start, end, name):
+    """The chords with name playing from start to end, and what played before coming back at end."""
+    following = chord_at(chords, end)
+    kept = [chord for chord in chords if not start - 1e-6 <= chord['start'] < end - 1e-6]
+    added = [{'start': round(start, 2), 'name': name}]
     if following and not any(abs(chord['start'] - end) < 1e-3 for chord in kept):
         added.append({'start': round(end, 2), 'name': following})
-    merged = sorted(kept + added, key=lambda chord: chord['start'])
-    # A change to the chord already playing is no change.
     result = []
-    for chord in merged:
+    for chord in sorted(kept + added, key=lambda chord: chord['start']):
         if not result or result[-1]['name'] != chord['name']:
             result.append(chord)
     return result
 
 
-def unify(notes, second, chords, beats, first_bar):
-    """Copies each family's clearest passage over the rest; returns notes, second line, chords and the repeats found."""
+def voted_chords(chords, beats, origin, length, members):
+    """Each beat of each playing takes the chord most playings have there, when more than half agree. A beat
+    with a rest in it keeps its own chords: rests belong to each playing."""
+    beat_seconds = lambda member, beat: unit_seconds(origin + member * BAR + beat * 4, beats)
+    for beat in range(length * 4):
+        names = [chord_at(chords, beat_seconds(member, beat) + 0.05) for member in members]
+        counted = {name: names.count(name) for name in names if name and name != NO_CHORD}
+        if not counted:
+            continue
+        winner, votes = max(counted.items(), key=lambda item: item[1])
+        if 2 * votes <= len(members):
+            continue
+        for member, name in zip(members, names):
+            start, end = beat_seconds(member, beat), beat_seconds(member, beat + 1)
+            rest = any(chord['name'] == NO_CHORD and start - 0.05 <= chord['start'] < end for chord in chords)
+            if name != winner and name != NO_CHORD and not rest:
+                chords = overridden(chords, start, end, winner)
+    return chords
+
+
+# A note no other playing has is dropped below this confidence (with at least three playings to tell).
+KEEP_ALONE = 0.6
+# How much of a pitch the model must hear where a note is missing for the vote to add it.
+EVIDENCE = 0.25
+NEAR = 1  # Sixteenths a note may be off in another playing and still be the same note.
+
+
+def voted(notes, candidates, evidence, chords, beats, first_bar):
+    """Corrects each family of repeated passages by vote; returns notes, chords, the families and what changed.
+    candidates: every note heard, also those too faint to write; evidence(pitch, seconds): how much of that
+    pitch the model hears there, 0 to 1."""
     origin = first_bar * 4
     count = max(0, (len(beats) * 4 - origin) // BAR)
-    heard = Heard(notes + second, origin, count)
-    bars = bar_notes(notes, origin, count)
-    repeats = []
+    heard = Heard(notes, origin, count)
+    repeats, added, removed = [], [], []
+    notes = list(notes)
     for family, (length, members) in enumerate(families(heard)):
-        source = clearest(heard, length, members)
-        repeats.append({'family': family, 'bars': length, 'members': members, 'source': source})
-    for repeat in repeats:
-        length, source = repeat['bars'], repeat['source']
-        source_notes = [note for index in range(source, source + length) for _, _, note in bars[index]]
-        for target in repeat['members']:
-            low, high = origin + target * BAR, origin + (target + length) * BAR
-            second = [note for note in second if not low <= note['unit'] < high]
-            if target == source:
-                continue
-            shift = (target - source) * BAR
-            # Notes from before the passage stop where it starts.
-            notes = [note if note['unit'] >= low or note['unit'] + note['length'] <= low else {**note, 'length': low - note['unit']}
-                     for note in notes if not low <= note['unit'] < high]
-            for note in source_notes:
-                unit = note['unit'] + shift
-                length_units = min(note['length'], high - unit)
-                notes.append({**note, 'unit': unit, 'length': length_units, 'start': round(unit_seconds(unit, beats), 2),
-                              'end': round(unit_seconds(unit + length_units, beats), 2)})
-            chords = copy_chords(chords, beats, source, target, origin, length)
-    strip = lambda line: [{key: value for key, value in note.items() if key != 'sure'} for note in line]
-    notes = sorted(strip(notes), key=lambda note: note['unit'])
-    second = sorted(strip(second), key=lambda note: note['unit'])
-    return notes, second, chords, repeats
+        repeats.append({'family': family, 'bars': length, 'members': members})
+        span = length * BAR
+        def playing(line, member):
+            low = origin + member * BAR
+            return {(note['unit'] - low, note['pitch']): note for note in line if low <= note['unit'] < low + span}
+        written = {member: playing(notes, member) for member in members}
+        faint = {member: playing(candidates, member) for member in members}
+        has = lambda line, offset, pitch: any((offset + step, pitch) in line for step in range(-NEAR, NEAR + 1))
+        keys = sorted({key for member in members for key in written[member]})
+        for member in members:
+            others = [other for other in members if other != member]
+            low = origin + member * BAR
+            for offset, pitch in keys:
+                votes = sum(has(written[other], offset, pitch) for other in others)
+                if (offset, pitch) in written[member]:
+                    note = written[member][(offset, pitch)]
+                    if len(members) >= 3 and note.get('sure', 1) < KEEP_ALONE and not votes \
+                            and not any(has(faint[other], offset, pitch) for other in others):
+                        notes.remove(note)
+                        removed.append(note)
+                elif not has(written[member], offset, pitch) and 2 * votes > len(others):
+                    seconds = unit_seconds(low + offset, beats)
+                    sure = evidence(pitch, seconds)
+                    if sure < EVIDENCE:
+                        continue
+                    lengths = sorted(written[other][key]['length'] for other in others for key in written[other]
+                                     if key[1] == pitch and abs(key[0] - offset) <= NEAR)
+                    size = min(lengths[len(lengths) // 2], span - offset)
+                    note = {'start': round(seconds, 2), 'end': round(unit_seconds(low + offset + size, beats), 2), 'pitch': pitch,
+                            'unit': low + offset, 'length': size, 'sure': round(sure, 2), 'voted': True}
+                    notes.append(note)
+                    written[member][(offset, pitch)] = note
+                    added.append(note)
+        chords = voted_chords(chords, beats, origin, length, members)
+    notes.sort(key=lambda note: (note['unit'], note['pitch']))
+    return notes, chords, repeats, {'added': len(added), 'removed': [{key: note[key] for key in ('unit', 'pitch', 'length')} for note in removed]}
