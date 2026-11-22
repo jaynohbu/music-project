@@ -1,4 +1,4 @@
-import { Component, ElementRef, EventEmitter, Injector, Input, OnChanges, OnDestroy, OnInit, Output, afterNextRender, effect, inject, signal, untracked } from '@angular/core';
+import { Component, ElementRef, EventEmitter, Injector, Input, ViewChild, OnChanges, OnDestroy, OnInit, Output, afterNextRender, effect, inject, signal, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
@@ -440,6 +440,8 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                     }
                   }
                   @if (isHarmonic(track.name) && harmonyGrid() && hasMusic(harmonyParts()?.[track.name])) {
+                    <button type="button" class="secondary" (click)="openScore(track)"
+                      [attr.aria-label]="'See the whole ' + track.label + ' score'">Full score</button>
                     <button type="button" class="secondary" (click)="saveScorePdf(track)"
                       [attr.aria-label]="'Save the ' + track.label + ' score as a PDF'">Save PDF</button>
                   }
@@ -692,6 +694,14 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
         <app-lyrics-editor [lines]="lines" [duration]="duration()" [saving]="savingLyrics()" [error]="lyricsSaveError()"
           (saved)="saveLyrics($event)" (cancelled)="editingLyrics.set(false)"></app-lyrics-editor>
       }
+      <dialog #scoreDialog class="score-preview" aria-labelledby="score-preview-title">
+        <header><h2 id="score-preview-title">{{ scoreHeading() }}</h2></header>
+        <iframe #scoreFrame title="Full score"></iframe>
+        <footer>
+          <button type="button" class="secondary" (click)="closeScore()">Close</button>
+          <button type="button" (click)="printScore()">Save PDF</button>
+        </footer>
+      </dialog>
     </section>
   `,
 })
@@ -1013,25 +1023,49 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
 
   isHarmonic(name: string): boolean { return HARMONY_STEMS.includes(name); }
 
-  // The score as an A4 sheet, printed from a hidden frame so the browser offers Save as PDF.
-  saveScorePdf(track: { name: string; label: string }): void {
+  // The printed score, with the song's title and artist; the browser names a saved PDF after the page's title.
+  private scoreSheetFor(track: { name: string; label: string }): string | null {
     const part = this.harmonyParts()?.[track.name], grid = this.harmonyGrid();
-    if (!part || !grid) return;
+    if (!part || !grid) return null;
     const title = this.sceneTitle || this.job()?.title || 'Score';
+    const artist = this.job()?.author?.trim() || undefined;
     // The bass part is written in the song's key, which only the ensemble carries.
     const songKey = this.harmonyParts()?.['other']?.key;
     const key = track.name === 'drums' ? undefined : part.key ?? songKey;
     const html = scoreSheet(part, track.name, grid, {
-      title, subtitle: [track.label, key && `Key ${key}`].filter(Boolean).join(' · '), page: (page, pages) => `${page} / ${pages}`,
+      title, artist, subtitle: [track.label, key && `Key ${key}`].filter(Boolean).join(' · '), page: (page, pages) => `${page} / ${pages}`,
     }, songKey);
-    // The browser names the saved file after the printed page's title.
     const name = sheetFileName(title, track.label).replace(/\.pdf$/, '').replace(/&/g, '&amp;');
+    return html.replace(/<title>.*?<\/title>/, `<title>${name}</title>`);
+  }
+
+  readonly scoreHeading = signal('');
+  @ViewChild('scoreDialog') private scoreDialog?: ElementRef<HTMLDialogElement>;
+  @ViewChild('scoreFrame') private scoreFrame?: ElementRef<HTMLIFrameElement>;
+
+  // The whole score as its pages, in a dialog that can also print them.
+  openScore(track: { name: string; label: string }): void {
+    const html = this.scoreSheetFor(track);
+    if (!html || !this.scoreDialog || !this.scoreFrame) return;
+    this.scoreHeading.set(`${this.sceneTitle || this.job()?.title || 'Score'} · ${track.label}`);
+    this.scoreFrame.nativeElement.srcdoc = html;
+    this.scoreDialog.nativeElement.showModal();
+  }
+
+  printScore(): void { this.scoreFrame?.nativeElement.contentWindow?.print(); }
+
+  closeScore(): void { this.scoreDialog?.nativeElement.close(); }
+
+  // Printed from a hidden frame so the browser offers Save as PDF.
+  saveScorePdf(track: { name: string; label: string }): void {
+    const html = this.scoreSheetFor(track);
+    if (!html) return;
     document.querySelector('iframe.score-print')?.remove();
     const frame = document.createElement('iframe');
     frame.className = 'score-print';
     frame.setAttribute('aria-hidden', 'true');
     frame.style.cssText = 'position: fixed; right: 0; bottom: 0; width: 0; height: 0; border: 0';
-    frame.srcdoc = html.replace(/<title>.*?<\/title>/, `<title>${name}</title>`);
+    frame.srcdoc = html;
     frame.onload = () => {
       const view = frame.contentWindow!;
       view.addEventListener('afterprint', () => frame.remove());

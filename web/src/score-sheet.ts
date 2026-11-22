@@ -18,7 +18,9 @@ const HEADER = 150, FIRST_TOP = 190, PAGE_TOP = 80, FOOTER = 50, LINE_GAP = 34;
 const A4 = 297 / 210;
 const INK = '#111', SECOND = '#666';
 
-export interface SheetText { title: string; subtitle: string; page: (page: number, pages: number) => string }
+// `artist` is shown under the title on the right, as a composer is on printed music.
+export interface SheetText { title: string; artist?: string; subtitle: string; page: (page: number, pages: number) => string }
+export interface SheetPages { width: number; height: number; pages: string[] }
 
 const escape = (text: string) => text.replace(/[&<>"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[char]!);
 
@@ -78,8 +80,9 @@ export function lineStarts(firstBar: number, lastUnit: number): number[] {
   return starts;
 }
 
+// Each page as an SVG document, for previews and for the printed HTML.
 // `part` is already moved to the key being heard; `songKey` is that key, for the bass part.
-export function scoreSheet(part: HarmonyPart, stem: string, grid: HarmonyGrid, text: SheetText, songKey?: string): string {
+export function sheetPages(part: HarmonyPart, stem: string, grid: HarmonyGrid, text: SheetText, songKey?: string): SheetPages {
   const drums = stem === 'drums';
   const signature = keySignature(drums ? undefined : part.key ?? songKey);
   const voices = !drums && !!part.second?.length;
@@ -163,12 +166,13 @@ export function scoreSheet(part: HarmonyPart, stem: string, grid: HarmonyGrid, t
   // Only lines move up and down, so one clip serves every line: it hides marks that run past either end.
   const clip = `<clipPath id="line"><rect x="${MARGIN + head + TIME_WIDTH - 12}" y="-1000" width="${staffWidth - head - TIME_WIDTH + 12}" height="3000"/></clipPath>`;
   let lineIndex = 0;
-  const body = pages.map((page, pageIndex) => {
+  const sheet = pages.map((page, pageIndex) => {
     let y = pageIndex === 0 ? FIRST_TOP : PAGE_TOP;
     let svg = '';
     if (pageIndex === 0) {
-      svg += `<text x="${width / 2}" y="${HEADER - 50}" text-anchor="middle" font-size="30" font-weight="700" fill="${INK}">${escape(text.title)}</text>`
-        + `<text x="${width / 2}" y="${HEADER - 18}" text-anchor="middle" font-size="15" fill="${SECOND}">${escape(text.subtitle)}</text>`;
+      svg += `<text x="${width / 2}" y="${HEADER - 62}" text-anchor="middle" font-size="30" font-weight="700" fill="${INK}">${escape(text.title)}</text>`
+        + `<text x="${width / 2}" y="${HEADER - 32}" text-anchor="middle" font-size="15" fill="${SECOND}">${escape(text.subtitle)}</text>`;
+      if (text.artist) svg += `<text x="${width - MARGIN}" y="${HEADER - 2}" text-anchor="end" font-size="15" fill="${INK}">${escape(text.artist)}</text>`;
       const bpm = tempo(grid.beats);
       if (bpm) svg += `<text x="${MARGIN}" y="${HEADER + 22}" font-size="14" fill="${INK}">♩ = ${bpm}</text>`;
     }
@@ -178,13 +182,23 @@ export function scoreSheet(part: HarmonyPart, stem: string, grid: HarmonyGrid, t
       lineIndex++;
     }
     svg += `<text x="${width / 2}" y="${height - FOOTER / 2}" text-anchor="middle" font-size="11" fill="${SECOND}">${escape(text.page(pageIndex + 1, pages.length))}</text>`;
-    return `<section class="page"><svg viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, 'Helvetica Neue', Arial, sans-serif"><defs>${clip}</defs>${svg}</svg></section>`;
-  }).join('');
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${escape(text.title)}</title><style>`
+    return `<svg viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, Helvetica, Arial, sans-serif">`
+      + `<rect width="${width}" height="${height}" fill="#fff"/><defs>${clip}</defs>${svg}</svg>`;
+  });
+  return { width, height, pages: sheet };
+}
+
+// The pages as one HTML document: A4 sheets when printed, and spaced out on grey when shown on screen.
+export function scoreSheet(part: HarmonyPart, stem: string, grid: HarmonyGrid, text: SheetText, songKey?: string): string {
+  const { pages } = sheetPages(part, stem, grid, text, songKey);
+  const name = text.artist ? `${text.title} - ${text.artist}` : text.title;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(name)}</title><style>`
     + '@page { size: A4; margin: 0 } html, body { margin: 0; padding: 0; background: #fff }'
     + ' .page { width: 210mm; height: 296.5mm; overflow: hidden; page-break-after: always; break-after: page }'
     + ' .page:last-child { page-break-after: auto; break-after: auto } .page svg { display: block; width: 100%; height: 100% }'
-    + `</style></head><body>${body}</body></html>`;
+    + ' @media screen { body { background: #888; padding: 16px 0 } .page { width: min(210mm, calc(100vw - 32px)); height: auto;'
+    + ' aspect-ratio: 210 / 296.5; margin: 0 auto 16px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4) } }'
+    + `</style></head><body>${pages.map(page => `<section class="page">${page}</section>`).join('')}</body></html>`;
 }
 
 // A file name the share sheet and Files can keep: the title and part, without path characters.

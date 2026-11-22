@@ -428,7 +428,9 @@ The staff uses `react-native-svg`. It draws in four-bar chunks and mounts only t
 
 `react-native-svg` is a native module, so this needs a new native build. Builds 93fc2cf2 and earlier do not include it.
 
-**Score PDF (2026-11-22).** Each written score (other, bass, drums) has a "Save PDF" button. `src/score-sheet.ts` lays the strip's marks out four bars to a line on A4 pages, with the title, part and key, tempo, a clef and key signature on every line, bar numbers and page numbers. It returns HTML, so it is pure and tested in `test/score-sheet.test.cjs`.
+**Score PDF and full score (2026-11-22).** Each written score (other, bass, drums) has "Full score" and "Save PDF" buttons. `src/score-sheet.ts` lays the strip's marks out four bars to a line on A4 pages, with the title, the artist (right, under the title), part and key, tempo, a clef and key signature on every line, bar numbers and page numbers. `sheetPages` returns each page as an SVG string and `scoreSheet` wraps them in printable HTML, so both are pure and tested in `test/score-sheet.test.cjs`.
+
+- **Full score:** the app shows the pages in a full-screen modal (`src/score-preview.tsx`, `SvgXml`, pinch to zoom; pages are parsed as they scroll into view), with Save PDF. The website shows the same HTML in a dialog's frame (grey background and page shadows on screen only) and prints that frame.
 
 - **App:** `src/score-pdf.ts` prints the HTML with `expo-print`, renames the file to "<title> - <part>.pdf" and opens the share sheet with `expo-sharing` (Save to Files, AirDrop, mail). The sheet follows the key change. Both modules are native, so this needs a new native build: 39609899 and later.
 - **Website:** `web/src/score-sheet.ts` is the same code with other imports, which `web/test/score-sheet.test.mjs` checks. It prints from a hidden frame, so the browser's print dialog offers Save as PDF. The file name comes from the page title. The website's layout now has the app's key-signature spelling for this. Its scrolling strip still uses the mixed spelling because it has no key signature.

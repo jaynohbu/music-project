@@ -18,7 +18,8 @@ import { snapshot, restore } from './mixer-settings';
 import { HarmonyStrip, LyricsEditor, LyricsStrip } from './score-view';
 import { LYRICS_REPLAY_LEAD, firstChange, transposeKey, transposePart } from './score';
 import { shareScorePdf } from './score-pdf';
-import { scoreSheet, sheetFileName } from './score-sheet';
+import { ScorePreview } from './score-preview';
+import { scoreSheet, sheetFileName, sheetPages } from './score-sheet';
 import { hasMusic, regenerateLabel, useSongTasks } from './song-tasks';
 import { type Theme, useStyles, useTheme } from './theme';
 
@@ -257,7 +258,7 @@ export function MixerControls({ mixer, song = null, peaks, inScene = false }: { 
         </View>
         {!!(tasks.cleanFailure(name) || cleanErrors[name]) &&
           <Text accessibilityRole="alert" style={[styles.error, styles.stemError]}>{tasks.cleanFailure(name) || cleanErrors[name]}</Text>}
-        {song && <StemTasks transpose={mixer.transpose} title={song.title || t('common.untitledSong')} name={name} label={label} cleaned={channel.useCleaned} tasks={tasks} position={position}
+        {song && <StemTasks transpose={mixer.transpose} title={song.title || t('common.untitledSong')} artist={song.author} name={name} label={label} cleaned={channel.useCleaned} tasks={tasks} position={position}
           disabled={locked} onEditLyrics={editLyrics} />}
         <Timeline label={label} duration={mixer.duration} start={mixer.sectionStart} end={mixer.sectionEnd} position={position}
           peaks={channel.useCleaned ? peaks?.[name]?.cleaned ?? cleanedPeaks[name] : peaks?.[name]?.original}
@@ -369,9 +370,9 @@ function KeyChange({ mixer, songKey }: { mixer: Mixer; songKey?: string }) {
 }
 
 // The website's lyrics and 악보 controls for one stem: find, edit or regenerate, then the scrolling strip.
-function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyrics, transpose, title }: {
+function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyrics, transpose, title, artist }: {
   name: StemName; label: string; cleaned: boolean; tasks: ReturnType<typeof useSongTasks>; position: number;
-  disabled: boolean; onEditLyrics: () => void; transpose: number; title: string;
+  disabled: boolean; onEditLyrics: () => void; transpose: number; title: string; artist?: string;
 }) {
   const styles = useStyles(makeStyles), t = useT();
   const vocals = name === 'vocals', harmonic = HARMONY_STEMS.includes(name);
@@ -383,16 +384,24 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
   const ensembleKey = parts?.other?.key, songKey = ensembleKey ? transposeKey(ensembleKey, transpose) : undefined;
   const [saving, setSaving] = useState(false);
   const [saveFailure, setSaveFailure] = useState('');
+  const [previewing, setPreviewing] = useState(false);
+  // The printed score as it is heard, key change included, with the song's title and artist.
+  const grid = tasks.grid;
+  const sheetText = useMemo(() => {
+    const key = name === 'drums' ? undefined : part?.key ?? songKey;
+    const subtitle = [label, key && t('tasks.pdfKey', { key }), transpose && ensembleKey && t('mixer.keyFrom', { key: ensembleKey })]
+      .filter(Boolean).join(' · ');
+    return { title, artist: artist?.trim() || undefined, subtitle, page: (page: number, pages: number) => `${page} / ${pages}` };
+  }, [name, part, songKey, label, transpose, ensembleKey, title, artist, t]);
+  const sheet = useMemo(() => previewing && part && grid ? sheetPages(part, name, grid, sheetText, songKey) : null,
+    [previewing, part, grid, name, sheetText, songKey]);
   if (!vocals && !harmonic) return null;
-  // The score as it is heard, key change included, as an A4 PDF for the share sheet.
+  // An A4 PDF for the share sheet.
   const savePdf = async () => {
-    if (!part || !tasks.grid) return;
+    if (!part || !grid) return;
     setSaving(true); setSaveFailure('');
-    const key = name === 'drums' ? undefined : part.key ?? songKey;
-    const subtitle = [label, key && t('tasks.pdfKey', { key }), transpose && ensembleKey && t('mixer.keyFrom', { key: ensembleKey })].filter(Boolean).join(' · ');
     try {
-      const html = scoreSheet(part, name, tasks.grid, { title, subtitle, page: (page, pages) => `${page} / ${pages}` }, songKey);
-      await shareScorePdf(html, sheetFileName(title, label));
+      await shareScorePdf(scoreSheet(part, name, grid, sheetText, songKey), sheetFileName(title, label));
     } catch (failure) {
       setSaveFailure(t('tasks.pdfFailed', { error: failure instanceof Error ? failure.message : String(failure) }));
     } finally { setSaving(false); }
@@ -417,6 +426,10 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
         style={[styles.taskButton, (!action.onPress || disabled) && { opacity: 0.5 }]}>
         <Text style={styles.taskButtonText}>{action.label}</Text>
       </Pressable>}
+      {printable && <Pressable onPress={() => setPreviewing(true)} accessibilityRole="button"
+        accessibilityLabel={t('tasks.previewFor', { stem: label })} style={styles.taskButton}>
+        <Text style={styles.taskButtonText}>{t('tasks.preview')}</Text>
+      </Pressable>}
       {printable && <Pressable onPress={() => void savePdf()} disabled={saving} accessibilityRole="button"
         accessibilityLabel={t('tasks.pdfFor', { stem: label })} accessibilityState={{ disabled: saving }}
         style={[styles.taskButton, saving && { opacity: 0.5 }]}>
@@ -424,6 +437,8 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
       </Pressable>}
     </View>}
     {!!saveFailure && <Text accessibilityRole="alert" style={[styles.error, styles.taskError]}>{saveFailure}</Text>}
+    {sheet && <ScorePreview sheet={sheet} title={[title, label].join(' · ')} saving={saving}
+      onSave={() => void savePdf()} onClose={() => setPreviewing(false)} />}
     {/* The ensemble is written at concert pitch on a treble staff, the same on all three cards. */}
     {!!part?.key && <Text style={styles.taskHint}>{t('tasks.ensembleNote', { key: part.key })}</Text>}
     {!!failure && <Text accessibilityRole="alert" style={[styles.error, styles.taskError]}>{failure}</Text>}
