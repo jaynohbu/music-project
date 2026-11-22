@@ -46,13 +46,47 @@ export function chordTones(name: string): { root: number; tones: number[]; bass:
 }
 
 const above = (pitchClass: number, floor: number) => floor + (((pitchClass - floor) % 12) + 12) % 12;
+const below = (pitchClass: number, ceiling: number) => ceiling - (((ceiling - pitchClass) % 12) + 12) % 12;
+
+// Where the Harmonic stem plays a chord: its low and high notes (10th and 90th percentile, so a stray note does
+// not move the chord), from the notes starting while it lasts; null with fewer than two.
+export interface Register { low: number; high: number }
+export function registerOf(notes: HarmonyNote[], start: number, end: number): Register | null {
+  const pitches = notes.filter(note => note.start >= start - 0.05 && note.start < end).map(note => note.pitch).sort((a, b) => a - b);
+  if (pitches.length < 2) return null;
+  return { low: pitches[Math.floor(0.1 * (pitches.length - 1))], high: pitches[Math.ceil(0.9 * (pitches.length - 1))] };
+}
+
+const RANGE: Record<Family, [number, number]> = { guitar: [40, 84], keys: [28, 96] };
 
 // Every chord tone, spread as the instrument plays it, with the bass (or slash bass) at the bottom.
-// Guitar: like an open-position strum, the bass on a low string, the chord tones in the octave above and the root
-// again on top. Keys: the bass and its octave in the left hand, the chord tones close together in the right.
-export function voicing(name: string, family: Family): number[] {
+// With a register, the chord sits where the Harmonic stem played it: a high chord high, a low chord low. The
+// bass goes near the stem's low note (keys: an octave under it, for the left hand), every chord tone in the
+// octave under its high note, and the gap between them is filled (guitar: the root or fifth; keys: the bass's
+// octave). Without one: guitar like an open-position strum, the bass on a low string, the chord tones in the
+// octave above and the root again on top; keys the bass and its octave in the left hand, the chord tones close
+// together in the right.
+export function voicing(name: string, family: Family, register?: Register | null): number[] {
   const chord = chordTones(name);
   if (!chord) return [];
+  if (register) {
+    const [floor, ceiling] = RANGE[family];
+    const low = Math.min(Math.max(register.low, floor), ceiling - 12);
+    const high = Math.min(Math.max(register.high, low + 12), ceiling);
+    const bass = above(chord.bass, Math.max(floor, family === 'keys' ? low - 12 : low - 2));
+    const upper = [...new Set(chord.tones.map(tone => {
+      const pitch = below(tone, high);
+      return pitch > bass + 2 ? pitch : pitch + 12;
+    }).filter(pitch => pitch <= ceiling))].sort((a, b) => a - b);
+    const fill: number[] = [];
+    if (upper.length && upper[0] - bass > 12) {
+      const middle = family === 'guitar' ? above(chord.root, bass + 5) : bass + 12;
+      if (middle < upper[0] - 2) fill.push(middle);
+      const fifth = above((chord.root + 7) % 12, (fill[0] ?? bass) + 3);
+      if (family === 'guitar' && fifth < upper[0] - 2 && upper.length + fill.length < 5) fill.push(fifth);
+    }
+    return [bass, ...fill, ...upper];
+  }
   if (family === 'guitar') {
     const low = above(chord.bass, 40);
     const notes = [low, ...chord.tones.map(tone => above(tone, low + 5)).sort((a, b) => a - b)];
@@ -94,6 +128,15 @@ export function comping(part: HarmonyPart, grid: HarmonyGrid, pattern: Stroke[][
   }
   // A rest (no chord) also stops what is ringing.
   const rests = chords.filter(chord => !chordTones(chord.name)).map(chord => chord.start);
+  // Each chord's register, read once from the score's notes while it lasts.
+  const registers = new Map<number, Register | null>();
+  const registerAt = (time: number) => {
+    let index = -1;
+    for (let at = 0; at < chords.length && chords[at].start <= time + 0.05; at++) index = at;
+    if (index < 0) return null;
+    if (!registers.has(index)) registers.set(index, registerOf(part.notes, chords[index].start, chords[index + 1]?.start ?? Infinity));
+    return registers.get(index)!;
+  };
   const events: NoteEvent[] = [];
   strokes.forEach((stroke, index) => {
     const next = strokes[index + 1]?.beat ?? Infinity;
@@ -101,7 +144,7 @@ export function comping(part: HarmonyPart, grid: HarmonyGrid, pattern: Stroke[][
     const end = Math.min(beatTime(grid.beats, Math.min(stroke.beat + stroke.length, next)), rests.find(start => start > time + 0.05) ?? Infinity);
     const name = chordAt(chords, time);
     if (!name) return;
-    voicing(name, family).forEach((pitch, string) => {
+    voicing(name, family, registerAt(time)).forEach((pitch, string) => {
       // A strum rolls from the low string up.
       const offset = family === 'guitar' ? string * 0.008 : 0;
       events.push({ time: time + offset, duration: Math.max(0.05, end - time - offset), pitch, velocity: Math.min(127, Math.round(stroke.velocity * strength)) });

@@ -24,6 +24,25 @@ test('every chord tone is voiced, with the slash bass at the bottom', () => {
   assert.deepEqual(a.voicing('N.C.', 'keys'), []);
 });
 
+test('a chord sits where the Harmonic stem played it: high chords high, low chords low', () => {
+  const pc = pitches => [...new Set(pitches.map(pitch => pitch % 12))].sort((x, y) => x - y);
+  for (const family of ['guitar', 'keys']) {
+    const high = a.voicing('A', family, { low: 57, high: 76 });
+    const low = a.voicing('A', family, { low: 45, high: 57 });
+    assert.deepEqual(pc(high), [1, 4, 9], `${family} high: ${high}`);
+    assert.deepEqual(pc(low), [1, 4, 9], `${family} low: ${low}`);
+    assert.ok(Math.max(...high) > Math.max(...low) + 10 && Math.max(...high) <= 76, `${family}: ${high} over ${low}`);
+    assert.ok(high.every((pitch, i) => !i || pitch > high[i - 1]), 'Bass first, rising');
+  }
+  assert.equal(a.voicing('C/E', 'guitar', { low: 52, high: 72 })[0] % 12, 4, 'Slash bass lowest');
+  const notes = [50, 57, 62, 66, 69].map(pitch => ({ start: 1, end: 2, pitch, unit: 0, length: 4 }));
+  assert.deepEqual(a.registerOf(notes, 0.5, 3), { low: 50, high: 69 });
+  assert.equal(a.registerOf(notes.slice(0, 1), 0.5, 3), null);
+  const grid = { beats: Array.from({ length: 9 }, (_, i) => i * 0.5), firstBar: 0 };
+  const struck = a.comping({ chords: [{ start: 0, name: 'D' }], notes }, grid, [[[0, 4, 100]]], 'keys');
+  assert.ok(Math.max(...struck.map(event => event.pitch)) <= 69 && Math.max(...struck.map(event => event.pitch)) >= 62, 'Comping follows the score');
+});
+
 test('comping strikes the style rhythm on the song beats with the chord of the moment', () => {
   const grid = { beats: Array.from({ length: 17 }, (_, i) => i * 0.5), firstBar: 1 };
   const part = { chords: [{ start: 0, name: 'C' }, { start: 2.5, name: 'G' }], notes: [] };
