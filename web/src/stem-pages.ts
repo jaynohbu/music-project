@@ -9,7 +9,7 @@ import { HarmonyStrip, transposeKey, transposePart } from './harmony-strip';
 import { shiftBuffer } from './pitch-shift';
 import { scoreSheet, sheetFileName } from './score-sheet';
 import {
-  ACCOMPANIMENT_KINDS, type AccompanimentChoices, type AccompanimentKind, type StyleLibrary, accompanimentEvents, familyOf, offered,
+  ACCOMPANIMENT_KINDS, type AccompanimentChoices, type AccompanimentKind, SONG_STYLE, type StyleLibrary, accompanimentEvents, familyOf, offered,
 } from './accompaniment';
 import { AccompanimentVoice, type PlayClock, loadLibrary, loadSound } from './accompaniment-player';
 import { LyricsStrip } from './lyrics-strip';
@@ -739,7 +739,7 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
             @if (accompanimentChoices(); as choices) {
               <p class="hint">Genre heard: {{ choices.genre }}. Styles and sounds are listed closest to this song first.</p>
             } @else {
-              <p class="hint">Played from the Harmonic chords and melody. Styles and sounds can be changed while it plays.</p>
+              <p class="hint">Played from the Harmonic score, by default with the rhythm the Harmonic stem plays. Styles and sounds can be changed while it plays.</p>
             }
             @if (accompanimentError()) { <p class="error" role="alert">{{ accompanimentError() }}</p> }
             @for (part of accompaniments(); track part.id) {
@@ -747,8 +747,8 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                 <strong>{{ kindLabel(part.kind) }}</strong>
                 <label>Style
                   <select [value]="part.style" (change)="changeAccompaniment(part.id, { style: $any($event.target).value })">
-                    @for (style of offeredFor(part.kind).styles; track style; let first = $first) {
-                      <option [value]="style" [selected]="style === part.style">{{ style }}{{ first ? ' (closest)' : '' }}</option>
+                    @for (style of offeredFor(part.kind).styles; track style; let i = $index) {
+                      <option [value]="style" [selected]="style === part.style">{{ style }}{{ i === 1 ? ' (closest)' : '' }}</option>
                     }
                   </select>
                 </label>
@@ -1163,7 +1163,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     const id = this.nextAccompaniment++;
     const part: AccompanimentPart = {
       id, kind, loading: true, volume: saved?.volume ?? 80, muted: saved?.muted ?? false,
-      style: saved?.style && this.accompanimentLibrary()!.styles[saved.style] ? saved.style : choices.styles[0],
+      style: saved?.style && choices.styles.includes(saved.style) ? saved.style : choices.styles[0],
       sound: saved?.sound !== undefined && choices.sounds.includes(saved.sound) ? saved.sound : choices.sounds[0],
     };
     this.voices.set(id, new AccompanimentVoice(this.context, this.master));
@@ -1193,7 +1193,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
       const buffer = await loadSound(this.context, part.sound);
       const current = this.accompaniments().find(item => item.id === id);
       if (!current || current.sound !== part.sound || current.style !== part.style) return;
-      const events = accompanimentEvents(part.kind, score, grid, library.styles[part.style][familyOf(part.kind)], this.transpose());
+      const events = accompanimentEvents(part.kind, score, grid, part.style === SONG_STYLE ? null : library.styles[part.style][familyOf(part.kind)], this.transpose());
       voice.setNotes(events, buffer, library.samples, this.playing() ? this.playClock() : undefined);
       this.applyAccompanimentLevels();
     } catch (error) {

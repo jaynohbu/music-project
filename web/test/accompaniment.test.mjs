@@ -105,13 +105,32 @@ test('the song choices are offered first, then the rest of the family', () => {
   const library = JSON.parse(readFileSync(new URL('../public/accompaniment/styles.json', import.meta.url), 'utf8'));
   const choices = { genre: 'worship', guitar: { styles: ['PopBallad2Sus', 'PopBallad2'], sounds: [27, 24] }, keys: { styles: [], sounds: [48] } };
   const guitar = a.offered(library, choices, 'guitar');
-  assert.deepEqual(guitar.styles, ['PopBallad2Sus', 'PopBallad2']);
+  assert.deepEqual(guitar.styles, [a.SONG_STYLE, 'PopBallad2Sus', 'PopBallad2'], 'The stem\'s own rhythm first');
   assert.deepEqual(guitar.sounds.slice(0, 2), [27, 24]);
   assert.ok(guitar.sounds.includes(30) && guitar.sounds.every(id => library.sounds[id].family === 'guitar'));
-  assert.deepEqual(a.offered(library, choices, 'keys').styles, library.groups.worship.styles, 'No ranking: the group order');
+  assert.deepEqual(a.offered(library, choices, 'keys').styles, [a.SONG_STYLE, ...library.groups.worship.styles], 'No ranking: the group order');
   assert.ok(a.offered(library, undefined, 'keys').styles.length > 0, 'No choices at all: the pop group');
   for (const [name, families] of Object.entries(library.styles)) {
     assert.equal(families.guitar.length, 8, name);
     assert.ok(families.guitar.flat().every(([beat, length, velocity]) => beat >= 0 && beat < 4 && length > 0 && velocity > 0), name);
   }
+});
+
+test('by default a part plays the rhythm of the Harmonic stem: each of its chords when struck, as long as it rang', () => {
+  const grid = { beats: Array.from({ length: 9 }, (_, i) => i * 0.5), firstBar: 0 };
+  const note = (start, end, pitch, unit) => ({ start, end, pitch, unit, length: 2 });
+  // A strummed chord at 0.31 s (the low note 0.04 s first), one at 1.12 s ringing past the next at 1.6 s, and a rest.
+  const part = { chords: [{ start: 0, name: 'C' }, { start: 2.2, name: 'N.C.' }],
+    notes: [note(0.31, 0.9, 48, 2), note(0.35, 0.9, 64, 3), note(1.12, 2.0, 67, 9), note(1.6, 2.5, 72, 13)] };
+  const rhythm = a.accompanimentEvents('keys-rhythm', part, grid, null);
+  const strikes = [...new Set(rhythm.map(event => event.time))];
+  assert.deepEqual(strikes, [0.31, 1.12, 1.6], 'When the stem struck');
+  assert.deepEqual(pc(rhythm.filter(event => event.time === 0.31).map(event => event.pitch)), [0, 4, 7], 'Every chord tone');
+  assert.ok(rhythm.filter(event => event.time === 0.31).every(event => Math.abs(event.duration - 0.59) < 1e-9), 'As long as it rang');
+  assert.ok(rhythm.filter(event => event.time === 1.12).every(event => Math.abs(event.duration - 0.48) < 1e-9), 'Up to the next');
+  assert.ok(rhythm.filter(event => event.time === 1.6).every(event => event.time + event.duration <= 2.2 + 1e-9), 'Stopped by the rest');
+  const played = a.accompanimentEvents('keys-melody', part, grid, null);
+  const score = played.filter(event => event.velocity === 108).map(event => [event.time, event.pitch]);
+  assert.deepEqual(score, [[0.31, 48], [0.31, 64], [1.12, 67], [1.6, 72]], 'Every score note, the strum struck together');
+  assert.equal(a.offered(JSON.parse(readFileSync(new URL('../public/accompaniment/styles.json', import.meta.url), 'utf8')), undefined, 'keys').styles[0], a.SONG_STYLE);
 });

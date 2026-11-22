@@ -6,6 +6,9 @@ import { type NoteEvent, type StyleLibrary, sampleFor } from './accompaniment';
 const AHEAD = 0.25;      // Seconds scheduled ahead of the clock.
 const TICK_MS = 60;
 const ATTACK = 0.004, RELEASE = 0.12;
+// Notes starting within this many seconds of each other are one chord: their level is shared, so a full chord is
+// no louder than a few notes and does not clip.
+const TOGETHER = 0.05;
 
 const sounds = new Map<string, Promise<AudioBuffer>>();
 let library: Promise<StyleLibrary> | undefined;
@@ -39,6 +42,7 @@ export interface PlayClock { startedAt: number; startOffset: number; start: numb
 export class AccompanimentVoice {
   readonly output: GainNode;
   private events: NoteEvent[] = [];
+  private shares: number[] = [];
   private buffer?: AudioBuffer;
   private samples?: StyleLibrary['samples'];
   private active = new Set<AudioBufferSourceNode>();
@@ -53,6 +57,13 @@ export class AccompanimentVoice {
 
   setNotes(events: NoteEvent[], buffer: AudioBuffer, samples: StyleLibrary['samples'], clock?: PlayClock): void {
     this.events = events;
+    // Events come sorted by time.
+    let from = 0, to = 0;
+    this.shares = events.map(event => {
+      while (events[from].time < event.time - TOGETHER) from++;
+      while (to < events.length && events[to].time <= event.time + TOGETHER) to++;
+      return 1 / Math.sqrt(Math.max(1, (to - from) / 2));
+    });
     this.buffer = buffer;
     this.samples = samples;
     // A change while playing takes over from the next scheduled moment.
@@ -101,10 +112,10 @@ export class AccompanimentVoice {
     while (cursor.context < horizon) {
       const until = Math.min(clock.end, cursor.song + (horizon - cursor.context));
       while (cursor.index < this.events.length && this.events[cursor.index].time < until) {
-        const event = this.events[cursor.index++];
+        const share = this.shares[cursor.index], event = this.events[cursor.index++];
         // Notes are cut at the end of the section, so a loop starts clean.
         const duration = Math.min(event.duration, clock.end - event.time);
-        if (duration > 0) this.play(event, cursor.context + (event.time - cursor.song), duration);
+        if (duration > 0) this.play(event, cursor.context + (event.time - cursor.song), duration, share);
       }
       cursor.context += until - cursor.song;
       cursor.song = until;
@@ -115,14 +126,14 @@ export class AccompanimentVoice {
     }
   }
 
-  private play(event: NoteEvent, when: number, duration: number): void {
+  private play(event: NoteEvent, when: number, duration: number, share: number): void {
     const samples = this.samples!, buffer = this.buffer!;
     const { index, rate } = sampleFor(samples.pitches, event.pitch);
     const source = this.context.createBufferSource();
     source.buffer = buffer;
     source.playbackRate.value = rate;
     const envelope = this.context.createGain();
-    const level = (event.velocity / 127) ** 1.5 * 0.5;
+    const level = (event.velocity / 127) ** 1.5 * 0.5 * share;
     const at = Math.max(when, this.context.currentTime);
     // The sample lasts samples.length seconds at its own pitch; held notes end with it.
     const held = Math.min(duration, samples.length / rate - RELEASE);
