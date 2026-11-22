@@ -34,11 +34,13 @@ function harness() {
     { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText)(english, english.exports);
   const t = (key, values = {}) => english.exports.default[key].replace(/\{(\w+)\}/g, (match, name) => name in values ? String(values[name]) : match);
   const mocks = { react, 'react-native': native, 'react/jsx-runtime': { jsx: element, jsxs: element, Fragment: 'Fragment' }, './theme': theme,
-    './language': { useT: () => t }, './stem-scroll': { EDGE: 22 } };
+    './language': { useT: () => t },
+    './stem-scroll': { EDGE: 22, railCover: { press: () => cover.push('press'), move: () => cover.push('move'), release: () => cover.push('release') } } };
+  const cover = [];
   const module = { exports: {} };
   new Function('require', 'module', 'exports', code)(name => mocks[name], module, module.exports);
   return {
-    ...module.exports,
+    ...module.exports, cover,
     mount(component, props) {
       let tree;
       render = () => { index = 0; tree = component(props()); };
@@ -88,6 +90,13 @@ test('vertical channel fader maps touch to web range, snaps to step and clamps',
   assert.ok(changes.every(next => Number.isInteger(next * 2)), `Values snap to 0.5 dB: ${changes}`);
   view.rerender();
   assert.ok(find(view.tree, byLabel('Bass')).props.children[1].props.style[1].top < 33, 'Thumb moves up for a higher value');
+});
+
+test('holding a fader hides the scroll rails until it is let go', () => {
+  const h = harness();
+  const view = h.mount(h.ChannelStrip, () => ({ label: 'Bass', display: '0 dB', value: 0, min: -12, max: 12, step: .5, note: 'dB', onChange: () => {} }));
+  drag(find(view.tree, byLabel('Bass')), { locationY: 45 }, [{ dx: 0, dy: -5 }], { dx: 0, dy: -5 });
+  assert.deepEqual(h.cover, ['press', 'move', 'release']);
 });
 
 test('bypassed faders ignore drags', () => {

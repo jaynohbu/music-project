@@ -186,6 +186,12 @@ progress { width: 100%; height: 12px; accent-color: #3459c9; }
 .score-note line, .score-note path { fill: none; stroke: currentColor; stroke-width: 1.2; }
 .staff-clef { position: absolute; left: 6px; color: var(--m-score-ink); font-size: 44px; line-height: 52px; pointer-events: none; }
 .staff-clef.bass { font-size: 34px; }
+.key-control { display: flex; flex: 1 1 100%; align-items: center; gap: 8px; }
+.key-label { min-width: 46px; font-size: 11px; font-weight: 800; letter-spacing: .5px; color: var(--m-console-ink); }
+.key-step { min-width: 40px; }
+.key-value { flex: 1; text-align: center; font-size: 16px; font-weight: 800; color: var(--m-console-ink); }
+.key-value small { margin-left: 8px; font-size: 12px; font-weight: 600; color: var(--m-console-muted); }
+.key-mark { position: absolute; width: 8px; text-align: center; color: var(--m-score-ink); font-size: 15px; line-height: 20px; pointer-events: none; }
 .score-beam { fill: var(--m-note); }
 .score-note .score-cross { stroke-width: 1.5; }
 .drum-clef { position: absolute; left: 12px; width: 4px; height: 16px; border-left: 3px solid var(--m-score-ink); border-right: 3px solid var(--m-score-ink); box-sizing: content-box; pointer-events: none; }

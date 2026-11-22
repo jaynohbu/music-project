@@ -279,6 +279,51 @@ function drumRests(hits: DrumHit[], firstBar: number): ScoreRest[] {
   return rests;
 }
 
+// Key change: chord names, notes and the key move by semitones, spelled with flats in flat keys.
+const SHARP_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const FLAT_NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'];
+// F♯ is written with sharps rather than G♭, as guitar music usually is.
+const FLAT_KEYS = new Set(['F', 'Bb', 'Eb', 'Ab', 'Db', 'Dm', 'Gm', 'Cm', 'Fm', 'Bbm', 'Ebm']);
+const NOTE_INDEX: Record<string, number> = Object.fromEntries([
+  ...SHARP_NAMES.map((name, index) => [name, index]), ...FLAT_NAMES.map((name, index) => [name, index]),
+]);
+const rootOf = (name: string) => (name[1] === '#' || name[1] === 'b' ? name.slice(0, 2) : name.slice(0, 1));
+
+function moveNote(note: string, semitones: number, flats: boolean) {
+  const index = NOTE_INDEX[note];
+  if (index === undefined) return note;
+  return (flats ? FLAT_NAMES : SHARP_NAMES)[((index + semitones) % 12 + 12) % 12];
+}
+
+export function transposeKey(key: string, semitones: number) {
+  const root = rootOf(key);
+  const moved = moveNote(root, semitones, false) + key.slice(root.length);
+  // Spell the new key the way it is usually written (Bb, not A#).
+  const flat = moveNote(root, semitones, true) + key.slice(root.length);
+  return FLAT_KEYS.has(flat) ? flat : moved;
+}
+
+export function transposeChord(name: string, semitones: number, flats: boolean) {
+  const [chord, bass] = name.split('/');
+  const root = rootOf(chord);
+  const moved = moveNote(root, semitones, flats) + chord.slice(root.length);
+  return bass ? `${moved}/${moveNote(bass, semitones, flats)}` : moved;
+}
+
+// `songKey` (before the change) spells parts without a key of their own, such as the bass, like the song.
+export function transposePart(part: HarmonyPart, semitones: number, songKey?: string): HarmonyPart {
+  if (!semitones) return part;
+  const key = part.key ? transposeKey(part.key, semitones) : undefined;
+  const heard = key ?? (songKey ? transposeKey(songKey, semitones) : undefined);
+  const flats = heard ? FLAT_KEYS.has(heard) : semitones < 0;
+  const move = (notes: HarmonyNote[]) => notes.map(note => ({ ...note, pitch: note.pitch + semitones }));
+  return {
+    ...part, key,
+    chords: part.chords.map(chord => ({ ...chord, name: transposeChord(chord.name, semitones, flats) })),
+    notes: move(part.notes), second: part.second && move(part.second),
+  };
+}
+
 @Component({
   selector: 'app-harmony-strip',
   standalone: true,
@@ -290,8 +335,9 @@ function drumRests(hits: DrumHit[], firstBar: number): ScoreRest[] {
           @for (y of staffLines; track y) { <line x1="0" x2="100%" [attr.y1]="y - frame().top" [attr.y2]="y - frame().top"></line> }
         </svg>
       }
-      <div class="harmony-window">
-        <svg class="harmony-flow" #flow aria-hidden="true" [attr.width]="width()" [attr.height]="frame().height">
+      <div class="harmony-window" [style.left.px]="start()">
+        <svg class="harmony-flow" #flow aria-hidden="true" [attr.width]="width()" [attr.height]="frame().height"
+          [style.margin-left.px]="-start()">
           <g [attr.transform]="'translate(0 ' + -frame().top + ')'">
           @for (x of barLines(); track x) {
             <line class="score-bar" [attr.x1]="x" [attr.x2]="x" [attr.y1]="staffLines[4]" [attr.y2]="staffLines[0]"></line>
@@ -380,6 +426,9 @@ function drumRests(hits: DrumHit[], firstBar: number): ScoreRest[] {
       } @else if (written()) {
         <span class="staff-clef" [class]="'staff-clef ' + clef()" [style.top.px]="staffLines[4] - frame().top - (clef() === 'bass' ? 16 : 10)"
           aria-hidden="true">{{ clef() === 'bass' ? '𝄢' : '𝄞' }}</span>
+        @for (mark of marks(); track $index) {
+          <span class="key-mark" aria-hidden="true" [style.left.px]="36 + $index * 8" [style.top.px]="mark.y - frame().top - 11">{{ mark.symbol }}</span>
+        }
       }
       <span class="staff-now" aria-hidden="true"></span>
     </div>
@@ -390,6 +439,15 @@ export class HarmonyStrip {
   readonly stem = input.required<string>();
   readonly grid = input.required<HarmonyGrid>();
   readonly time = input.required<number>();
+  // The song's key after any key change, for the bass part, which has no key of its own.
+  readonly songKey = input<string>();
+  readonly signature = computed(() => keySignature(this.isDrums() ? undefined : this.part().key ?? this.songKey()));
+  // The key signature sits after the clef and pushes the moving score right by its width, as in the app.
+  readonly marks = computed(() => {
+    const clef = this.clef();
+    return clef && this.written() && !this.isDrums() ? signatureMarks(this.signature(), clef, CLEFS[this.stem()].bottomStep) : [];
+  });
+  readonly start = computed(() => 44 + (this.marks().length ? this.marks().length * 8 + 4 : 0));
   readonly middleLineY = MIDDLE_LINE_Y;
   readonly staffLines = [0, 1, 2, 3, 4].map(line => BOTTOM_LINE_Y - line * LINE_GAP);
   // The strip shows only rows the song uses: from just above its chord names to just below its lowest mark,
@@ -415,9 +473,10 @@ export class HarmonyStrip {
   readonly written = computed(() => this.part().notes.length > 0 || !!this.part().second?.length || !!this.part().hits?.length);
   readonly clef = computed(() => CLEFS[this.stem()]?.clef);
   readonly voices = computed(() => !this.isDrums() && !!this.part().second?.length);
-  readonly notes = computed(() => this.part().notes.map(note => notePieces(this.stem(), note, this.grid().firstBar, this.voices() ? 'up' : undefined)));
+  readonly notes = computed(() => this.part().notes.map(note =>
+    notePieces(this.stem(), note, this.grid().firstBar, this.voices() ? 'up' : undefined, this.signature())));
   // The line under the melody, drawn lighter with its stems down.
-  readonly second = computed(() => this.voices() ? this.part().second!.map(note => notePieces(this.stem(), note, this.grid().firstBar, 'down')) : []);
+  readonly second = computed(() => this.voices() ? this.part().second!.map(note => notePieces(this.stem(), note, this.grid().firstBar, 'down', this.signature())) : []);
   readonly drums = computed<DrumScore>(() => drumScore(this.part().hits ?? [], this.grid().firstBar));
   readonly rests = computed(() => this.isDrums() ? this.drums().rests : scoreRests(this.part().notes, this.grid().firstBar));
   // Drums have no chords; the score is written from the hits alone.

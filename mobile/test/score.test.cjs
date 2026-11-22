@@ -108,6 +108,7 @@ test('a key change moves chords, slash basses, notes and the key, spelled for th
   assert.equal(score.transposeKey('C', -2), 'Bb', 'Flat keys keep flats');
   assert.equal(score.transposeKey('Am', 1), 'Bbm');
   assert.equal(score.transposeKey('Am', 2), 'Bm');
+  assert.equal(score.transposeKey('E', 2), 'F#', 'F sharp rather than G flat');
   assert.equal(score.transposeChord('Cmaj7/E', 2, false), 'Dmaj7/F#');
   assert.equal(score.transposeChord('G/B', -2, true), 'F/A');
   assert.equal(score.transposeChord('Ebm7', 1, false), 'Em7');
@@ -119,6 +120,10 @@ test('a key change moves chords, slash basses, notes and the key, spelled for th
   assert.equal(moved.notes[0].pitch, 58);
   assert.equal(moved.second[0].pitch, 53);
   assert.equal(score.transposePart(part, 0), part, 'No change keeps the same part');
+  // The bass has no key of its own; it is spelled like the song.
+  const bass = { chords: [{ start: 0, name: 'G' }, { start: 1, name: 'C#m' }], notes: [] };
+  assert.deepEqual(score.transposePart(bass, 3, 'C').chords.map(chord => chord.name), ['Bb', 'Em']);
+  assert.deepEqual(score.transposePart(bass, 3).chords.map(chord => chord.name), ['A#', 'Em']);
 });
 
 test('key signatures count their sharps or flats and sit where they are written on each clef', () => {

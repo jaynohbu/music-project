@@ -14,3 +14,8 @@ test('key signatures are spelled the same as in the app', () => {
   const block = source => source.slice(source.indexOf('// Key signatures:'), source.indexOf('// Steps count letter names'));
   assert.equal(block(read('../src/harmony-strip.ts')), block(read('../../mobile/src/score.ts')));
 });
+
+test('key change moves chords and notes the same as in the app', () => {
+  const block = source => source.slice(source.indexOf('// Key change:'), source.indexOf('\n}\n', source.indexOf('export function transposePart')) + 2);
+  assert.equal(block(read('../src/harmony-strip.ts')), block(read('../../mobile/src/score.ts')));
+});

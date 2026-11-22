@@ -1,11 +1,12 @@
-import { Component, ElementRef, EventEmitter, Injector, Input, ViewChild, OnChanges, OnDestroy, OnInit, Output, afterNextRender, effect, inject, signal, untracked } from '@angular/core';
+import { Component, ElementRef, EventEmitter, Injector, Input, ViewChild, OnChanges, computed, OnDestroy, OnInit, Output, afterNextRender, effect, inject, signal, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { ActivityService, ENSEMBLE_STEMS, HARMONY_STEMS, HarmonyGrid, REGENERATED_STEMS, HarmonyPart, Job, LyricLine, SceneEntry, SceneSettings, STEM_NAMES, StemName, StemsService, errorMessage } from './services';
 import { ConfirmationService } from './confirmation';
 import { captureSceneSettings, restoredSceneInterval } from './scene-settings';
-import { HarmonyStrip } from './harmony-strip';
+import { HarmonyStrip, transposeKey, transposePart } from './harmony-strip';
+import { shiftBuffer } from './pitch-shift';
 import { scoreSheet, sheetFileName } from './score-sheet';
 import { LyricsStrip } from './lyrics-strip';
 import { LyricsEditor, firstChange } from './lyrics-editor';
@@ -14,6 +15,8 @@ import {
   StemEffects, applyStemEffects, createStemEffects, defaultEffects,
 } from './stem-effects';
 
+// The app's limit (mobile/src/player.ts): beyond it voices sound mechanical.
+const MAX_TRANSPOSE = 6;
 const MAX_UPLOAD_BYTES = 55_000_000;
 const MAX_AUDIO_SECONDS = 900;
 const STEM_POLL_MS = 4000;
@@ -331,8 +334,15 @@ interface StemTrack extends EffectSettings {
 interface StemRuntime extends StemEffects {
   buffer: AudioBuffer;
   cleanedBuffer?: AudioBuffer;
+  // The same audio moved by the key change; played instead of the buffers above while the key is changed.
+  shifted?: { semitones: number; buffer: AudioBuffer; cleaned?: AudioBuffer };
   originalLevel: GainNode;
   cleanedLevel: GainNode;
+}
+
+// The buffers to play: moved by the key change once they are ready, the original audio until then.
+function heard(runtime: StemRuntime): { buffer: AudioBuffer; cleaned?: AudioBuffer } {
+  return runtime.shifted ?? { buffer: runtime.buffer, cleaned: runtime.cleanedBuffer };
 }
 
 function newTrack(name: string): StemTrack {
@@ -477,7 +487,7 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
               @if (isHarmonic(track.name) && (harmonyParts() ? regenerating(track.name) : findingChords())) {
                 <div class="task-note" role="status"><span>{{ chordsNote }}</span></div>
               }
-              @if (isHarmonic(track.name) && harmonyParts(); as parts) {
+              @if (isHarmonic(track.name) && heardParts(); as parts) {
                 @if (track.name === 'drums' && !parts['drums'] && !regenerating('drums')) {
                   <p class="hint">Press Regenerate drum score to write this song's drums.</p>
                 } @else if (hasMusic(parts[track.name])) {
@@ -485,7 +495,8 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                     <p class="hint">Key {{ key }} · Guitars, keys and the other instruments, heard together.</p>
                   }
                   <!-- The ensemble (other) is written at concert pitch on a treble staff. -->
-                  <app-harmony-strip [part]="parts[track.name]" [stem]="track.name" [grid]="harmonyGrid()!" [time]="position()"></app-harmony-strip>
+                  <app-harmony-strip [part]="parts[track.name]" [stem]="track.name" [grid]="harmonyGrid()!" [time]="position()"
+                    [songKey]="heardKey()"></app-harmony-strip>
                 } @else if (parts[track.name]) {
                   <p class="hint">No clear chords or notes were found in this stem.</p>
                 }
@@ -635,6 +646,15 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                       [attr.aria-valuetext]="masterVolume() + ' percent'" aria-orientation="horizontal"
                       [value]="masterVolume()" (input)="setMasterVolume($event)" [disabled]="!canPlay()">
                   </div>
+                  <!-- The whole song, vocals included, moves without changing speed; the scores follow, drums aside. -->
+                  <div class="key-control" role="group" [attr.aria-label]="track.label + ' key change'">
+                    <span class="key-label">KEY</span>
+                    <button type="button" class="secondary key-step" (click)="setTranspose(transpose() - 1)"
+                      [disabled]="!canPlay() || transpose() <= -maxTranspose" aria-label="Key down a semitone">−</button>
+                    <span class="key-value" aria-live="polite">{{ keyName() }}@if (transpose() && songKey()) {<small>Original {{ songKey() }}</small>}@if (keyBusy()) {<small>Changing key…</small>}</span>
+                    <button type="button" class="secondary key-step" (click)="setTranspose(transpose() + 1)"
+                      [disabled]="!canPlay() || transpose() >= maxTranspose" aria-label="Key up a semitone">+</button>
+                  </div>
                 </div>
                 </div>
                 <div class="console-scroll" tabindex="0"
@@ -776,6 +796,25 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   readonly savingLyrics = signal(false);
   readonly lyricsSaveError = signal('');
   readonly harmonyParts = signal<Record<string, HarmonyPart> | null>(null);
+  // Key change in semitones, as in the app: −6 to +6.
+  readonly maxTranspose = MAX_TRANSPOSE;
+  readonly transpose = signal(0);
+  readonly keyBusy = signal(false);
+  private keyToken = 0;
+  // The song's key is the ensemble's; the bass part has none of its own.
+  readonly songKey = computed(() => this.harmonyParts()?.['other']?.key);
+  readonly heardKey = computed(() => { const key = this.songKey(); return key ? transposeKey(key, this.transpose()) : undefined; });
+  // Key names when the song's key is known; semitones only until its score is found.
+  readonly keyName = computed(() => {
+    const shift = this.transpose();
+    return this.heardKey() ?? (shift ? `${shift > 0 ? '+' : ''}${shift} semitones` : 'Original');
+  });
+  // The scores as heard: chords and both lines move with the key; drums have no pitch.
+  readonly heardParts = computed(() => {
+    const parts = this.harmonyParts(), shift = this.transpose();
+    if (!parts || !shift) return parts;
+    return Object.fromEntries(Object.entries(parts).map(([name, part]) => [name, name === 'drums' ? part : transposePart(part, shift, this.songKey())]));
+  });
   readonly harmonyGrid = signal<HarmonyGrid | null>(null);
   readonly Math = Math;
   readonly controls = FADER_CONTROLS;
@@ -818,9 +857,9 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   private snapshotSettings(): SceneSettings {
     const settings = captureSceneSettings(this.masterVolume(), this.sectionStart(), this.sectionEndTime(),
       this.loopSection(), this.tracks(), this.job()?.duration);
-    // Keep the app's live-input mix and key change; saving from the website must not erase them.
-    const { live, transpose } = this.sceneEntry?.settings ?? {};
-    return { ...settings, ...(live ? { live } : {}), ...(transpose !== undefined ? { transpose } : {}) };
+    // Keep the app's live-input mix; saving from the website must not erase it.
+    const { live } = this.sceneEntry?.settings ?? {};
+    return { ...settings, ...(live ? { live } : {}), transpose: this.transpose() };
   }
 
   async resetSong(): Promise<void> {
@@ -833,6 +872,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     this.masterVolume.set(80);
     if (this.master && this.context) this.master.gain.setTargetAtTime(0.8, this.context.currentTime, 0.015);
     this.sectionStart.set(0); this.sectionEnd.set(null); this.loopSection.set(false); this.position.set(0);
+    void this.setTranspose(0);
   }
 
   editMetadata(): void {
@@ -1023,17 +1063,61 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
 
   isHarmonic(name: string): boolean { return HARMONY_STEMS.includes(name); }
 
+  async setTranspose(value: number): Promise<void> {
+    const semitones = Math.max(-MAX_TRANSPOSE, Math.min(MAX_TRANSPOSE, Math.round(value)));
+    if (!Number.isFinite(semitones) || semitones === this.transpose()) return;
+    this.transpose.set(semitones);
+    await this.applyKey();
+  }
+
+  // Moves every stem, and its cleaned version, to the current key; playback restarts in place when done.
+  private async applyKey(): Promise<void> {
+    const context = this.context, token = ++this.keyToken;
+    if (!context) return;
+    // Quick presses are gathered, so only the key they end on is worked out.
+    this.keyBusy.set(true);
+    await new Promise(resolve => setTimeout(resolve, 400));
+    if (token !== this.keyToken) return;
+    const semitones = this.transpose();
+    const runtimes = [...this.runtimes.values()];
+    try {
+      if (runtimes.every(runtime => (runtime.shifted?.semitones ?? 0) === semitones &&
+        (!semitones || !runtime.cleanedBuffer || runtime.shifted?.cleaned))) return;
+      const shifted = await Promise.all(runtimes.map(async runtime => {
+        if (!semitones) return undefined;
+        const same = runtime.shifted?.semitones === semitones ? runtime.shifted : undefined;
+        const [buffer, cleaned] = await Promise.all([
+          same?.buffer ?? shiftBuffer(context, runtime.buffer, semitones),
+          runtime.cleanedBuffer && (same?.cleaned ?? shiftBuffer(context, runtime.cleanedBuffer, semitones)),
+        ]);
+        return { semitones, buffer, cleaned };
+      }));
+      if (this.destroyed || token !== this.keyToken || context !== this.context) return;
+      runtimes.forEach((runtime, index) => { runtime.shifted = shifted[index]; });
+      if (this.playing()) {
+        this.pause();
+        void this.play();
+      }
+    } catch (error) {
+      if (token === this.keyToken) this.error.set(`Could not change the key: ${errorMessage(error)}`);
+    } finally {
+      if (token === this.keyToken) this.keyBusy.set(false);
+    }
+  }
+
   // The printed score, with the song's title and artist; the browser names a saved PDF after the page's title.
   private scoreSheetFor(track: { name: string; label: string }): string | null {
-    const part = this.harmonyParts()?.[track.name], grid = this.harmonyGrid();
+    const part = this.heardParts()?.[track.name], grid = this.harmonyGrid();
     if (!part || !grid) return null;
     const title = this.sceneTitle || this.job()?.title || 'Score';
     const artist = this.job()?.author?.trim() || undefined;
-    // The bass part is written in the song's key, which only the ensemble carries.
-    const songKey = this.harmonyParts()?.['other']?.key;
+    // The bass part is written in the song's key, which only the ensemble carries; both follow the key change.
+    const songKey = this.heardKey();
     const key = track.name === 'drums' ? undefined : part.key ?? songKey;
+    const original = this.transpose() && this.songKey() ? `Original ${this.songKey()}` : '';
     const html = scoreSheet(part, track.name, grid, {
-      title, artist, subtitle: [track.label, key && `Key ${key}`].filter(Boolean).join(' · '), page: (page, pages) => `${page} / ${pages}`,
+      title, artist, subtitle: [track.label, key && `Key ${key}`, original].filter(Boolean).join(' · '),
+      page: (page, pages) => `${page} / ${pages}`,
     }, songKey);
     const name = sheetFileName(title, track.label).replace(/\.pdf$/, '').replace(/&/g, '&amp;');
     return html.replace(/<title>.*?<\/title>/, `<title>${name}</title>`);
@@ -1349,7 +1433,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
         const offset = Math.min(this.position(), runtime.buffer.duration - length);
         const source = context.createBufferSource();
         const envelope = context.createGain();
-        source.buffer = useCleaned && runtime.cleanedBuffer || runtime.buffer;
+        source.buffer = useCleaned && heard(runtime).cleaned || heard(runtime).buffer;
         source.connect(envelope);
         envelope.connect(runtime.input);
         runtime.transport.gain.setTargetAtTime(1, context.currentTime, 0.003);
@@ -1663,6 +1747,8 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     }
     if (this.destroyed || generation !== this.generation) return;
     this.loadingStems = false;
+    // A cleaned version that arrives after a key change is moved too.
+    if (missing.length && this.transpose() && this.hydrated()) void this.applyKey();
     // A version that arrives during playback needs a restart to join in sync.
     if (missing.length && this.playing()) {
       this.pause();
@@ -1681,6 +1767,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
         this.sectionEnd.set(end);
         this.loopSection.set(saved.loop);
         this.position.set(start);
+        this.transpose.set(Math.max(-MAX_TRANSPOSE, Math.min(MAX_TRANSPOSE, Math.round(saved.transpose ?? 0))));
         for (const [name, settings] of Object.entries(saved.tracks)) {
           this.updateTrack(name, settings);
           const runtime = this.runtimes.get(name);
@@ -1696,6 +1783,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
       }
       this.lastSettings = JSON.stringify(this.snapshotSettings());
       this.hydrated.set(true);
+      void this.applyKey();
       this.audioReady.emit();
     }
   }
@@ -1837,7 +1925,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
       for (const [name, runtime] of this.runtimes) {
         if (startOffset >= runtime.buffer.duration) continue;
         const source = context.createBufferSource();
-        source.buffer = runtime.buffer;
+        source.buffer = heard(runtime).buffer;
         source.loop = this.loopSection();
         source.loopStart = start;
         source.loopEnd = end;
@@ -1855,7 +1943,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
         if (!source.loop) source.stop(startAt + end - startOffset);
         if (runtime.cleanedBuffer) {
           const cleaned = context.createBufferSource();
-          cleaned.buffer = runtime.cleanedBuffer;
+          cleaned.buffer = heard(runtime).cleaned ?? runtime.cleanedBuffer;
           cleaned.loop = source.loop;
           cleaned.loopStart = start;
           cleaned.loopEnd = end;

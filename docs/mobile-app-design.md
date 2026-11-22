@@ -156,7 +156,8 @@ The user found the per-stem scores of guitar, piano and other torn apart and har
 - −6 to +6 semitones in the mixer console (KEY row under the master), applied to every stem including vocals, the cleaned versions and the live take, without changing speed (option A, real time; server-rendered keys were the rejected option B).
 - Scores follow: chords, slash basses, both lines and the key name, spelled with flats in flat keys.
 - Saved per scene entry as `transpose`; reset returns to 0. Expected to sound natural to about ±3 semitones; vocals may sound mechanical beyond that. Not yet judged by ear.
-- The website plays at the original key and passes `transpose` through when it saves a scene.
+- **Website (2026-11-22):** the same KEY row under the master (−6 to +6, the key name in the middle, "Original E" beside it once changed). `web/src/pitch-shift.ts` moves each decoded stem and its cleaned version with WSOLA plus resampling in background workers (about 2 s for four 4-minute stems), keeping length and timing, so playback, loops and seeking are unchanged; playback restarts in place when the new key is ready. Quick presses are gathered (400 ms). Scores (strip with key signature, full score, PDF) follow, drums aside. The key is saved in scenes and reset returns it to 0. Checked in Chrome on Enter Sandman (E → F♯, D♭).
+- **Spelling:** parts without a key of their own (bass) are spelled like the song's key (`transposePart(part, semitones, songKey)`); F♯ is preferred to G♭.
 
 ### Saving the mix
 
@@ -180,7 +181,7 @@ The user found the per-stem scores of guitar, piano and other torn apart and har
 
 ### Website
 
-Since 2026-11-20 the website gets the app's features where they apply: the ensemble score (shared by guitar, piano and other, with the key), no drum letters, the second line, automatic analysis on open with a status line, themes with backgrounds (menu in the header, saved per browser), the usage line on Music, store links on upload, per-stem mixer names, cropped score strips, and pass-through of the app's `live` and `transpose` scene fields. Not on the website: 12 languages, live input, key change playback (browsers need a pitch-shift library).
+Since 2026-11-20 the website gets the app's features where they apply: the ensemble score (shared by guitar, piano and other, with the key), no drum letters, the second line, automatic analysis on open with a status line, themes with backgrounds (menu in the header, saved per browser), the usage line on Music, store links on upload, per-stem mixer names, cropped score strips, and pass-through of the app's `live` and `transpose` scene fields. Not on the website: 12 languages, live input.
 
 ## App deployment
 
@@ -427,6 +428,8 @@ Where the code lives:
 The staff uses `react-native-svg`. It draws in four-bar chunks and mounts only those near the playhead. Moving the active highlight redraws one chunk.
 
 `react-native-svg` is a native module, so this needs a new native build. Builds 93fc2cf2 and earlier do not include it.
+
+**Rails while dragging (2026-11-22).** Holding any mixer control (fader, knob, markers, waveform) hides both scroll rails; letting go shows them again. `railCover` in `src/stem-scroll.tsx` also checks every 3 s while hidden and shows them if nothing moved, in case a release is lost.
 
 **Score PDF and full score (2026-11-22).** Each written score (other, bass, drums) has "Full score" and "Save PDF" buttons. `src/score-sheet.ts` lays the strip's marks out four bars to a line on A4 pages, with the title, the artist (right, under the title), part and key, tempo, a clef and key signature on every line, bar numbers and page numbers. `sheetPages` returns each page as an SVG string and `scoreSheet` wraps them in printable HTML, so both are pure and tested in `test/score-sheet.test.cjs`.
 

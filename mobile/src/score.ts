@@ -345,7 +345,8 @@ export function drumRests(hits: DrumHit[], firstBar: number): ScoreRest[] {
 // Key change: chord names, notes and the key move by semitones, spelled with flats in flat keys.
 const SHARP_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const FLAT_NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'];
-const FLAT_KEYS = new Set(['F', 'Bb', 'Eb', 'Ab', 'Db', 'Gb', 'Dm', 'Gm', 'Cm', 'Fm', 'Bbm', 'Ebm']);
+// F♯ is written with sharps rather than G♭, as guitar music usually is.
+const FLAT_KEYS = new Set(['F', 'Bb', 'Eb', 'Ab', 'Db', 'Dm', 'Gm', 'Cm', 'Fm', 'Bbm', 'Ebm']);
 const NOTE_INDEX: Record<string, number> = Object.fromEntries([
   ...SHARP_NAMES.map((name, index) => [name, index]), ...FLAT_NAMES.map((name, index) => [name, index]),
 ]);
@@ -372,10 +373,12 @@ export function transposeChord(name: string, semitones: number, flats: boolean) 
   return bass ? `${moved}/${moveNote(bass, semitones, flats)}` : moved;
 }
 
-export function transposePart(part: HarmonyPart, semitones: number): HarmonyPart {
+// `songKey` (before the change) spells parts without a key of their own, such as the bass, like the song.
+export function transposePart(part: HarmonyPart, semitones: number, songKey?: string): HarmonyPart {
   if (!semitones) return part;
   const key = part.key ? transposeKey(part.key, semitones) : undefined;
-  const flats = key ? FLAT_KEYS.has(key) : semitones < 0;
+  const heard = key ?? (songKey ? transposeKey(songKey, semitones) : undefined);
+  const flats = heard ? FLAT_KEYS.has(heard) : semitones < 0;
   const move = (notes: HarmonyNote[]) => notes.map(note => ({ ...note, pitch: note.pitch + semitones }));
   return {
     ...part, key,

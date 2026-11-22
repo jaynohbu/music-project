@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { PanResponder, Pressable, StyleSheet, Text, TextInput, View, type GestureResponderEvent, type PanResponderGestureState } from 'react-native';
 import Svg, { Path, Rect } from 'react-native-svg';
 import { useT } from './language';
-import { EDGE } from './stem-scroll';
+import { EDGE, railCover } from './stem-scroll';
 import { type Theme, useStyles, useTheme } from './theme';
 
 // Visual parity with the website mixer (web/src/styles.css: marker rail, waveform, console faders).
@@ -32,10 +32,11 @@ function createDrag(handlers: DragHandlers) {
       && Math.abs(gesture.dx) > 6 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.5,
     onPanResponderTerminationRequest: () => false,
     onShouldBlockNativeResponder: () => true,
-    onPanResponderGrant: (event, gesture) => latest.current.grant(event, gesture),
-    onPanResponderMove: (event, gesture) => latest.current.move(event, gesture),
-    onPanResponderRelease: (event, gesture) => latest.current.release?.(event, gesture),
-    onPanResponderTerminate: (event, gesture) => latest.current.release?.(event, gesture),
+    // The scroll rails hide while a control is held, so the hand sees the whole mixer.
+    onPanResponderGrant: (event, gesture) => { railCover.press(); latest.current.grant(event, gesture); },
+    onPanResponderMove: (event, gesture) => { railCover.move(); latest.current.move(event, gesture); },
+    onPanResponderRelease: (event, gesture) => { railCover.release(); latest.current.release?.(event, gesture); },
+    onPanResponderTerminate: (event, gesture) => { railCover.release(); latest.current.release?.(event, gesture); },
   });
   return { handlersRef: latest, responder };
 }

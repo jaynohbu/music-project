@@ -1,4 +1,4 @@
-import { createContext, useContext, useLayoutEffect, useState, type ComponentRef, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useLayoutEffect, useState, type ComponentRef, type ReactNode } from 'react';
 import {
   Animated, PanResponder, ScrollView, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent, type ScrollViewProps,
 } from 'react-native';
@@ -73,6 +73,31 @@ class RailFade {
   }
 }
 
+// While a fader or other mixer control is held, the rails get out of the way entirely, and come back on release.
+// A release can be lost (a cancelled touch, a control that unmounts mid-drag), so while hidden they are checked
+// every three seconds and shown again if nothing has moved since the last check.
+const WATCH_MS = 3000;
+class RailCover {
+  private hidden = false;
+  private moved = false;
+  private watch: ReturnType<typeof setInterval> | null = null;
+  private listeners = new Set<(hidden: boolean) => void>();
+  subscribe(listener: (hidden: boolean) => void) {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+  private set(hidden: boolean) {
+    if (this.watch) clearInterval(this.watch);
+    this.watch = hidden ? setInterval(() => { if (!this.moved) this.set(false); this.moved = false; }, WATCH_MS) : null;
+    this.moved = false;
+    if (hidden !== this.hidden) { this.hidden = hidden; this.listeners.forEach(listener => listener(hidden)); }
+  }
+  press() { this.set(true); }
+  move() { this.moved = true; }
+  release() { this.set(false); }
+}
+export const railCover = new RailCover();
+
 // Built outside React, as useDrag in mixer-console.tsx is, so the responder reads the latest sizes.
 function createRail(scroll: StemScroll, fade: RailFade) {
   const latest = { current: { view: 0, content: 0, offset: 0 } as Sizes };
@@ -101,14 +126,16 @@ function createRail(scroll: StemScroll, fade: RailFade) {
 
 // A rail at the screen's edge that scrolls the page. The page itself does not follow a finger, because
 // dragging a fader would otherwise scroll the stems along with it.
-function ScrollRail({ scroll, sizes, side, fade }: { scroll: StemScroll; sizes: Sizes; side: 'left' | 'right'; fade: RailFade }) {
+function ScrollRail({ scroll, sizes, side, fade, hidden }: {
+  scroll: StemScroll; sizes: Sizes; side: 'left' | 'right'; fade: RailFade; hidden: boolean;
+}) {
   const theme = useTheme(), t = useT();
   const [{ sizesRef, responder }] = useState(() => createRail(scroll, fade));
   useLayoutEffect(() => { sizesRef.current = sizes; });
   const { range, travel, thumb } = geometry(sizes);
   const top = range > 0 ? sizes.offset / range * travel : 0;
   const page = (direction: number) => scroll.scrollTo(clamp(sizes.offset + direction * sizes.view * .8, 0, range));
-  return <View {...responder.panHandlers} style={[styles.rail, { [side]: 0 }]}
+  return <View {...responder.panHandlers} pointerEvents={hidden ? 'none' : 'auto'} style={[styles.rail, { [side]: 0, opacity: hidden ? 0 : 1 }]}
     accessible accessibilityRole="adjustable" accessibilityLabel={t('scroll.rail')}
     accessibilityValue={{ min: 0, max: 100, now: range > 0 ? Math.round(sizes.offset / range * 100) : 0 }}
     accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
@@ -128,6 +155,8 @@ export function StemScrollView({ children, ...props }: ScrollViewProps & { child
   const [scroll] = useState(() => new StemScroll());
   const [fade] = useState(() => new RailFade());
   const [sizes, setSizes] = useState<Sizes>({ view: 0, content: 0, offset: 0 });
+  const [hidden, setHidden] = useState(false);
+  useEffect(() => railCover.subscribe(setHidden), []);
   return <Context.Provider value={scroll}>
     <View style={styles.frame}>
       <ScrollView ref={view => scroll.attach(view)} scrollEventThrottle={16} {...props} scrollEnabled={false}
@@ -153,8 +182,8 @@ export function StemScrollView({ children, ...props }: ScrollViewProps & { child
         {/* Lets the last stem scroll up to the focus line instead of stopping at the bottom of the screen. */}
         <View style={{ height: sizes.view * (1 - FOCUS_LINE) }} />
       </ScrollView>
-      <ScrollRail scroll={scroll} sizes={sizes} side="left" fade={fade} />
-      <ScrollRail scroll={scroll} sizes={sizes} side="right" fade={fade} />
+      <ScrollRail scroll={scroll} sizes={sizes} side="left" fade={fade} hidden={hidden} />
+      <ScrollRail scroll={scroll} sizes={sizes} side="right" fade={fade} hidden={hidden} />
     </View>
   </Context.Provider>;
 }

@@ -379,7 +379,8 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
   // The score follows the key change; drums have no pitch. Kept until the key or the score changes,
   // so the playhead's ten updates a second do not lay the score out again.
   const parts = tasks.parts, found = parts?.[name];
-  const part = useMemo(() => found && name !== 'drums' ? transposePart(found, transpose) : found, [found, name, transpose]);
+  const original = parts?.other?.key;
+  const part = useMemo(() => found && name !== 'drums' ? transposePart(found, transpose, original) : found, [found, name, transpose, original]);
   // The bass part has no key of its own; it is written in the song's key, after any key change.
   const ensembleKey = parts?.other?.key, songKey = ensembleKey ? transposeKey(ensembleKey, transpose) : undefined;
   const [saving, setSaving] = useState(false);
