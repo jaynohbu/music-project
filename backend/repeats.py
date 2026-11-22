@@ -13,6 +13,8 @@ there. Only the notes are copied.
 """
 import numpy as np
 
+NO_CHORD = 'N.C.'
+
 SIMILAR = 0.7
 BAR = 16  # Sixteenths in a bar.
 SLOTS = 8  # Eighths in a bar, the grid passages are compared on.
@@ -164,12 +166,25 @@ def copy_chords(chords, beats, source, target, origin, length):
     source_start = unit_seconds(origin + source * BAR, beats)
     source_end = unit_seconds(origin + (source + length) * BAR, beats)
     shift = (target - source) * 4  # In beats.
+    # Rests (no chord) belong to each playing, not to the passage: the target keeps its own and gets none.
     moved = [{'start': round(unit_seconds((beat_of(chord['start'], beats) + shift) * 4, beats), 2), 'name': chord['name']}
-             for chord in chords if source_start < chord['start'] < source_end - 1e-6]
+             for chord in chords if source_start < chord['start'] < source_end - 1e-6 and chord['name'] != NO_CHORD]
     opening = chord_at(source_start)
+    opening = None if opening == NO_CHORD else opening
     following = chord_at(end)
-    kept = [chord for chord in chords if not start <= chord['start'] < end]
+    kept = [chord for chord in chords if not start <= chord['start'] < end or chord['name'] == NO_CHORD]
     added = ([{'start': round(start, 2), 'name': opening}] if opening else []) + moved
+    # The target's rests stay silent, and the copied chord comes back where each one ends.
+    rests = [(chord['start'], chords[index + 1]['start'] if index + 1 < len(chords) else float('inf'))
+             for index, chord in enumerate(chords) if chord['name'] == NO_CHORD and start <= chord['start'] < end]
+    def copied_at(seconds):
+        current = None
+        for chord in sorted(added, key=lambda chord: chord['start']):
+            if chord['start'] <= seconds + 1e-6:
+                current = chord['name']
+        return current
+    resumed = [{'start': round(resume, 2), 'name': copied_at(resume)} for _, resume in rests if resume < end and copied_at(resume)]
+    added = [chord for chord in added if not any(rest <= chord['start'] < resume for rest, resume in rests)] + resumed
     if following and not any(abs(chord['start'] - end) < 1e-3 for chord in kept):
         added.append({'start': round(end, 2), 'name': following})
     merged = sorted(kept + added, key=lambda chord: chord['start'])

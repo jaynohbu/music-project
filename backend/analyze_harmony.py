@@ -36,7 +36,7 @@ CHORD_NAME = re.compile(r'^([A-G][#b]?)(.*?)(?:/([A-G][#b]?))?$')
 # Written where the harmonic stems fall silent for SILENCE seconds or more, and after the last chord, so the
 # accompaniment stops with the song.
 NO_CHORD = 'N.C.'
-SILENCE = 2.0
+SILENCE = 0.6
 # Triads for the bass part, which hears one stem. The ensemble hears every harmonic stem at once, so it can
 # also name sevenths, suspensions and added notes: the inner lines it does not write as notes.
 SHAPES = {'': (0, 4, 7), 'm': (0, 3, 7)}
@@ -59,6 +59,16 @@ MELODY_LOWEST = 55  # G3
 # The written notes: chord tones from a guitar's low E up, at most this many at once, the strongest kept.
 LOWEST_CHORD_NOTE = 40
 MOST_AT_ONCE = 6
+# A chord's strongest note must reach this share of the median of the chords within NEIGHBOURHOOD seconds,
+# and LEAST_ATTACK; its notes weaker than IN_CHORD_SHARE of that strongest are dropped.
+NEIGHBOURHOOD = 4.0
+ATTACK_SHARE = 0.85
+LEAST_ATTACK = 0.38
+IN_CHORD_SHARE = 0.7
+# The stems this far below their loud level around that moment are resting: no chord is written, so the
+# accompaniment rests too.
+QUIET_DB = 20
+LOCAL_SECONDS = 16
 SHORTEST_CHORD_NOTE = 0.06
 # A note an octave, a twelfth or two octaves above one at least as strong, sounding as it starts, is that
 # note's overtone: distorted guitars especially sound them, and the detector hears them as notes.
@@ -323,9 +333,11 @@ def without_overtones(events):
 
 
 def chord_notes(events, chords, beats):
-    """Every note that belongs to the chord playing as it starts, snapped to sixteenths. Notes starting on the
-    same sixteenth are one chord on the staff: they share a written length, which lasts to the next chord when
-    the gap is short (playing style, not a rest)."""
+    """The notes that matter among those belonging to the chord playing as they start, snapped to sixteenths.
+    Notes starting on the same sixteenth are one chord on the staff. A chord is kept when its strongest note is
+    a real attack: at least ATTACK_SHARE of the chords around it (so quiet verses keep theirs) and LEAST_ATTACK;
+    inside it, notes much weaker than its strongest are dropped. Its written length is how long its notes
+    sound, up to the next chord, which it reaches when the gap is a sixteenth or less."""
     starts = [chord['start'] for chord in chords]
     heard = []
     for event in events:
@@ -344,18 +356,34 @@ def chord_notes(events, chords, beats):
         if event[2] not in stack or event[3] > stack[event[2]][3]:
             stack[event[2]] = event
     units = sorted(stacks)
-    notes = []
+    peaks = [max(event[3] for event in stacks[unit].values()) for unit in units]
+    times = [min(event[0] for event in stacks[unit].values()) for unit in units]
+    kept = []
     for index, unit in enumerate(units):
-        stack = sorted(stacks[unit].values(), key=lambda event: -event[3])[:MOST_AT_ONCE]
+        low = bisect.bisect_left(times, times[index] - NEIGHBOURHOOD / 2)
+        high = bisect.bisect_right(times, times[index] + NEIGHBOURHOOD / 2)
+        if peaks[index] >= max(LEAST_ATTACK, ATTACK_SHARE * float(np.median(peaks[low:high]))):
+            kept.append((unit, [event for event in stacks[unit].values() if event[3] >= IN_CHORD_SHARE * peaks[index]]))
+    notes = []
+    for index, (unit, stack) in enumerate(kept):
+        stack = sorted(stack, key=lambda event: -event[3])[:MOST_AT_ONCE]
         end = max(round(grid_position(event[1], beats) - shift) for event in stack)
-        following = units[index + 1] if index + 1 < len(units) else None
-        if following is not None and (end > following or following - end <= LEGATO_UNITS):
+        following = kept[index + 1][0] if index + 1 < len(kept) else None
+        if following is not None and (end > following or following - end <= 1):
             end = following
         for start, finish, pitch, strength in sorted(stack, key=lambda event: event[2]):
             # How surely the note was heard, for choosing the clearest of repeated passages (dropped from the result).
             notes.append({'start': round(start, 2), 'end': round(finish, 2), 'pitch': pitch, 'unit': unit,
                           'length': max(1, end - unit), 'sure': strength})
     return notes
+
+
+def quiet_frames(level):
+    """Frames where the stems are QUIET_DB or more below their own loud level around that moment (LOCAL_SECONDS):
+    a soft intro is loud for itself, a stop in a loud riff is quiet."""
+    from scipy.ndimage import percentile_filter
+    local = percentile_filter(level, 95, size=max(3, int(LOCAL_SECONDS / SECONDS)), mode='nearest')
+    return level < local * 10 ** (-QUIET_DB / 20)
 
 
 def note_events(path):
@@ -541,7 +569,9 @@ def ensemble_part(stems, names, chromas, levels, frames, loudest, floor, beats, 
     harmony = sum(normalized(chromas[name][:, :frames]) for name in names)
     together = sum(chromas[name][:, :frames] for name in names)
     chroma = harmony + (0.6 * normalized(chromas['bass'][:, :frames]) if 'bass' in chromas else 0)
+    # Rests inside the song count as silence too, for the chords; notes are read wherever anything sounds.
     audible = (loudest > floor)
+    playing = audible & ~quiet_frames(loudest)
     mix = None
     for name in names:
         audio, rate = librosa.load(stems[name], sr=22050, mono=True)
@@ -554,7 +584,7 @@ def ensemble_part(stems, names, chromas, levels, frames, loudest, floor, beats, 
     root, minor = note_key(events) or song_key(together)
     spelled = spelling(root, minor)
     path = progression_path(chroma, melody_chroma(melody, frames), root, minor, beats, bar)
-    chords = chord_changes([chord_name(*chord, spelled) for chord in path], audible)
+    chords = chord_changes([chord_name(*chord, spelled) for chord in path], playing)
     if 'bass' in chromas:
         chords = slash_chords(chords, chromas['bass'], levels['bass'], frames, spelled)
     # Repeated passages are written the same each time, from their clearest playing.

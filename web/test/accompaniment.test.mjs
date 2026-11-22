@@ -39,10 +39,12 @@ test('comping strikes the style rhythm on the song beats with the chord of the m
 
 test('guitar strums roll upward, and no chord is silence', () => {
   const grid = { beats: Array.from({ length: 17 }, (_, i) => i * 0.5), firstBar: 0 };
-  const part = { chords: [{ start: 0, name: 'C' }, { start: 2, name: 'N.C.' }], notes: [] };
+  const part = { chords: [{ start: 0, name: 'C' }, { start: 1.5, name: 'N.C.' }, { start: 4, name: 'G' }], notes: [] };
   const events = a.comping(part, grid, [[[0, 4, 100]]], 'guitar');
   assert.ok(events[1].time > events[0].time && events[1].pitch > events[0].pitch);
-  assert.ok(events.length > 0 && events.every(event => event.time < 2), 'Nothing after N.C.');
+  const before = events.filter(event => event.time < 2);
+  assert.ok(before.length > 0 && before.every(event => event.time + event.duration <= 1.5 + 1e-9), 'What rings stops at N.C.');
+  assert.ok(events.some(event => event.time >= 4) && !events.some(event => event.time >= 1.5 && event.time < 4), 'Silent until the chord comes back');
 });
 
 test('melody + chords parts play the score as written, moved by the key change', () => {

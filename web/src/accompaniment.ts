@@ -92,11 +92,13 @@ export function comping(part: HarmonyPart, grid: HarmonyGrid, pattern: Stroke[][
       strokes.push({ beat: grid.firstBar + bar * 4 + beat, length, velocity });
     }
   }
+  // A rest (no chord) also stops what is ringing.
+  const rests = chords.filter(chord => !chordTones(chord.name)).map(chord => chord.start);
   const events: NoteEvent[] = [];
   strokes.forEach((stroke, index) => {
     const next = strokes[index + 1]?.beat ?? Infinity;
     const time = beatTime(grid.beats, stroke.beat);
-    const end = beatTime(grid.beats, Math.min(stroke.beat + stroke.length, next));
+    const end = Math.min(beatTime(grid.beats, Math.min(stroke.beat + stroke.length, next)), rests.find(start => start > time + 0.05) ?? Infinity);
     const name = chordAt(chords, time);
     if (!name) return;
     voicing(name, family).forEach((pitch, string) => {
