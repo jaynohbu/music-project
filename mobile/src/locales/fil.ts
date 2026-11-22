@@ -137,7 +137,7 @@ const fil: Strings = {
   'scene.status.failed': 'Hindi na-save',
   'scene.saveError': 'Hindi ma-save ang scene na ito.',
 
-  'upload.intro': 'Pumili ng audio file na hanggang 55 MB at 15 minuto. Hahatiin ito sa vocals, bass, drums at other (mga gitara, keyboard at iba pa).',
+  'upload.intro': 'Pumili ng audio file na hanggang 55 MB at 15 minuto. Hahatiin ito sa vocals, bass, drums at harmonic (mga gitara, keyboard at iba pa).',
   'upload.badType': 'Pumili ng WAV, MP3, M4A, FLAC, OGG o AAC file.',
   'upload.tooBig': '{size} ang file na ito. Hanggang 55 MB lang ang puwede.',
   'upload.choose': 'Pumili ng file',
@@ -159,7 +159,7 @@ const fil: Strings = {
   'stem.vocals': 'Vocals',
   'stem.bass': 'Bass',
   'stem.drums': 'Drums',
-  'stem.other': 'Iba pa',
+  'stem.other': 'Harmonic',
   'effect.volume': 'Volume',
   'effect.preGain': 'Pre-gain',
   'effect.compression': 'Compression',

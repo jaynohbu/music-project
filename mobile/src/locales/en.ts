@@ -136,7 +136,7 @@ const en = {
   'scene.status.failed': 'Save failed',
   'scene.saveError': 'Could not save this scene.',
 
-  'upload.intro': 'Choose an audio file up to 55 MB and 15 minutes long. It is split into vocals, bass, drums and other (guitars, keys and the rest).',
+  'upload.intro': 'Choose an audio file up to 55 MB and 15 minutes long. It is split into vocals, bass, drums and harmonic (guitars, keys and the rest).',
   'upload.badType': 'Choose a WAV, MP3, M4A, FLAC, OGG or AAC file.',
   'upload.tooBig': 'This file is {size}. Files can be up to 55 MB.',
   'upload.choose': 'Choose a file',
@@ -158,7 +158,7 @@ const en = {
   'stem.vocals': 'Vocals',
   'stem.bass': 'Bass',
   'stem.drums': 'Drums',
-  'stem.other': 'Other',
+  'stem.other': 'Harmonic',
   'effect.volume': 'Volume',
   'effect.preGain': 'Pre-gain',
   'effect.compression': 'Compression',

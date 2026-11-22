@@ -137,7 +137,7 @@ const ja: Strings = {
   'scene.status.failed': '保存に失敗',
   'scene.saveError': 'このシーンを保存できませんでした。',
 
-  'upload.intro': '55 MB以下、15分以内の音声ファイルを選んでください。ボーカル、ベース、ドラム、その他（ギター、キーボードなど）に分離します。',
+  'upload.intro': '55 MB以下、15分以内の音声ファイルを選んでください。ボーカル、ベース、ドラム、ハーモニック（ギター、キーボードなど）に分離します。',
   'upload.badType': 'WAV、MP3、M4A、FLAC、OGG、AACのファイルを選んでください。',
   'upload.tooBig': 'このファイルは{size}です。上限は55 MBです。',
   'upload.choose': 'ファイルを選択',
@@ -159,7 +159,7 @@ const ja: Strings = {
   'stem.vocals': 'ボーカル',
   'stem.bass': 'ベース',
   'stem.drums': 'ドラム',
-  'stem.other': 'その他',
+  'stem.other': 'ハーモニック',
   'effect.volume': '音量',
   'effect.preGain': 'プリゲイン',
   'effect.compression': 'コンプレッション',

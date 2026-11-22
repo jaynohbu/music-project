@@ -137,7 +137,7 @@ const it: Strings = {
   'scene.status.failed': 'Salvataggio non riuscito',
   'scene.saveError': 'Impossibile salvare questa scena.',
 
-  'upload.intro': 'Scegli un file audio di massimo 55 MB e 15 minuti. Verrà separato in voce, basso, batteria e altro (chitarre, tastiere e il resto).',
+  'upload.intro': 'Scegli un file audio di massimo 55 MB e 15 minuti. Verrà separato in voce, basso, batteria e harmonic (chitarre, tastiere e il resto).',
   'upload.badType': 'Scegli un file WAV, MP3, M4A, FLAC, OGG o AAC.',
   'upload.tooBig': 'Questo file è di {size}. Il limite è 55 MB.',
   'upload.choose': 'Scegli un file',
@@ -159,7 +159,7 @@ const it: Strings = {
   'stem.vocals': 'Voce',
   'stem.bass': 'Basso',
   'stem.drums': 'Batteria',
-  'stem.other': 'Altro',
+  'stem.other': 'Harmonic',
   'effect.volume': 'Volume',
   'effect.preGain': 'Pre-guadagno',
   'effect.compression': 'Compressione',

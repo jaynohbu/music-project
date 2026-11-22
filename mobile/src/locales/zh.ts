@@ -137,7 +137,7 @@ const zh: Strings = {
   'scene.status.failed': '保存失败',
   'scene.saveError': '无法保存此场景。',
 
-  'upload.intro': '选择不超过 55 MB、时长不超过 15 分钟的音频文件。将分离为人声、贝斯、鼓及其他音轨（吉他、键盘等）。',
+  'upload.intro': '选择不超过 55 MB、时长不超过 15 分钟的音频文件。将分离为人声、贝斯、鼓及和声音轨（吉他、键盘等）。',
   'upload.badType': '请选择 WAV、MP3、M4A、FLAC、OGG 或 AAC 文件。',
   'upload.tooBig': '此文件大小为 {size}，上限为 55 MB。',
   'upload.choose': '选择文件',
@@ -159,7 +159,7 @@ const zh: Strings = {
   'stem.vocals': '人声',
   'stem.bass': '贝斯',
   'stem.drums': '鼓',
-  'stem.other': '其他',
+  'stem.other': '和声',
   'effect.volume': '音量',
   'effect.preGain': '前级增益',
   'effect.compression': '压缩',

@@ -535,14 +535,14 @@ test('harmony results from the old format are ignored, so they get redone', asyn
   });
   assert.equal((await call(parentId, undefined, 'GET')).body.job.harmony, undefined);
   assert.equal((await call(`${parentId}/harmony`, {})).status, 202);
-  assert.equal(database.get('owner', (await call(parentId, undefined, 'GET')).body.job.harmony.id).version, 6);
+  assert.equal(database.get('owner', (await call(parentId, undefined, 'GET')).body.job.harmony.id).version, 7);
   assert.equal(started.length, 1);
 });
 
 function regeneration() {
   const context = setup();
   const finished = (id, fields) => context.database.put({
-    userId: 'owner', jobId: id, type: 'harmony', version: 6, parentJobId: parentId, status: 'completed', title: 'Chords',
+    userId: 'owner', jobId: id, type: 'harmony', version: 7, parentJobId: parentId, status: 'completed', title: 'Chords',
     key: `users/owner/harmony/${parentId}/${id}.json`, generatedAt: new Date(Date.now() - 60000).toISOString(), ...fields,
   });
   finished(lyricsId);
@@ -947,4 +947,42 @@ beats = [i * 0.5 for i in range(10)]
 print(json.dumps([note['pitch'] for note in h.fit_line(line, events, path, 0, False, beats, 0)]))`);
   // Weak D on beat 1 goes to C; a sure D stays; F# between beats leaves the key for F; D off the beat is a passing note.
   assert.deepEqual(fitted, [60, 62, 65, 62]);
+});
+
+// Repeated passages: a four-bar phrase played three times, the second time with two notes heard wrong.
+const repeatsPython = (body) => JSON.parse(execFileSync(harmonyPython, ['-c',
+  `import json, sys; sys.path.insert(0, ${JSON.stringify(fileURLToPath(new URL('..', import.meta.url)))})
+import repeats as r
+beats = [i * 0.5 for i in range(200)]
+phrase = [(0, 60), (2, 62), (4, 64), (6, 65), (8, 67), (12, 65)]
+def passage(bar, changes={}):
+    notes = []
+    for b in range(4):
+        for unit, pitch in phrase:
+            notes.append({'unit': bar * 16 + b * 16 + unit, 'length': 2, 'pitch': changes.get((b, unit), pitch + b), 'start': 0, 'end': 0, 'sure': 0.9 if bar == 8 else 0.6})
+    return notes
+${body}`], { encoding: 'utf8' }));
+
+test('repeated passages take the clearest playing; the second line inside them goes', { skip: !hasHarmony }, () => {
+  const found = repeatsPython(`
+notes = passage(0, {(1, 4): 70, (2, 8): 71}) + passage(8) + passage(16)
+second = [{'unit': 16 * 9, 'length': 4, 'pitch': 48, 'start': 0, 'end': 0}, {'unit': 16 * 40, 'length': 4, 'pitch': 48, 'start': 0, 'end': 0}]
+chords = [{'start': 0, 'name': 'C'}, {'start': 2.0, 'name': 'F'}, {'start': 16.0, 'name': 'C'}, {'start': 18.0, 'name': 'G'}, {'start': 32.0, 'name': 'C'}, {'start': 34.0, 'name': 'F'}]
+n, s, c, reps = r.unify(notes, second, chords, beats, 0)
+print(json.dumps({'reps': reps, 'first': [x['pitch'] for x in n if x['unit'] < 64], 'clear': [x['pitch'] for x in n if 128 <= x['unit'] < 192],
+  'second': [x['unit'] for x in s], 'sure': any('sure' in x for x in n), 'chords': [(x['start'], x['name']) for x in c]}))`);
+  assert.deepEqual(found.reps.map(rep => [rep.bars, rep.members, rep.source]), [[4, [0, 8, 16], 8]], 'One family of four bars, the surest member chosen');
+  assert.deepEqual(found.first, found.clear, 'The misheard playing is written like the clear one');
+  assert.deepEqual(found.second, [640], 'Second-line notes inside a repeat are dropped, others kept');
+  assert.equal(found.sure, false, 'The working field is not returned');
+  assert.deepEqual(found.chords.slice(0, 2), [[0, 'C'], [2, 'G']], 'Chords follow the clearest playing too');
+});
+
+test('passages less than 70% alike, or too sparse, are left alone', { skip: !hasHarmony }, () => {
+  const found = repeatsPython(`
+other = [{'unit': 128 + i * 4, 'length': 2, 'pitch': 50 + (i * 7) % 23, 'start': 0, 'end': 0} for i in range(16)]
+sparse = [{'unit': 256 + i * 16, 'length': 2, 'pitch': 60, 'start': 0, 'end': 0} for i in range(8)]
+n, s, c, reps = r.unify(passage(0) + other + sparse, [], [], beats, 0)
+print(json.dumps(reps))`);
+  assert.deepEqual(found, []);
 });

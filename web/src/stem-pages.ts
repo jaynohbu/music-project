@@ -33,7 +33,7 @@ const autoRequested = new Set<string>();
       <span class="eyebrow">SIX-STEM SEPARATION</span>
       <h1>Upload audio to split</h1>
       <button type="button" class="secondary" (click)="back()">Back to Music</button>
-      <p>Separate an audio file into drums, bass, vocals and other (guitars, keys and the rest).</p>
+      <p>Separate an audio file into drums, bass, vocals and harmonic (guitars, keys and the rest).</p>
       <form (ngSubmit)="submit()">
         <label for="audio-file">Audio file</label>
         <input id="audio-file" name="audio-file" type="file" accept="audio/*"
@@ -345,9 +345,12 @@ function heard(runtime: StemRuntime): { buffer: AudioBuffer; cleaned?: AudioBuff
   return runtime.shifted ?? { buffer: runtime.buffer, cleaned: runtime.cleanedBuffer };
 }
 
+// Names shown for the stems; the stored names stay as they are (other is shown as harmonic).
+const STEM_LABELS: Record<string, string> = { other: 'harmonic' };
+
 function newTrack(name: string): StemTrack {
   return {
-    ...defaultEffects(), name, label: name, status: 'waiting', muted: false, solo: false,
+    ...defaultEffects(), name, label: STEM_LABELS[name] ?? name, status: 'waiting', muted: false, solo: false,
     bypassed: false, peaks: [], duration: 0, hasCleaned: false, useCleaned: false, cleanedPeaks: [],
   };
 }

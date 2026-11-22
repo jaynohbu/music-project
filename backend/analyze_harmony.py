@@ -14,6 +14,7 @@ import numpy as np
 from scipy.signal import find_peaks
 
 from note_lines import BEAT_DRUMS, clear_line, drum_units, first_bar, note_values, struck_line
+from repeats import unify
 
 RATE = 22050
 HOP = 2048
@@ -261,7 +262,8 @@ def fit_line(line, events, path, key_root, minor, beats, bar):
             moved = min((note['pitch'] + step for step in range(-6, 7) if (note['pitch'] + step) % 12 in allowed),
                         key=lambda pitch: (abs(pitch - note['pitch']), pitch))
             note = {**note, 'pitch': moved}
-        fitted.append(note)
+        # How surely the note was heard, for choosing the clearest of repeated passages (dropped from the result).
+        fitted.append({**note, 'sure': sure})
     return fitted
 
 
@@ -457,8 +459,9 @@ def ensemble_part(stems, names, chromas, levels, frames, loudest, floor, beats, 
         chords = slash_chords(chords, chromas['bass'], levels['bass'], frames)
     melody = fit_line(melody, events, path, root, minor, beats, bar)
     second = fit_line(second, events, path, root, minor, beats, bar)
-    return {'key': f"{NOTES[root]}{'m' if minor else ''}", 'chords': chords,
-            'notes': note_values(melody, beats), 'second': note_values(second, beats)}
+    # Repeated passages are written the same each time, from their clearest playing.
+    notes, second, chords, found = unify(note_values(melody, beats), note_values(second, beats), chords, beats, bar)
+    return {'key': f"{NOTES[root]}{'m' if minor else ''}", 'chords': chords, 'notes': notes, 'second': second, 'repeats': found}
 
 
 def under(line, events):

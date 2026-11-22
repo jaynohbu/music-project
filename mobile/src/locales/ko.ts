@@ -137,7 +137,7 @@ const ko: Strings = {
   'scene.status.failed': '저장 실패',
   'scene.saveError': '이 씬을 저장하지 못했어요.',
 
-  'upload.intro': '55 MB 이하, 15분 이내의 오디오 파일을 선택하세요. 보컬, 베이스, 드럼, 나머지 악기(기타, 건반 등)로 분리해요.',
+  'upload.intro': '55 MB 이하, 15분 이내의 오디오 파일을 선택하세요. 보컬, 베이스, 드럼, 하모닉(기타, 건반 등 나머지 악기)으로 분리해요.',
   'upload.badType': 'WAV, MP3, M4A, FLAC, OGG 또는 AAC 파일을 선택해 주세요.',
   'upload.tooBig': '이 파일은 {size}예요. 최대 55 MB까지 업로드할 수 있어요.',
   'upload.choose': '파일 선택',
@@ -159,7 +159,7 @@ const ko: Strings = {
   'stem.vocals': '보컬',
   'stem.bass': '베이스',
   'stem.drums': '드럼',
-  'stem.other': '나머지 악기',
+  'stem.other': '하모닉',
   'effect.volume': '볼륨',
   'effect.preGain': '프리 게인',
   'effect.compression': '컴프레션',

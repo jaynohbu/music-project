@@ -137,7 +137,7 @@ const id: Strings = {
   'scene.status.failed': 'Gagal menyimpan',
   'scene.saveError': 'Setlist ini tidak dapat disimpan.',
 
-  'upload.intro': 'Pilih file audio hingga 55 MB dan berdurasi 15 menit. File akan dipisah menjadi vokal, bass, drum, dan lainnya (gitar, keyboard, dan sisanya).',
+  'upload.intro': 'Pilih file audio hingga 55 MB dan berdurasi 15 menit. File akan dipisah menjadi vokal, bass, drum, dan harmonic (gitar, keyboard, dan sisanya).',
   'upload.badType': 'Pilih file WAV, MP3, M4A, FLAC, OGG, atau AAC.',
   'upload.tooBig': 'Ukuran file ini {size}. Maksimal 55 MB.',
   'upload.choose': 'Pilih file',
@@ -159,7 +159,7 @@ const id: Strings = {
   'stem.vocals': 'Vokal',
   'stem.bass': 'Bass',
   'stem.drums': 'Drum',
-  'stem.other': 'Lainnya',
+  'stem.other': 'Harmonic',
   'effect.volume': 'Volume',
   'effect.preGain': 'Pre-gain',
   'effect.compression': 'Kompresi',

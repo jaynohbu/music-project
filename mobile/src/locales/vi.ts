@@ -137,7 +137,7 @@ const vi: Strings = {
   'scene.status.failed': 'Lưu thất bại',
   'scene.saveError': 'Không thể lưu danh sách này.',
 
-  'upload.intro': 'Chọn tệp âm thanh tối đa 55 MB và dài 15 phút. Tệp sẽ được tách thành giọng hát, bass, trống và nhạc cụ khác (guitar, phím và phần còn lại).',
+  'upload.intro': 'Chọn tệp âm thanh tối đa 55 MB và dài 15 phút. Tệp sẽ được tách thành giọng hát, bass, trống và harmonic (guitar, phím và phần còn lại).',
   'upload.badType': 'Chọn tệp WAV, MP3, M4A, FLAC, OGG hoặc AAC.',
   'upload.tooBig': 'Tệp này có dung lượng {size}. Tối đa 55 MB.',
   'upload.choose': 'Chọn tệp',
@@ -159,7 +159,7 @@ const vi: Strings = {
   'stem.vocals': 'Giọng hát',
   'stem.bass': 'Bass',
   'stem.drums': 'Trống',
-  'stem.other': 'Khác',
+  'stem.other': 'Harmonic',
   'effect.volume': 'Âm lượng',
   'effect.preGain': 'Gain đầu vào',
   'effect.compression': 'Nén',

@@ -137,7 +137,7 @@ const de: Strings = {
   'scene.status.failed': 'Speichern fehlgeschlagen',
   'scene.saveError': 'Diese Szene konnte nicht gespeichert werden.',
 
-  'upload.intro': 'Wähle eine Audiodatei mit bis zu 55 MB und 15 Minuten aus. Sie wird in Gesang, Bass, Schlagzeug und Sonstiges (Gitarren, Tasten und der Rest) gesplittet.',
+  'upload.intro': 'Wähle eine Audiodatei mit bis zu 55 MB und 15 Minuten aus. Sie wird in Gesang, Bass, Schlagzeug und Harmonic (Gitarren, Tasten und der Rest) gesplittet.',
   'upload.badType': 'Wähle eine WAV-, MP3-, M4A-, FLAC-, OGG- oder AAC-Datei.',
   'upload.tooBig': 'Diese Datei ist {size} groß. Dateien dürfen bis zu 55 MB groß sein.',
   'upload.choose': 'Datei auswählen',
@@ -159,7 +159,7 @@ const de: Strings = {
   'stem.vocals': 'Gesang',
   'stem.bass': 'Bass',
   'stem.drums': 'Schlagzeug',
-  'stem.other': 'Sonstiges',
+  'stem.other': 'Harmonic',
   'effect.volume': 'Lautstärke',
   'effect.preGain': 'Vorverstärkung',
   'effect.compression': 'Kompression',

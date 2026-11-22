@@ -132,6 +132,12 @@ Enforce on the server only.
 - **Lyrics and chords:** one run per song, as before; a failed run can be retried. Regenerating one stem's chords: once per stem and source (original or cleaned stem).
 - **One new account per device:** `AccountDevices` has a `ByDevice` index. A device request that would create a new account for a device already linked to another email deletes the account it just made and returns 409 `DEVICE_HAS_ACCOUNT`. The user pool hides whether an email exists, so the check runs after the create. Signing in to other existing accounts from that device still works.
 
+### Repeated passages (2026-11-22, harmony version 7)
+
+`backend/repeats.py`, called at the end of the ensemble analysis, finds passages of the Harmonic melody that come back, the way BLAST aligns sequences: bars are the letters, a seed is two bars that sound alike, and it is extended both ways (crossing up to two weaker bars, as BLAST's drop-off) while the whole passage stays at least 70% alike, up to 16 bars. Passages are compared on what sounds in each eighth (pitch classes of the melody and second line, with their lengths), because detection hears a repeat a little differently each time; note-by-note matching found 8-bar repeats at only 45%. A passage must have at least two notes per bar on average, three quarters of its bars played, and starts and ends on played bars. Families (longest first, each bar in one family) take their clearest member (most like the others, then surest notes): its melody and chords are copied over the other members, and the second line (the grey ghost notes) is dropped inside every member. The result lists `repeats` (family, bars, members, source). On Our God: 11-bar verse and chorus pairs and an 8-bar pair; on Enter Sandman: 7- and 5-bar riff pairs.
+
+**Harmonic:** the Other stem is shown as Harmonic (하모닉 in Korean) in the app and website; stored names stay `other`.
+
 ### Four stems (2026-11-21)
 
 - Splits use Demucs `htdemucs`: vocals, drums, bass and other. Guitars, keys and every other pitched part are in other. `htdemucs_ft` (cleaner, about 4× the CPU time) and a GPU worker were considered; the user chose plain `htdemucs` on the current Fargate CPU worker.

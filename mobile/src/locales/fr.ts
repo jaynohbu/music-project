@@ -137,7 +137,7 @@ const fr: Strings = {
   'scene.status.failed': 'Échec de l’enregistrement',
   'scene.saveError': 'Impossible d’enregistrer cette scène.',
 
-  'upload.intro': 'Choisissez un fichier audio de 55 MB maximum et de 15 minutes maximum. Il sera séparé en voix, basse, batterie et autres (guitares, claviers et le reste).',
+  'upload.intro': 'Choisissez un fichier audio de 55 MB maximum et de 15 minutes maximum. Il sera séparé en voix, basse, batterie et harmonic (guitares, claviers et le reste).',
   'upload.badType': 'Choisissez un fichier WAV, MP3, M4A, FLAC, OGG ou AAC.',
   'upload.tooBig': 'Ce fichier fait {size}. La taille maximale est de 55 MB.',
   'upload.choose': 'Choisir un fichier',
@@ -159,7 +159,7 @@ const fr: Strings = {
   'stem.vocals': 'Voix',
   'stem.bass': 'Basse',
   'stem.drums': 'Batterie',
-  'stem.other': 'Autres',
+  'stem.other': 'Harmonic',
   'effect.volume': 'Volume',
   'effect.preGain': 'Pré-gain',
   'effect.compression': 'Compression',

@@ -11,7 +11,7 @@ import { STEM_WINDOW_MS } from './stem-shared.mjs';
 export const ANALYSES = {
   lyrics: { label: 'Lyrics', folder: 'lyrics', notReady: 'Find lyrics after the stems are ready.', noStart: 'Unable to start lyrics recognition. Please try again.' },
   // Bump version when the result format changes: older results are ignored, so they get redone.
-  harmony: { version: 6, label: 'Chords', folder: 'harmony', notReady: 'Find chords after the stems are ready.', noStart: 'Unable to start chord analysis. Please try again.' },
+  harmony: { version: 7, label: 'Chords', folder: 'harmony', notReady: 'Find chords after the stems are ready.', noStart: 'Unable to start chord analysis. Please try again.' },
 };
 
 const RUNNING = ['queued', 'processing'];
