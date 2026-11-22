@@ -66,19 +66,20 @@ test('guitar strums roll upward, and no chord is silence', () => {
   assert.ok(events.some(event => event.time >= 4) && !events.some(event => event.time >= 1.5 && event.time < 4), 'Silent until the chord comes back');
 });
 
-test('melody + rhythm parts play the rhythm comping, softer, under the top line, moved by the key change', () => {
+test('melody + rhythm is the rhythm part as it is with the melody on it, struck together when close', () => {
   const grid = { beats: Array.from({ length: 9 }, (_, i) => i * 0.5), firstBar: 0 };
-  const part = { chords: [{ start: 0, name: 'C' }], notes: [{ start: 0.5, end: 1, pitch: 60, unit: 4, length: 4 },
-    { start: 0.5, end: 1, pitch: 72, unit: 4, length: 4 }, { start: 1, end: 1.5, pitch: 67, unit: 8, length: 4 }] };
-  const pattern = [[[0, 2, 100], [2, 2, 90]]];
+  // The melody's first note comes 0.04 s after the stroke on beat 2; its second is between strokes.
+  const part = { chords: [{ start: 0, name: 'C' }], notes: [{ start: 0.54, end: 1, pitch: 60, unit: 4, length: 4 },
+    { start: 0.54, end: 1, pitch: 72, unit: 4, length: 4 }, { start: 1.25, end: 1.5, pitch: 67, unit: 10, length: 2 }] };
+  const pattern = [[[0, 1, 100], [1, 1, 90], [2, 1, 90], [3, 1, 90]]];
   const rhythm = a.accompanimentEvents('keys-rhythm', part, grid, pattern, 2);
   const played = a.accompanimentEvents('keys-melody', part, grid, pattern, 2);
   const melody = played.filter(event => event.velocity === 108);
-  assert.deepEqual(melody.map(event => [event.time, event.pitch]), [[0.5, 74], [1, 69]], 'The top note of each chord');
+  assert.deepEqual(melody.map(event => [event.time, event.pitch]), [[0.5, 74], [1.25, 69]], 'Moved onto the stroke when close; the top note of each chord');
   const comped = played.filter(event => event.velocity !== 108);
-  assert.deepEqual([...new Set(comped.map(event => event.time))], [...new Set(rhythm.map(event => event.time))], 'The same rhythm');
-  assert.ok(comped.every(event => [70, 63].includes(event.velocity)), 'Softer');
-  assert.ok(Math.max(...comped.filter(event => event.time < 1).map(event => event.pitch)) < 74, 'Under the melody');
+  const key = event => `${event.time}:${event.pitch}:${event.velocity}`;
+  assert.ok(comped.every(event => rhythm.some(other => key(other) === key(event))), 'The rhythm part as it is');
+  assert.equal(comped.length, rhythm.length - rhythm.filter(event => event.time === 0.5 && event.pitch === 74).length, 'Only a doubled note goes');
   assert.ok(played.every((event, i) => !i || event.time >= played[i - 1].time), 'Sorted by time');
 });
 
@@ -86,6 +87,13 @@ test('the same note again right after it is held, not struck again', () => {
   const note = (start, end, pitch, unit) => ({ start, end, pitch, unit, length: 2 });
   const line = a.melodyLine([note(0, 0.25, 64, 0), note(0.25, 0.5, 64, 2), note(0.55, 0.75, 64, 4), note(1.2, 1.4, 64, 8), note(1.4, 1.6, 67, 10)]);
   assert.deepEqual(line.map(item => [item.start, item.end, item.pitch, item.length]), [[0, 0.75, 64, 6], [1.2, 1.4, 64, 2], [1.4, 1.6, 67, 2]]);
+});
+
+test('upper and lower notes starting close together are one chord: only its top is the melody', () => {
+  const note = (start, pitch, unit) => ({ start, end: start + 0.4, pitch, unit, length: 2 });
+  // A strum: the low note a sixteenth early, the top 0.05 s later; then a note well apart.
+  const line = a.melodyLine([note(0.45, 55, 3), note(0.5, 72, 4), note(1.0, 64, 8)]);
+  assert.deepEqual(line.map(item => [item.start, item.pitch, item.unit]), [[0.45, 72, 3], [1.0, 64, 8]]);
 });
 
 test('the nearest sample plays at the rate of the missing semitones', () => {

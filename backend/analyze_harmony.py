@@ -66,6 +66,7 @@ ATTACK_SHARE = 0.85
 LEAST_ATTACK = 0.38
 IN_CHORD_SHARE = 0.7
 JOIN_GAP = 0.12
+CHORD_SPREAD = 0.07
 # The stems this far below their loud level around that moment are resting: no chord is written, so the
 # accompaniment rests too.
 QUIET_DB = 20
@@ -352,8 +353,14 @@ def chord_notes(events, chords, beats):
     heard = joined_repeats(heard)
     shift = grid_shift([{'start': event[0]} for event in heard], beats)
     stacks = {}
-    for event in heard:
-        unit = max(0, round(grid_position(event[0], beats) - shift))
+    first = previous = None
+    for event in sorted(heard):
+        # A note starting within CHORD_SPREAD of the one before is part of its chord, as a strum spreads them,
+        # up to twice that from the chord's first.
+        if first is None or event[0] - previous > CHORD_SPREAD or event[0] - first > 2 * CHORD_SPREAD:
+            first = event[0]
+            unit = max(0, round(grid_position(first, beats) - shift))
+        previous = event[0]
         stack = stacks.setdefault(unit, {})
         if event[2] not in stack or event[3] > stack[event[2]][3]:
             stack[event[2]] = event

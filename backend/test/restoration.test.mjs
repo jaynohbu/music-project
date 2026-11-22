@@ -534,7 +534,7 @@ test('harmony worker records safe failures and saves nothing', async () => {
 test('harmony results from an older version stay shown until a new run finishes', async () => {
   const { call, database, started } = setup();
   database.put({
-    userId: 'owner', jobId: lyricsId, type: 'harmony', parentJobId: parentId, status: 'completed', title: 'Chords', version: 11,
+    userId: 'owner', jobId: lyricsId, type: 'harmony', parentJobId: parentId, status: 'completed', title: 'Chords', version: 12,
     key: `users/owner/harmony/${parentId}/${lyricsId}.json`, generatedAt: new Date(Date.now() - 60000).toISOString(),
   });
   const stale = (await call(parentId, undefined, 'GET')).body.job.harmony;
@@ -544,7 +544,7 @@ test('harmony results from an older version stay shown until a new run finishes'
   assert.ok(stale.url.endsWith(`${lyricsId}.json`));
   assert.equal((await call(`${parentId}/harmony`, {})).status, 202);
   const running = (await call(parentId, undefined, 'GET')).body.job.harmony;
-  assert.equal(database.get('owner', running.id).version, 12);
+  assert.equal(database.get('owner', running.id).version, 13);
   assert.equal(running.status, 'queued');
   assert.equal(running.stale, undefined);
   assert.equal(running.previous.id, lyricsId, 'The old score is shown while the new one is found');
@@ -558,7 +558,7 @@ test('harmony results from an older version stay shown until a new run finishes'
 function regeneration() {
   const context = setup();
   const finished = (id, fields) => context.database.put({
-    userId: 'owner', jobId: id, type: 'harmony', version: 12, parentJobId: parentId, status: 'completed', title: 'Chords',
+    userId: 'owner', jobId: id, type: 'harmony', version: 13, parentJobId: parentId, status: 'completed', title: 'Chords',
     key: `users/owner/harmony/${parentId}/${id}.json`, generatedAt: new Date(Date.now() - 60000).toISOString(), ...fields,
   });
   finished(lyricsId);
@@ -991,6 +991,14 @@ print(json.dumps([(n['unit'], n['length'], n['pitch']) for n in h.chord_notes(h.
 test('the same pitch again right after a note is that note held', { skip: !hasHarmony }, () => {
   const joined = harmony(`print(json.dumps(h.joined_repeats([(0, 0.25, 64, 0.5), (0.25, 0.5, 64, 0.8), (0.55, 0.75, 64, 0.4), (1.2, 1.4, 64, 0.5), (0.3, 0.6, 60, 0.6)])))`);
   assert.deepEqual(joined, [[0, 0.75, 64, 0.8], [0.3, 0.6, 60, 0.6], [1.2, 1.4, 64, 0.5]]);
+});
+
+test('upper and lower notes starting close together are written as one chord', { skip: !hasHarmony }, () => {
+  const notes = harmony(`events = [(0.44, 0.9, 52, 0.8), (0.5, 0.9, 59, 0.8), (0.52, 0.9, 64, 0.8), (1.5, 1.9, 64, 0.8)]
+beats = [i * 0.5 for i in range(10)]
+print(json.dumps([(n['unit'], n['pitch']) for n in h.chord_notes(events, [{'start': 0, 'name': 'E'}], beats)]))`);
+  // The low E comes a sixteenth early (0.44 s is nearer the sixteenth before beat 1); the strum is still one chord.
+  assert.deepEqual(notes, [[3, 52], [3, 59], [3, 64], [12, 64]]);
 });
 
 test('a stop is quiet against its own loud level around it; a soft intro is not', { skip: !hasHarmony }, () => {
