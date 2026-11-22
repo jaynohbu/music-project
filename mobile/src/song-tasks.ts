@@ -28,7 +28,8 @@ export function useSongTasks(initial: Song | null) {
   const [lyricsLoadError, setLyricsLoadError] = useState('');
   const [startingLyrics, setStartingLyrics] = useState(false);
   const [grid, setGrid] = useState<HarmonyGrid | null>(null);
-  const [parts, setParts] = useState<Record<string, HarmonyPart> | null>(null);
+  // Keyed by stem, so reading the part of a stem that no longer exists fails to compile.
+  const [parts, setParts] = useState<Partial<Record<StemName, HarmonyPart>> | null>(null);
   const [chordsLoadError, setChordsLoadError] = useState('');
   const [startingChords, setStartingChords] = useState(false);
   const [startingParts, setStartingParts] = useState<string[]>([]);
