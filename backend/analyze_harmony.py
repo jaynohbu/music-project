@@ -65,6 +65,7 @@ NEIGHBOURHOOD = 4.0
 ATTACK_SHARE = 0.85
 LEAST_ATTACK = 0.38
 IN_CHORD_SHARE = 0.7
+JOIN_GAP = 0.12
 # The stems this far below their loud level around that moment are resting: no chord is written, so the
 # accompaniment rests too.
 QUIET_DB = 20
@@ -348,6 +349,7 @@ def chord_notes(events, chords, beats):
             heard.append(event)
     if not heard:
         return []
+    heard = joined_repeats(heard)
     shift = grid_shift([{'start': event[0]} for event in heard], beats)
     stacks = {}
     for event in heard:
@@ -376,6 +378,19 @@ def chord_notes(events, chords, beats):
             notes.append({'start': round(start, 2), 'end': round(finish, 2), 'pitch': pitch, 'unit': unit,
                           'length': max(1, end - unit), 'sure': strength})
     return notes
+
+
+def joined_repeats(events):
+    """The same pitch starting again within JOIN_GAP of a note's end is that note held: one long note, not a new
+    attack (detection splits a held note, and back-to-back repeats sound busy)."""
+    joined = []
+    for event in sorted(events, key=lambda event: (event[2], event[0])):
+        if joined and joined[-1][2] == event[2] and event[0] <= joined[-1][1] + JOIN_GAP:
+            start, end, pitch, strength = joined[-1]
+            joined[-1] = (start, max(end, event[1]), pitch, max(strength, event[3]))
+        else:
+            joined.append(tuple(event))
+    return sorted(joined)
 
 
 def quiet_frames(level):

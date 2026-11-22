@@ -534,7 +534,7 @@ test('harmony worker records safe failures and saves nothing', async () => {
 test('harmony results from an older version stay shown until a new run finishes', async () => {
   const { call, database, started } = setup();
   database.put({
-    userId: 'owner', jobId: lyricsId, type: 'harmony', parentJobId: parentId, status: 'completed', title: 'Chords', version: 10,
+    userId: 'owner', jobId: lyricsId, type: 'harmony', parentJobId: parentId, status: 'completed', title: 'Chords', version: 11,
     key: `users/owner/harmony/${parentId}/${lyricsId}.json`, generatedAt: new Date(Date.now() - 60000).toISOString(),
   });
   const stale = (await call(parentId, undefined, 'GET')).body.job.harmony;
@@ -544,7 +544,7 @@ test('harmony results from an older version stay shown until a new run finishes'
   assert.ok(stale.url.endsWith(`${lyricsId}.json`));
   assert.equal((await call(`${parentId}/harmony`, {})).status, 202);
   const running = (await call(parentId, undefined, 'GET')).body.job.harmony;
-  assert.equal(database.get('owner', running.id).version, 11);
+  assert.equal(database.get('owner', running.id).version, 12);
   assert.equal(running.status, 'queued');
   assert.equal(running.stale, undefined);
   assert.equal(running.previous.id, lyricsId, 'The old score is shown while the new one is found');
@@ -558,7 +558,7 @@ test('harmony results from an older version stay shown until a new run finishes'
 function regeneration() {
   const context = setup();
   const finished = (id, fields) => context.database.put({
-    userId: 'owner', jobId: id, type: 'harmony', version: 11, parentJobId: parentId, status: 'completed', title: 'Chords',
+    userId: 'owner', jobId: id, type: 'harmony', version: 12, parentJobId: parentId, status: 'completed', title: 'Chords',
     key: `users/owner/harmony/${parentId}/${id}.json`, generatedAt: new Date(Date.now() - 60000).toISOString(), ...fields,
   });
   finished(lyricsId);
@@ -982,9 +982,15 @@ test('overtones go; real attacks stay as one chord per sixteenth, weak ones and 
 chords = [{'start': 0, 'name': 'E'}, {'start': 1.0, 'name': 'Am'}, {'start': 2.0, 'name': 'N.C.'}]
 beats = [i * 0.5 for i in range(10)]
 print(json.dumps([(n['unit'], n['length'], n['pitch']) for n in h.chord_notes(h.without_overtones(events), chords, beats)]))`);
-  // E3's octave and twelfth are overtones; D is not in E; B under E-G# is too weak beside them; the soft G# on
-  // the second half of beat 2 is no real attack; Am's notes last as long as they sound; nothing after N.C.
-  assert.deepEqual(notes, [[0, 4, 52], [0, 4, 56], [4, 4, 59], [8, 2, 57], [8, 2, 60]]);
+  // E3's octave and twelfth are overtones; D is not in E; B struck again while it rings is one held B, as strong
+  // as its stronger attack; the soft G# on the second half of beat 2 is no real attack; Am's notes last as long
+  // as they sound; nothing after N.C.
+  assert.deepEqual(notes, [[0, 8, 52], [0, 8, 56], [0, 8, 59], [8, 2, 57], [8, 2, 60]]);
+});
+
+test('the same pitch again right after a note is that note held', { skip: !hasHarmony }, () => {
+  const joined = harmony(`print(json.dumps(h.joined_repeats([(0, 0.25, 64, 0.5), (0.25, 0.5, 64, 0.8), (0.55, 0.75, 64, 0.4), (1.2, 1.4, 64, 0.5), (0.3, 0.6, 60, 0.6)])))`);
+  assert.deepEqual(joined, [[0, 0.75, 64, 0.8], [0.3, 0.6, 60, 0.6], [1.2, 1.4, 64, 0.5]]);
 });
 
 test('a stop is quiet against its own loud level around it; a soft intro is not', { skip: !hasHarmony }, () => {

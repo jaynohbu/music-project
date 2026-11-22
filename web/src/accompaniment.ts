@@ -161,11 +161,22 @@ export function comping(part: HarmonyPart, grid: HarmonyGrid, pattern: Stroke[][
   return events;
 }
 
-// The melody: the top note of each chord the score writes (notes starting on the same sixteenth).
+// The same pitch again within this many seconds of the note's end is the same note held, not a new attack.
+const JOIN_GAP = 0.12;
+
+// The melody: the top note of each chord the score writes (notes starting on the same sixteenth), with the same
+// pitch repeated back to back joined into one held note.
 export function melodyLine(notes: HarmonyNote[]): HarmonyNote[] {
   const top = new Map<number, HarmonyNote>();
   for (const note of notes) if ((top.get(note.unit)?.pitch ?? -1) < note.pitch) top.set(note.unit, note);
-  return [...top.values()].sort((a, b) => a.unit - b.unit);
+  const joined: HarmonyNote[] = [];
+  for (const note of [...top.values()].sort((a, b) => a.unit - b.unit)) {
+    const last = joined[joined.length - 1];
+    if (last && last.pitch === note.pitch && note.start <= last.end + JOIN_GAP) {
+      joined[joined.length - 1] = { ...last, end: Math.max(last.end, note.end), length: note.unit + note.length - last.unit };
+    } else joined.push(note);
+  }
+  return joined;
 }
 
 const line = (notes: HarmonyNote[], velocity: number): NoteEvent[] => notes.map(note => ({

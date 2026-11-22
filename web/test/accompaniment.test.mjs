@@ -82,6 +82,12 @@ test('melody + rhythm parts play the rhythm comping, softer, under the top line,
   assert.ok(played.every((event, i) => !i || event.time >= played[i - 1].time), 'Sorted by time');
 });
 
+test('the same note again right after it is held, not struck again', () => {
+  const note = (start, end, pitch, unit) => ({ start, end, pitch, unit, length: 2 });
+  const line = a.melodyLine([note(0, 0.25, 64, 0), note(0.25, 0.5, 64, 2), note(0.55, 0.75, 64, 4), note(1.2, 1.4, 64, 8), note(1.4, 1.6, 67, 10)]);
+  assert.deepEqual(line.map(item => [item.start, item.end, item.pitch, item.length]), [[0, 0.75, 64, 6], [1.2, 1.4, 64, 2], [1.4, 1.6, 67, 2]]);
+});
+
 test('the nearest sample plays at the rate of the missing semitones', () => {
   assert.deepEqual(a.sampleFor([36, 39, 42], 40), { index: 1, rate: 2 ** (1 / 12) });
   assert.deepEqual(a.sampleFor([36, 39, 42], 30), { index: 0, rate: 2 ** (-6 / 12) });
