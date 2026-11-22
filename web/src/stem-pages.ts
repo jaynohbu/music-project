@@ -1138,8 +1138,8 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   isHarmonic(name: string): boolean { return HARMONY_STEMS.includes(name); }
 
   kindLabel(kind: AccompanimentKind): string {
-    return { 'guitar-rhythm': 'Electric rhythm', 'keys-rhythm': 'Keyboard rhythm', 'guitar-melody': 'Electric melody + chords',
-      'keys-melody': 'Keyboard melody + chords' }[kind];
+    return { 'guitar-rhythm': 'Electric rhythm', 'keys-rhythm': 'Keyboard rhythm', 'guitar-melody': 'Electric melody + rhythm',
+      'keys-melody': 'Keyboard melody + rhythm' }[kind];
   }
 
   soundName(sound: number): string { return this.accompanimentLibrary()?.sounds[String(sound)]?.name ?? `Sound ${sound}`; }

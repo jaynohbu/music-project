@@ -66,13 +66,20 @@ test('guitar strums roll upward, and no chord is silence', () => {
   assert.ok(events.some(event => event.time >= 4) && !events.some(event => event.time >= 1.5 && event.time < 4), 'Silent until the chord comes back');
 });
 
-test('melody + chords parts play the score as written, moved by the key change', () => {
+test('melody + rhythm parts play the rhythm comping, softer, under the top line, moved by the key change', () => {
   const grid = { beats: Array.from({ length: 9 }, (_, i) => i * 0.5), firstBar: 0 };
   const part = { chords: [{ start: 0, name: 'C' }], notes: [{ start: 0.5, end: 1, pitch: 60, unit: 4, length: 4 },
-    { start: 0.5, end: 1, pitch: 64, unit: 4, length: 4 }, { start: 1, end: 1.5, pitch: 43, unit: 8, length: 4 }] };
-  const played = a.accompanimentEvents('keys-melody', part, grid, [[[0, 4, 100]]], 2);
-  assert.deepEqual(played.map(event => [event.time, event.pitch]), [[0.5, 62], [0.5, 66], [1, 45]]);
-  assert.ok(played.every(event => event.velocity === 100));
+    { start: 0.5, end: 1, pitch: 72, unit: 4, length: 4 }, { start: 1, end: 1.5, pitch: 67, unit: 8, length: 4 }] };
+  const pattern = [[[0, 2, 100], [2, 2, 90]]];
+  const rhythm = a.accompanimentEvents('keys-rhythm', part, grid, pattern, 2);
+  const played = a.accompanimentEvents('keys-melody', part, grid, pattern, 2);
+  const melody = played.filter(event => event.velocity === 108);
+  assert.deepEqual(melody.map(event => [event.time, event.pitch]), [[0.5, 74], [1, 69]], 'The top note of each chord');
+  const comped = played.filter(event => event.velocity !== 108);
+  assert.deepEqual([...new Set(comped.map(event => event.time))], [...new Set(rhythm.map(event => event.time))], 'The same rhythm');
+  assert.ok(comped.every(event => [70, 63].includes(event.velocity)), 'Softer');
+  assert.ok(Math.max(...comped.filter(event => event.time < 1).map(event => event.pitch)) < 74, 'Under the melody');
+  assert.ok(played.every((event, i) => !i || event.time >= played[i - 1].time), 'Sorted by time');
 });
 
 test('the nearest sample plays at the rate of the missing semitones', () => {
