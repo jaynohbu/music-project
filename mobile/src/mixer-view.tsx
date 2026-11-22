@@ -17,6 +17,8 @@ import { Button, Centered, errorText, useConfirm } from './ui';
 import { snapshot, restore } from './mixer-settings';
 import { HarmonyStrip, LyricsEditor, LyricsStrip } from './score-view';
 import { LYRICS_REPLAY_LEAD, firstChange, transposeKey, transposePart } from './score';
+import { shareScorePdf } from './score-pdf';
+import { scoreSheet, sheetFileName } from './score-sheet';
 import { hasMusic, regenerateLabel, useSongTasks } from './song-tasks';
 import { type Theme, useStyles, useTheme } from './theme';
 
@@ -221,7 +223,7 @@ export function MixerControls({ mixer, song = null, peaks, inScene = false }: { 
       {!liveOpen && mixer.hasTake && <Text style={styles.liveNote}>{t('mixer.takePlays')}</Text>}
     </View>}
     {song && <LivePanel key={song.jobId} open={liveOpen} mixer={mixer} song={song} tasks={tasks} position={position} onRecording={setRecording}
-      console={heard => <ChannelConsole {...{ mixer, locked, inside, position, allMuted, soloing, run: operation => void run(operation), onReset: inScene ? () => void reset() : undefined, songKey: tasks.parts?.guitar?.key }} label={t('mixer.liveInput')} channel={liveChannel}
+      console={heard => <ChannelConsole {...{ mixer, locked, inside, position, allMuted, soloing, run: operation => void run(operation), onReset: inScene ? () => void reset() : undefined, songKey: tasks.parts?.other?.key }} label={t('mixer.liveInput')} channel={liveChannel}
         expanded={liveExpanded} live={heard && !liveChannel.muted && !(soloing && !liveChannel.solo)}
         onToggle={() => setLiveExpanded(value => !value)} setChannel={change => mixer.setLiveChannel(change)}
         resetChannel={() => mixer.setLiveChannel(defaultChannel())} />} />}
@@ -255,14 +257,14 @@ export function MixerControls({ mixer, song = null, peaks, inScene = false }: { 
         </View>
         {!!(tasks.cleanFailure(name) || cleanErrors[name]) &&
           <Text accessibilityRole="alert" style={[styles.error, styles.stemError]}>{tasks.cleanFailure(name) || cleanErrors[name]}</Text>}
-        {song && <StemTasks transpose={mixer.transpose} name={name} label={label} cleaned={channel.useCleaned} tasks={tasks} position={position}
+        {song && <StemTasks transpose={mixer.transpose} title={song.title || t('common.untitledSong')} name={name} label={label} cleaned={channel.useCleaned} tasks={tasks} position={position}
           disabled={locked} onEditLyrics={editLyrics} />}
         <Timeline label={label} duration={mixer.duration} start={mixer.sectionStart} end={mixer.sectionEnd} position={position}
           peaks={channel.useCleaned ? peaks?.[name]?.cleaned ?? cleanedPeaks[name] : peaks?.[name]?.original}
           disabled={locked} onSection={(start, end) => mixer.setSection(start, end)}
           onSeek={time => void run(() => mixer.seek(time))}
           onReset={() => mixer.setSection(0, mixer.duration)} />
-        <ChannelConsole {...{ mixer, locked, inside, position, allMuted, soloing, run: operation => void run(operation), onReset: inScene ? () => void reset() : undefined, songKey: tasks.parts?.guitar?.key }} label={label} channel={channel} expanded={expanded} live={live} replaced={replaced}
+        <ChannelConsole {...{ mixer, locked, inside, position, allMuted, soloing, run: operation => void run(operation), onReset: inScene ? () => void reset() : undefined, songKey: tasks.parts?.other?.key }} label={label} channel={channel} expanded={expanded} live={live} replaced={replaced}
           onToggle={() => { if (!expanded) openStem(name); }} setChannel={change => mixer.setChannel(name, change)}
           resetChannel={() => {
             mixer.setChannel(name, { ...defaultChannel(), useCleaned: channel.useCleaned });
@@ -367,9 +369,9 @@ function KeyChange({ mixer, songKey }: { mixer: Mixer; songKey?: string }) {
 }
 
 // The website's lyrics and 악보 controls for one stem: find, edit or regenerate, then the scrolling strip.
-function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyrics, transpose }: {
+function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyrics, transpose, title }: {
   name: StemName; label: string; cleaned: boolean; tasks: ReturnType<typeof useSongTasks>; position: number;
-  disabled: boolean; onEditLyrics: () => void; transpose: number;
+  disabled: boolean; onEditLyrics: () => void; transpose: number; title: string;
 }) {
   const styles = useStyles(makeStyles), t = useT();
   const vocals = name === 'vocals', harmonic = HARMONY_STEMS.includes(name);
@@ -379,7 +381,23 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
   const part = useMemo(() => found && name !== 'drums' ? transposePart(found, transpose) : found, [found, name, transpose]);
   // The bass part has no key of its own; it is written in the song's key, after any key change.
   const ensembleKey = parts?.other?.key, songKey = ensembleKey ? transposeKey(ensembleKey, transpose) : undefined;
+  const [saving, setSaving] = useState(false);
+  const [saveFailure, setSaveFailure] = useState('');
   if (!vocals && !harmonic) return null;
+  // The score as it is heard, key change included, as an A4 PDF for the share sheet.
+  const savePdf = async () => {
+    if (!part || !tasks.grid) return;
+    setSaving(true); setSaveFailure('');
+    const key = name === 'drums' ? undefined : part.key ?? songKey;
+    const subtitle = [label, key && t('tasks.pdfKey', { key }), transpose && ensembleKey && t('mixer.keyFrom', { key: ensembleKey })].filter(Boolean).join(' · ');
+    try {
+      const html = scoreSheet(part, name, tasks.grid, { title, subtitle, page: (page, pages) => `${page} / ${pages}` }, songKey);
+      await shareScorePdf(html, sheetFileName(title, label));
+    } catch (failure) {
+      setSaveFailure(t('tasks.pdfFailed', { error: failure instanceof Error ? failure.message : String(failure) }));
+    } finally { setSaving(false); }
+  };
+  const printable = harmonic && hasMusic(part) && !!tasks.grid;
   const regenerating = harmonic && tasks.regenerating(name);
   const action = vocals
     ? tasks.lyrics ? { label: t('tasks.editLyrics'), onPress: onEditLyrics }
@@ -393,13 +411,19 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
   const failure = vocals ? tasks.lyricsFailure : tasks.chordsFailure ?? tasks.partFailure(name);
   const note = vocals ? !tasks.lyrics && tasks.findingLyrics && t('tasks.lyricsNote') : (parts ? regenerating : tasks.findingChords) && t('tasks.chordsNote');
   return <View>
-    {action && <View style={styles.taskRow}>
-      <Pressable onPress={action.onPress} disabled={!action.onPress || disabled} accessibilityRole="button"
+    {(action || printable) && <View style={styles.taskRow}>
+      {action && <Pressable onPress={action.onPress} disabled={!action.onPress || disabled} accessibilityRole="button"
         accessibilityLabel={action.hint ?? action.label} accessibilityState={{ disabled: !action.onPress || disabled }}
         style={[styles.taskButton, (!action.onPress || disabled) && { opacity: 0.5 }]}>
         <Text style={styles.taskButtonText}>{action.label}</Text>
-      </Pressable>
+      </Pressable>}
+      {printable && <Pressable onPress={() => void savePdf()} disabled={saving} accessibilityRole="button"
+        accessibilityLabel={t('tasks.pdfFor', { stem: label })} accessibilityState={{ disabled: saving }}
+        style={[styles.taskButton, saving && { opacity: 0.5 }]}>
+        <Text style={styles.taskButtonText}>{saving ? t('tasks.pdfMaking') : t('tasks.pdf')}</Text>
+      </Pressable>}
     </View>}
+    {!!saveFailure && <Text accessibilityRole="alert" style={[styles.error, styles.taskError]}>{saveFailure}</Text>}
     {/* The ensemble is written at concert pitch on a treble staff, the same on all three cards. */}
     {!!part?.key && <Text style={styles.taskHint}>{t('tasks.ensembleNote', { key: part.key })}</Text>}
     {!!failure && <Text accessibilityRole="alert" style={[styles.error, styles.taskError]}>{failure}</Text>}

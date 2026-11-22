@@ -6,6 +6,7 @@ import { ActivityService, ENSEMBLE_STEMS, HARMONY_STEMS, HarmonyGrid, REGENERATE
 import { ConfirmationService } from './confirmation';
 import { captureSceneSettings, restoredSceneInterval } from './scene-settings';
 import { HarmonyStrip } from './harmony-strip';
+import { scoreSheet, sheetFileName } from './score-sheet';
 import { LyricsStrip } from './lyrics-strip';
 import { LyricsEditor, firstChange } from './lyrics-editor';
 import {
@@ -437,6 +438,10 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                       <button type="button" class="secondary" (click)="regenerate(track)" [disabled]="!canPlay()"
                         [attr.aria-label]="regenerateLabel(track.name) + ' for ' + track.label + ' only'">{{ regenerateLabel(track.name) }}</button>
                     }
+                  }
+                  @if (isHarmonic(track.name) && harmonyGrid() && hasMusic(harmonyParts()?.[track.name])) {
+                    <button type="button" class="secondary" (click)="saveScorePdf(track)"
+                      [attr.aria-label]="'Save the ' + track.label + ' score as a PDF'">Save PDF</button>
                   }
                   @if (track.hasCleaned) {
                     <div class="version-switch" role="group" [attr.aria-label]="track.label + ' version'">
@@ -1007,6 +1012,34 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   }
 
   isHarmonic(name: string): boolean { return HARMONY_STEMS.includes(name); }
+
+  // The score as an A4 sheet, printed from a hidden frame so the browser offers Save as PDF.
+  saveScorePdf(track: { name: string; label: string }): void {
+    const part = this.harmonyParts()?.[track.name], grid = this.harmonyGrid();
+    if (!part || !grid) return;
+    const title = this.sceneTitle || this.job()?.title || 'Score';
+    // The bass part is written in the song's key, which only the ensemble carries.
+    const songKey = this.harmonyParts()?.['other']?.key;
+    const key = track.name === 'drums' ? undefined : part.key ?? songKey;
+    const html = scoreSheet(part, track.name, grid, {
+      title, subtitle: [track.label, key && `Key ${key}`].filter(Boolean).join(' · '), page: (page, pages) => `${page} / ${pages}`,
+    }, songKey);
+    // The browser names the saved file after the printed page's title.
+    const name = sheetFileName(title, track.label).replace(/\.pdf$/, '').replace(/&/g, '&amp;');
+    document.querySelector('iframe.score-print')?.remove();
+    const frame = document.createElement('iframe');
+    frame.className = 'score-print';
+    frame.setAttribute('aria-hidden', 'true');
+    frame.style.cssText = 'position: fixed; right: 0; bottom: 0; width: 0; height: 0; border: 0';
+    frame.srcdoc = html.replace(/<title>.*?<\/title>/, `<title>${name}</title>`);
+    frame.onload = () => {
+      const view = frame.contentWindow!;
+      view.addEventListener('afterprint', () => frame.remove());
+      view.focus();
+      view.print();
+    };
+    document.body.appendChild(frame);
+  }
 
   hasMusic(part?: HarmonyPart): boolean { return !!part && (part.chords.length > 0 || part.notes.length > 0 || !!part.hits?.length); }
 
