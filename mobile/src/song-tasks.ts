@@ -86,7 +86,7 @@ export function useSongTasks(initial: Song | null) {
       .then(({ stems, ensemble, beats, firstBar }) => {
         if (!alive.current) return;
         setGrid({ beats, firstBar });
-        // Guitar, piano and other show one shared score, so the song reads as one flow.
+        // The ensemble part is other's score.
         setParts(ensemble ? { ...stems, ...Object.fromEntries(ENSEMBLE_STEMS.map(name => [name, ensemble])) } : stems);
       })
       .catch(failure => { if (alive.current) setChordsLoadError(t('tasks.loadChordsFailed', { error: errorText(failure) })); })

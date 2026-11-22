@@ -9,7 +9,7 @@ const request = (method, extra = {}) => ({
   ...extra,
 });
 const body = response => JSON.parse(response.body);
-const stems = Object.fromEntries(['drums', 'bass', 'vocals', 'guitar', 'piano', 'other']
+const stems = Object.fromEntries(['drums', 'bass', 'vocals', 'other']
   .map(name => [name, { key: `users/alice/stems/id/${name}.wav` }]));
 
 test('the library lists only split songs and never signs older YouTube files', async () => {
@@ -28,7 +28,7 @@ test('the library lists only split songs and never signs older YouTube files', a
   const result = await handler(request('GET'));
   assert.equal(result.statusCode, 200);
   assert.deepEqual(body(result).jobs.map(job => job.jobId), ['upload']);
-  assert.equal(signed.length, 12);
+  assert.equal(signed.length, 8);
   assert.ok(signed.every(key => key.includes('/stems/')));
   assert.ok(body(result).cursor);
 });

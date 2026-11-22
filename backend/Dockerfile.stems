@@ -12,7 +12,7 @@ RUN python3 -m venv /opt/stems \
 # --no-deps: basic-pitch would add TensorFlow, but it runs on the ONNX Runtime already installed.
 ENV STEM_PYTHON_PATH=/opt/stems/bin/python
 ENV STEM_DEVICE=cpu
-RUN /opt/stems/bin/python -c "from demucs.pretrained import get_model; get_model('htdemucs_6s')"
+RUN /opt/stems/bin/python -c "from demucs.pretrained import get_model; get_model('htdemucs')"
 RUN HF_HUB_DISABLE_XET=1 /opt/stems/bin/python -c "from faster_whisper.utils import download_model; download_model('large-v3')"
 ENV HF_HUB_OFFLINE=1
 # ADTOF Frame_RNN (Zehren, Alunno, Bientinesi), CC BY-NC-SA 4.0: non-commercial use only.

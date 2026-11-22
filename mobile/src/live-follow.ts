@@ -78,10 +78,10 @@ export const DEFAULT_ONSETS: OnsetOptions = { size: 1024, hop: 256, sensitivity:
 export type InstrumentId = 'guitar' | 'bass' | 'keyboard' | 'piano' | 'drums' | 'vocals' | 'other';
 // `stem` is the band part the instrument stands in for, silenced while the player's take is heard.
 export const INSTRUMENTS: { id: InstrumentId; label: string; stem: StemName | null; onsets: OnsetOptions }[] = [
-  { id: 'guitar', label: 'Guitar', stem: 'guitar', onsets: DEFAULT_ONSETS },
+  { id: 'guitar', label: 'Guitar', stem: 'other', onsets: DEFAULT_ONSETS },
   { id: 'bass', label: 'Bass', stem: 'bass', onsets: { ...DEFAULT_ONSETS, size: 2048, low: 30, gap: 0.1 } },
-  { id: 'keyboard', label: 'Keyboard', stem: 'piano', onsets: { ...DEFAULT_ONSETS, low: 40 } },
-  { id: 'piano', label: 'Piano', stem: 'piano', onsets: { ...DEFAULT_ONSETS, low: 40 } },
+  { id: 'keyboard', label: 'Keyboard', stem: 'other', onsets: { ...DEFAULT_ONSETS, low: 40 } },
+  { id: 'piano', label: 'Piano', stem: 'other', onsets: { ...DEFAULT_ONSETS, low: 40 } },
   { id: 'drums', label: 'Drums', stem: 'drums', onsets: { ...DEFAULT_ONSETS, low: 40, gap: 0.06 } },
   { id: 'vocals', label: 'Vocals', stem: 'vocals', onsets: { ...DEFAULT_ONSETS, low: 80, sensitivity: 1.4, gap: 0.15 } },
   { id: 'other', label: 'Other', stem: null, onsets: { ...DEFAULT_ONSETS, low: 40 } },

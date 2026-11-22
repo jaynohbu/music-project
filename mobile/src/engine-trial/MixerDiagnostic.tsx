@@ -85,7 +85,7 @@ export default function MixerDiagnostic() {
         await mixer.play();
         log('Play started');
         // The test stems are opposite-polarity pairs; keep only one of each pair.
-        for (const name of [STEM_NAMES[1], STEM_NAMES[3], STEM_NAMES[5]]) mixer.setChannel(name, { muted: true });
+        for (const name of [STEM_NAMES[1], STEM_NAMES[3]]) mixer.setChannel(name, { muted: true });
         await new Promise(resolve => setTimeout(resolve, 2000));
         await probeStages(mixer, log);
         mixer.tick();

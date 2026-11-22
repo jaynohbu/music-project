@@ -35,8 +35,10 @@ class StemScroll {
 const Context = createContext<StemScroll | null>(null);
 export const useStemScroll = () => useContext(Context);
 
-// Wide enough to grab without looking, with a handle that stands out on every theme.
-const RAIL = 34, SHORTEST_THUMB = 56;
+// The rails lie over the page at the screen's edges: a thin bar to see, a wider strip to touch. The mixers reach the
+// edges underneath, and keep their controls at least EDGE in from them so a touch on a control never lands on a rail.
+const RAIL = 18, SHORTEST_THUMB = 56;
+export const EDGE = 22;
 const clamp = (value: number, low: number, high: number) => Math.min(Math.max(value, low), high);
 
 interface Sizes { view: number; content: number; offset: number }
@@ -116,7 +118,6 @@ function ScrollRail({ scroll, sizes, side, fade }: { scroll: StemScroll; sizes: 
     {range > 0 && <Animated.View pointerEvents="none"
       style={[styles.thumb, { top: clamp(top, 0, travel), height: thumb, backgroundColor: theme.accent, borderColor: theme.onAccent,
         opacity: fade.value.interpolate({ inputRange: [0, 1], outputRange: [.3, 1] }) }]}>
-      {[0, 1, 2].map(line => <View key={line} style={[styles.grip, { backgroundColor: theme.onAccent }]} />)}
     </Animated.View>}
   </View>;
 }
@@ -160,12 +161,9 @@ export function StemScrollView({ children, ...props }: ScrollViewProps & { child
 
 const styles = StyleSheet.create({
   frame: { flex: 1 },
-  // Room for the rails, so they never cover a control.
-  page: { marginHorizontal: RAIL },
+  page: {},
   rail: { position: 'absolute', top: 0, bottom: 0, width: RAIL, alignItems: 'center' },
-  // Only slightly rounded ends.
-  track: { position: 'absolute', top: 4, bottom: 4, width: 12, borderRadius: 3, borderWidth: 1 },
-  thumb: { position: 'absolute', width: 24, borderRadius: 4, borderWidth: 1, alignItems: 'center', justifyContent: 'center', gap: 4,
-    shadowColor: '#000', shadowOpacity: .35, shadowRadius: 3, shadowOffset: { width: 0, height: 1 } },
-  grip: { width: 12, height: 2, borderRadius: 1, opacity: .8 },
+  track: { position: 'absolute', top: 4, bottom: 4, width: 4, borderRadius: 2, borderWidth: StyleSheet.hairlineWidth },
+  thumb: { position: 'absolute', width: 7, borderRadius: 3.5, borderWidth: StyleSheet.hairlineWidth,
+    shadowColor: '#000', shadowOpacity: .35, shadowRadius: 2, shadowOffset: { width: 0, height: 1 } },
 });

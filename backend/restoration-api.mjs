@@ -72,7 +72,7 @@ export function createRestorationRoutes({ database, storage, orchestrator, signe
     if (!parent || parent.type !== 'stems') return reply(404, { message: 'Separation job not found.' });
     if (visibleJob(parent).status !== 'completed' ||
         !STEM_NAMES.every(name => typeof parent.stems?.[name]?.key === 'string')) {
-      return reply(409, { message: 'Clean up a stem after all six stems are ready.' });
+      return reply(409, { message: 'Clean up a stem after all four stems are ready.' });
     }
     let input;
     try {

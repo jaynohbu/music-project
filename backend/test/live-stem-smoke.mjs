@@ -98,7 +98,7 @@ try {
       assert.equal(repeat.job.status, 'completed');
       const list = await request('/jobs');
       assert.ok(list.jobs.some(item => item.jobId === job.jobId && Object.keys(item.stems).length === 6));
-      console.log(`PASS ${base}: authenticated direct S3 upload, real Demucs, six aligned WAVs, signed playback, list and idempotent completion.`);
+      console.log(`PASS ${base}: authenticated direct S3 upload, real Demucs, four aligned WAVs, signed playback, list and idempotent completion.`);
       break;
     }
     await new Promise(resolve => setTimeout(resolve, 4000));

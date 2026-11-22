@@ -74,10 +74,8 @@ function spell(pitchClass: number, signature: KeySignature): [number, string, nu
   const chosen = options.find(([, sign]) => sign === (signature.flats ? '♭' : '♯')) ?? options[0];
   return [chosen[0], chosen[1], octave(chosen[0])];
 }
-// Steps count letter names from C0; bottom is E4 or G2. Guitar and bass are written an octave above their sound.
+// Steps count letter names from C0; bottom is E4 or G2. Bass is written an octave above its sound.
 export const CLEFS: Record<string, { clef: 'treble' | 'bass'; bottomStep: number; lift: number; low: number; high: number }> = {
-  guitar: { clef: 'treble', bottomStep: 30, lift: 12, low: 52, high: 84 },
-  piano: { clef: 'treble', bottomStep: 30, lift: 0, low: 52, high: 84 },
   other: { clef: 'treble', bottomStep: 30, lift: 0, low: 52, high: 84 },
   bass: { clef: 'bass', bottomStep: 18, lift: 12, low: 36, high: 64 },
 };

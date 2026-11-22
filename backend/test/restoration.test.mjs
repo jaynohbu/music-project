@@ -119,17 +119,17 @@ function setup() {
   };
   return { database, storage, orchestrator, started, call };
 }
-const good = { stem: 'guitar', references: ['vocals', 'bass'], strength: 0.5 };
+const good = { stem: 'other', references: ['vocals', 'bass'], strength: 0.5 };
 const route = `${parentId}/restorations`;
 
 test('input needs one target, other stems as references, and a valid strength', () => {
-  for (const bad of [null, [], {}, { stem: 'guitar' }, { stem: 'guitar', references: [] }, { stem: 'kazoo', references: ['bass'] },
-    { stem: 'guitar', references: ['guitar'] }, { stem: 'guitar', references: ['bass', 'bass'] }, { stem: 'guitar', references: ['kazoo'] },
-    { stem: 'guitar', references: 'bass' }, { ...good, strength: 1.1 }, { ...good, strength: -0.1 }, { ...good, strength: '1' }, { ...good, strength: null }]) {
+  for (const bad of [null, [], {}, { stem: 'other' }, { stem: 'other', references: [] }, { stem: 'kazoo', references: ['bass'] },
+    { stem: 'other', references: ['other'] }, { stem: 'other', references: ['bass', 'bass'] }, { stem: 'other', references: ['kazoo'] },
+    { stem: 'other', references: 'bass' }, { ...good, strength: 1.1 }, { ...good, strength: -0.1 }, { ...good, strength: '1' }, { ...good, strength: null }]) {
     assert.throws(() => restorationInput(bad), undefined, JSON.stringify(bad));
   }
-  assert.deepEqual(restorationInput({ stem: 'guitar', references: ['bass', 'drums'] }),
-    { stem: 'guitar', references: ['drums', 'bass'], strength: 0.45 });
+  assert.deepEqual(restorationInput({ stem: 'other', references: ['bass', 'drums'] }),
+    { stem: 'other', references: ['drums', 'bass'], strength: 0.45 });
 });
 
 test('create stores a separate record, starts the task with its kind, and repeats safely', async () => {
@@ -151,7 +151,7 @@ test('create stores a separate record, starts the task with its kind, and repeat
   assert.equal(again.body.restoration.id, id);
   assert.equal(started.length, 1);
   assert.equal((await call(route, { ...good, strength: 0.6 })).status, 409, 'one cleanup per stem');
-  assert.equal((await call(route, { ...good, stem: 'piano' })).status, 202, 'other stems have their own');
+  assert.equal((await call(route, { ...good, stem: 'drums' })).status, 202, 'other stems have their own');
   database.put({ ...database.get('owner', id), status: 'failed', error: 'x', failedAt: new Date().toISOString() });
   assert.equal((await call(route, { ...good, strength: 0.6 })).status, 202, 'a failed cleanup can be retried');
   assert.deepEqual(database.get('owner', parentId).stems, parent().stems);
@@ -159,7 +159,7 @@ test('create stores a separate record, starts the task with its kind, and repeat
 
 test('create rejects invalid input, other owners, and unfinished parents', async () => {
   const { call, database, started } = setup();
-  assert.equal((await call(route, { stem: 'guitar', references: [] })).status, 400);
+  assert.equal((await call(route, { stem: 'other', references: [] })).status, 400);
   assert.equal((await call(route, good, 'POST', 'intruder')).status, 404);
   database.put(parent({ status: 'processing', stems: undefined }));
   assert.equal((await call(route, good)).status, 409);
@@ -265,7 +265,7 @@ function workerCase(run) {
   for (const name of STEM_NAMES) context.storage.objects.set(stemKey(name), wavFile());
   const child = {
     userId: 'owner', jobId: '33333333-3333-4333-8333-333333333333', type: 'restoration', parentJobId: parentId,
-    status: 'queued', stem: 'guitar', references: ['vocals', 'bass'], strength: 0.45, title: 't',
+    status: 'queued', stem: 'other', references: ['vocals', 'bass'], strength: 0.45, title: 't',
     key: `users/owner/restored/${parentId}/33333333-3333-4333-8333-333333333333.wav`,
     generatedAt: new Date().toISOString(), startedAt: new Date().toISOString(), expiresAt: 9999999999,
   };
@@ -352,7 +352,7 @@ try { execFileSync(python, ['-c', 'import scipy, soundfile']); hasPython = true;
 test('real script produces an aligned stem through the worker, writing only the new key', { skip: !hasPython }, async () => {
   const { input, database, storage, child } = workerCase();
   // Same layout as real stems, whose extra chunk makes the file larger than the output.
-  storage.objects.set(stemKey('guitar'), wavWithList());
+  storage.objects.set(stemKey('other'), wavWithList());
   const real = createRestoreWorker({ database, storage, pythonPath: python, encode: async (_input, output) => writeFile(output, 'aac') });
   const before = new Map([...storage.objects].map(([key, value]) => [key, createHash('md5').update(value).digest('hex')]));
   await real(input);
@@ -503,9 +503,9 @@ test('harmony worker reads its stems, passes them by name, and writes only its k
   const saved = database.get('owner', lyricsId);
   assert.equal(saved.status, 'completed', saved.error);
   assert.ok(args[0].endsWith('analyze_harmony.py'));
-  assert.deepEqual(args.slice(2).filter(item => item !== '--stem').map(item => item.split('=')[0]), ['guitar', 'piano', 'other', 'bass', 'drums']);
+  assert.deepEqual(args.slice(2).filter(item => item !== '--stem').map(item => item.split('=')[0]), ['other', 'bass', 'drums']);
   assert.deepEqual(storage.calls.map(call => [call.kind, call.key]), [
-    ...['guitar', 'piano', 'other', 'bass', 'drums'].map(name => ['GetObjectCommand', stemKey(name)]), ['PutObjectCommand', child.key],
+    ...['other', 'bass', 'drums'].map(name => ['GetObjectCommand', stemKey(name)]), ['PutObjectCommand', child.key],
   ]);
 });
 
@@ -535,14 +535,14 @@ test('harmony results from the old format are ignored, so they get redone', asyn
   });
   assert.equal((await call(parentId, undefined, 'GET')).body.job.harmony, undefined);
   assert.equal((await call(`${parentId}/harmony`, {})).status, 202);
-  assert.equal(database.get('owner', (await call(parentId, undefined, 'GET')).body.job.harmony.id).version, 5);
+  assert.equal(database.get('owner', (await call(parentId, undefined, 'GET')).body.job.harmony.id).version, 6);
   assert.equal(started.length, 1);
 });
 
 function regeneration() {
   const context = setup();
   const finished = (id, fields) => context.database.put({
-    userId: 'owner', jobId: id, type: 'harmony', version: 5, parentJobId: parentId, status: 'completed', title: 'Chords',
+    userId: 'owner', jobId: id, type: 'harmony', version: 6, parentJobId: parentId, status: 'completed', title: 'Chords',
     key: `users/owner/harmony/${parentId}/${id}.json`, generatedAt: new Date(Date.now() - 60000).toISOString(), ...fields,
   });
   finished(lyricsId);
@@ -554,8 +554,8 @@ test('regenerating one stem needs a finished song result and a harmonic stem', a
   const { call, started } = setup();
   assert.equal((await call(`${parentId}/harmony`, { stem: 'bass' })).status, 409);
   const { call: callDone } = regeneration();
-  // Guitar, piano and other share the ensemble part, so they are not redone on their own.
-  for (const stem of ['vocals', 'kazoo', 1, 'guitar', 'piano', 'other']) assert.equal((await callDone(`${parentId}/harmony`, { stem })).status, 400, String(stem));
+  // Other is the ensemble part, so it is not redone on its own.
+  for (const stem of ['vocals', 'kazoo', 1, 'other']) assert.equal((await callDone(`${parentId}/harmony`, { stem })).status, 400, String(stem));
   assert.equal(started.length, 0);
 });
 
@@ -578,7 +578,7 @@ test('regenerating starts only that stem, keeps the song result, and repeats saf
   assert.equal(job.harmony.status, 'completed');
   assert.equal(job.harmony.stems.bass.status, 'queued');
   assert.equal(job.harmony.stems.drums.status, 'queued');
-  assert.equal(job.harmony.stems.guitar, undefined);
+  assert.equal(job.harmony.stems.other, undefined);
 });
 
 test('a failed regeneration reports its error and keeps the last good result of that stem', async () => {
@@ -614,7 +614,7 @@ test('regenerating from the cleaned version uses the newest finished cleanup of 
 });
 
 test('the worker for one stem reads its source and the song grid, and skips what it does not need', async () => {
-  for (const [stem, stemsRead] of [['guitar', ['guitar', 'piano', 'other']], ['bass', ['guitar', 'piano', 'other', 'bass']], ['drums', ['drums']]]) {
+  for (const [stem, stemsRead] of [['other', ['other']], ['bass', ['other', 'bass']], ['drums', ['drums']]]) {
     let args;
     const { worker, input, database, storage, child } = harmonyCase(async (_python, given) => {
       args = given;
@@ -896,4 +896,55 @@ test('the ensemble part is checked like a stem part, with a key', async () => {
     { ...ensemble, second: [{ start: 0, end: 1, pitch: 60, unit: -1, length: 1 }] }, null]) {
     assert.throws(() => checkHarmony({ ...base, ensemble: bad }, 2), /Invalid harmony/, JSON.stringify(bad));
   }
+});
+
+// Progression rules for the ensemble's chords and lines (harmony version 6). They need librosa: run with
+// HARMONY_PYTHON set to an environment that has it (the worker image does); otherwise they are skipped.
+const harmonyPython = process.env.HARMONY_PYTHON ?? 'python3';
+let hasHarmony = false;
+try { execFileSync(harmonyPython, ['-c', 'import librosa']); hasHarmony = true; } catch { /* Skipped below. */ }
+const harmony = (body, ...args) => JSON.parse(execFileSync(harmonyPython, ['-c',
+  `import json, sys; sys.path.insert(0, ${JSON.stringify(fileURLToPath(new URL('..', import.meta.url)))})
+import numpy as np
+import analyze_harmony as h
+${body}`, ...args.map(value => JSON.stringify(value))], { encoding: 'utf8' }));
+
+test('chords inside the key cost nothing, common borrowings a little, others more', { skip: !hasHarmony }, () => {
+  const costs = harmony('print(json.dumps(h.outside_cost([(0, ""), (9, "m"), (7, "7"), (2, "m7"), (10, ""), (6, "")], 0, False)[:, 0].tolist()))');
+  assert.deepEqual(costs, [0, 0, 0, 0, 0.05, 0.15]);
+});
+
+test('a dominant going home is the likeliest change, a tritone the least', { skip: !hasHarmony }, () => {
+  const [home, up, tritone] = harmony(`chords = [(7, ""), (0, ""), (6, "")]
+moves = h.progression_moves(chords, 0, False)
+print(json.dumps([moves[0, 1], moves[1, 0], moves[1, 2]]))`);
+  assert.ok(home > up && up > tritone, JSON.stringify([home, up, tritone]));
+});
+
+test('unclear evidence names the chord the key expects, and changes land on the beat', { skip: !hasHarmony }, () => {
+  // E and B, with G and G# equally present: Em belongs to C major, E major does not.
+  const path = harmony(`frames = 120
+chroma = np.zeros((12, frames))
+chroma[[0, 4, 7], :60] = 1
+chroma[[4, 11], 60:] = 1
+chroma[[7, 8], 60:] = 0.5
+beats = [i * 0.5 for i in range(20)]
+path = h.progression_path(chroma, np.zeros((12, frames)), 0, False, beats, 0)
+changes = [i for i in range(1, frames) if path[i] != path[i - 1]]
+print(json.dumps({'first': h.chord_name(*path[10]), 'last': h.chord_name(*path[110]), 'changes': changes}))`);
+  assert.equal(path.first, 'C');
+  assert.equal(path.last, 'Em');
+  const beatFrames = Array.from({ length: 20 }, (_, i) => Math.round(i * 0.5 / (2048 / 22050)));
+  assert.ok(path.changes.every(frame => beatFrames.some(beat => Math.abs(beat - frame) <= 1)), JSON.stringify(path.changes));
+});
+
+test('doubtful notes move into the chord on strong beats, and out-of-key notes into key or chord', { skip: !hasHarmony }, () => {
+  const fitted = harmony(`line = [{'start': 0.0, 'end': 0.4, 'pitch': 62}, {'start': 1.0, 'end': 1.4, 'pitch': 62},
+        {'start': 0.75, 'end': 0.9, 'pitch': 66}, {'start': 1.25, 'end': 1.4, 'pitch': 62}]
+events = [(0.0, 0.4, 62, 0.4), (1.0, 1.4, 62, 0.9), (0.75, 0.9, 66, 0.4), (1.25, 1.4, 62, 0.4)]
+path = [(0, '')] * 40
+beats = [i * 0.5 for i in range(10)]
+print(json.dumps([note['pitch'] for note in h.fit_line(line, events, path, 0, False, beats, 0)]))`);
+  // Weak D on beat 1 goes to C; a sure D stays; F# between beats leaves the key for F; D off the beat is a passing note.
+  assert.deepEqual(fitted, [60, 62, 65, 62]);
 });

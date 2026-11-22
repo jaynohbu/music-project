@@ -34,7 +34,7 @@ function harness() {
     { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText)(english, english.exports);
   const t = (key, values = {}) => english.exports.default[key].replace(/\{(\w+)\}/g, (match, name) => name in values ? String(values[name]) : match);
   const mocks = { react, 'react-native': native, 'react/jsx-runtime': { jsx: element, jsxs: element, Fragment: 'Fragment' }, './theme': theme,
-    './language': { useT: () => t } };
+    './language': { useT: () => t }, './stem-scroll': { EDGE: 22 } };
   const module = { exports: {} };
   new Function('require', 'module', 'exports', code)(name => mocks[name], module, module.exports);
   return {

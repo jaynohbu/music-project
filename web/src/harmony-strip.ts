@@ -16,10 +16,8 @@ const REST_VALUES = [16, 8, 4, 2, 1];
 const SPELLING: [number, string][] = [
   [0, ''], [0, '♯'], [1, ''], [2, '♭'], [2, ''], [3, ''], [3, '♯'], [4, ''], [5, '♭'], [5, ''], [6, '♭'], [6, ''],
 ];
-// Steps count letter names from C0; bottom is E4 or G2. Guitar and bass are written an octave above their sound.
+// Steps count letter names from C0; bottom is E4 or G2. Bass is written an octave above its sound.
 const CLEFS: Record<string, { clef: 'treble' | 'bass'; bottomStep: number; lift: number; low: number; high: number }> = {
-  guitar: { clef: 'treble', bottomStep: 30, lift: 12, low: 52, high: 84 },
-  piano: { clef: 'treble', bottomStep: 30, lift: 0, low: 52, high: 84 },
   other: { clef: 'treble', bottomStep: 30, lift: 0, low: 52, high: 84 },
   bass: { clef: 'bass', bottomStep: 18, lift: 12, low: 36, high: 64 },
 };

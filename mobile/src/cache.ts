@@ -8,8 +8,8 @@ const MAX_SONGS = 20;
 const MAX_BYTES = 2_000_000_000;
 // Room left on the phone after a download, so the cache never fills the disk.
 const DISK_MARGIN = 500_000_000;
-// Bytes per second for six stereo stems, to estimate a download before it starts.
-const RATE = { aac: 6 * 32_000, wav: 6 * 176_400 };
+// Bytes per second for the stereo stems, to estimate a download before it starts.
+const RATE = { aac: STEM_NAMES.length * 32_000, wav: STEM_NAMES.length * 176_400 };
 // S3 error bodies are a few hundred bytes; no real stem is this small.
 const MIN_STEM_BYTES = 4096;
 
@@ -110,7 +110,7 @@ export function holdSong(jobId: string) {
 
 const extension = (url: string) => (/\.(m4a|wav)(?:\?|$)/i.exec(url)?.[1] ?? 'm4a').toLowerCase();
 
-// Returns local paths for all six stems, downloading them first if the cache has no
+// Returns local paths for all the stems, downloading them first if the cache has no
 // copy of this version. Call holdSong first, so a later download cannot evict it.
 export function songFiles(
   song: Song, onProgress: (fraction: number) => void,
@@ -128,7 +128,8 @@ export function songFiles(
 async function downloadSong(song: Song, onProgress: (fraction: number) => void): Promise<SongFiles> {
   const entries = load();
   const fresh = await getSong(song.jobId);
-  const version = fresh.playVersion ?? 'wav';
+  // A song split again (completedAt) has new files under the same names.
+  const version = `${fresh.playVersion ?? 'wav'}@${fresh.completedAt ?? ''}`;
   const restorations = (fresh.restorations ?? []).filter(item => item.status === 'completed');
   const cleanedVersion = JSON.stringify(restorations.map(item => [item.id, item.playVersion ?? 'wav']).sort());
   const cached = entries[song.jobId];

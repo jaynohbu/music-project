@@ -12,6 +12,7 @@ import { useLanguage } from './language';
 import { IconButton, LampSwitch } from './mixer-console';
 import type { Mixer } from './player';
 import type { useSongTasks } from './song-tasks';
+import { EDGE } from './stem-scroll';
 import { type Theme, useStyles, useTheme } from './theme';
 import { errorText, useConfirm } from './ui';
 
@@ -213,8 +214,8 @@ function TempoLine({ take, duration, position }: { take: LiveTake; duration: num
 const makeStyles = (t: Theme) => StyleSheet.create({
   // The same card as a stem's (mixer-view.tsx), so the live input reads as one more part of the mix.
   card: { backgroundColor: t.surface, borderRadius: 10, borderWidth: 1, borderColor: t.line, overflow: 'hidden', paddingTop: 12 },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, minHeight: 36 },
-  body: { paddingHorizontal: 14, paddingTop: 10, gap: 10 },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: EDGE, minHeight: 36 },
+  body: { paddingHorizontal: EDGE, paddingTop: 10, gap: 10 },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   badge: { fontSize: 12, fontWeight: '700', color: t.onAccent, backgroundColor: t.accent, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, overflow: 'hidden' },
   badgeWaiting: { color: t.muted, backgroundColor: t.surfaceMuted },

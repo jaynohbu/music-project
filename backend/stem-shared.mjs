@@ -1,4 +1,5 @@
-export const STEM_NAMES = ['drums', 'bass', 'vocals', 'guitar', 'piano', 'other'];
+// Demucs htdemucs: four stems. Guitars, keys and every other pitched part are in other (2026-11-21; six before).
+export const STEM_NAMES = ['drums', 'bass', 'vocals', 'other'];
 export const STEM_MAX_BYTES = 55_000_000;
 export const STEM_MAX_DURATION = 900;
 export const STEM_MAX_OUTPUT_BYTES = STEM_MAX_DURATION * 44100 * 2 * 2 + 4096;

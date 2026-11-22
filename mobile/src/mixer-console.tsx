@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { PanResponder, Pressable, StyleSheet, Text, TextInput, View, type GestureResponderEvent, type PanResponderGestureState } from 'react-native';
 import Svg, { Path, Rect } from 'react-native-svg';
 import { useT } from './language';
+import { EDGE } from './stem-scroll';
 import { type Theme, useStyles, useTheme } from './theme';
 
 // Visual parity with the website mixer (web/src/styles.css: marker rail, waveform, console faders).
@@ -39,7 +40,8 @@ function createDrag(handlers: DragHandlers) {
   return { handlersRef: latest, responder };
 }
 
-const MARKER_WIDTH = 44, EDITOR_PADDING = 14, RAIL = 28, WAVE = 44, HANDLE = 32;
+// The S and E markers centre past the scroll rail's touch strip.
+const MARKER_WIDTH = 44, EDITOR_PADDING = EDGE + 8, RAIL = 28, WAVE = 44, HANDLE = 32;
 export function Timeline({ label, duration, start, end, position, peaks, disabled, onSection, onSeek, onReset }: {
   label: string; duration: number; start: number; end: number; position: number; peaks?: number[]; disabled?: boolean;
   onSection: (start: number, end: number) => void; onSeek: (time: number) => void; onReset: () => void;
@@ -324,7 +326,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
     shadowColor: '#000', shadowOpacity: .35, shadowRadius: 2, shadowOffset: { width: 0, height: 2 } },
   note: { fontSize: 9, color: t.consoleMuted, marginTop: 6 },
   // A slim bar, so the master control takes little height above the channel strips.
-  master: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 4 },
+  master: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: EDGE, paddingVertical: 4 },
   masterWell: { flex: 1, height: 28, justifyContent: 'center' },
   masterTrack: { position: 'absolute', left: 12, right: 12, height: 4, backgroundColor: '#35445a', borderRadius: 2, borderWidth: 1, borderColor: '#1d2836' },
   masterThumb: { position: 'absolute', width: 24, height: 20, borderRadius: 3, borderWidth: 1, borderColor: '#718198', backgroundImage: THUMB_SIDE,

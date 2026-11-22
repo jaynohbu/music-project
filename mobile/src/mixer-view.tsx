@@ -1,7 +1,7 @@
 import { useIsFocused } from 'expo-router';
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ComponentRef } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { ENSEMBLE_STEMS, HARMONY_STEMS, REGENERATED_STEMS, STEM_NAMES, getSong, type LyricLine, type SceneEntry, type SceneSettings, type Song, type StemName } from './api';
+import { HARMONY_STEMS, REGENERATED_STEMS, STEM_NAMES, getSong, type LyricLine, type SceneEntry, type SceneSettings, type Song, type StemName } from './api';
 import { addCleanedFile, holdSong, songFiles, stemPaths } from './cache';
 import { EFFECT_CONTROLS } from './effects';
 import { t as text } from './i18n';
@@ -9,7 +9,7 @@ import { useT } from './language';
 import { LivePanel } from './live-panel';
 import { MAX_TRANSPOSE, Mixer, defaultChannel, type Channel } from './player';
 import { ChannelStrip, IconButton, LampSwitch, MasterFader, Timeline } from './mixer-console';
-import { useStemScroll } from './stem-scroll';
+import { EDGE, useStemScroll } from './stem-scroll';
 import { focusedStem } from './stem-focus';
 import { stemPeaks } from './waveform';
 import { Button, Centered, errorText, useConfirm } from './ui';
@@ -378,7 +378,7 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
   const parts = tasks.parts, found = parts?.[name];
   const part = useMemo(() => found && name !== 'drums' ? transposePart(found, transpose) : found, [found, name, transpose]);
   // The bass part has no key of its own; it is written in the song's key, after any key change.
-  const ensembleKey = parts?.guitar?.key, songKey = ensembleKey ? transposeKey(ensembleKey, transpose) : undefined;
+  const ensembleKey = parts?.other?.key, songKey = ensembleKey ? transposeKey(ensembleKey, transpose) : undefined;
   if (!vocals && !harmonic) return null;
   const regenerating = harmonic && tasks.regenerating(name);
   const action = vocals
@@ -409,7 +409,7 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
       : <Text style={styles.taskHint}>{t('tasks.noLyrics')}</Text>)}
     {harmonic && parts && (name === 'drums' && !part && !regenerating
       ? <Text style={styles.taskHint}>{t('tasks.pressDrums')}</Text>
-      : hasMusic(part) && tasks.grid ? <HarmonyStrip part={part!} stem={ENSEMBLE_STEMS.includes(name) ? 'piano' : name} grid={tasks.grid} time={position}
+      : hasMusic(part) && tasks.grid ? <HarmonyStrip part={part!} stem={name} grid={tasks.grid} time={position}
         songKey={songKey} />
         : part ? <Text style={styles.taskHint}>{t('tasks.noChords')}</Text> : null)}
   </View>;
@@ -425,16 +425,17 @@ function displayValue(key: ControlKey, value: number, center: string) {
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
-  page: { gap: 14 }, card: { backgroundColor: t.surface, padding: 20, gap: 14, borderRadius: 12 },
-  stem: { backgroundColor: t.surface, borderRadius: 10, borderWidth: 1, borderColor: t.line, overflow: 'hidden', paddingTop: 12 },
-  stemHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, minHeight: 36 },
+  // Edge to edge under the scroll rails; the pages inset their other content by EDGE.
+  page: { gap: 14, marginHorizontal: -EDGE }, card: { backgroundColor: t.surface, padding: 20, gap: 14, borderRadius: 12 },
+  stem: { backgroundColor: t.surface, borderTopWidth: 1, borderBottomWidth: 1, borderColor: t.line, overflow: 'hidden', paddingTop: 12 },
+  stemHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: EDGE, minHeight: 36 },
   stemTitle: { fontSize: 16, fontWeight: '700', color: t.ink },
   versions: { flexDirection: 'row', borderWidth: 1, borderColor: t.accent, borderRadius: 6, overflow: 'hidden' },
   version: { paddingHorizontal: 12, minHeight: 36, justifyContent: 'center' },
   versionOn: { backgroundColor: t.accent, ...(t.accentImage && { backgroundImage: t.accentImage }) },
   versionText: { fontSize: 13, fontWeight: '700', color: t.accent },
-  stemError: { marginHorizontal: 14 },
-  consoleHeading: { marginTop: 12, paddingHorizontal: 14, paddingVertical: 8, minHeight: 52, flexDirection: 'row', alignItems: 'center',
+  stemError: { marginHorizontal: EDGE },
+  consoleHeading: { marginTop: 12, paddingHorizontal: EDGE, paddingVertical: 8, minHeight: 52, flexDirection: 'row', alignItems: 'center',
     alignContent: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, backgroundImage: t.metal, borderTopWidth: 1, borderTopColor: t.consoleLine },
   consoleTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   consoleChevron: { fontSize: 13, lineHeight: 20, color: t.consoleInk },
@@ -450,21 +451,21 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   led: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#6d7b8e', borderWidth: 1, borderColor: '#3c4a5c' },
   ledOn: { backgroundColor: '#5cf08a', shadowColor: '#5cf08a', shadowOpacity: 1, shadowRadius: 4, shadowOffset: { width: 0, height: 0 } },
   console: { backgroundImage: t.metal, borderTopWidth: 1, borderTopColor: t.consoleLine, paddingVertical: 10, gap: 8 },
-  transport: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14 },
-  switches: { flexDirection: 'row', gap: 8, paddingHorizontal: 14 },
-  keyRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14 },
+  transport: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: EDGE },
+  switches: { flexDirection: 'row', gap: 8, paddingHorizontal: EDGE },
+  keyRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: EDGE },
   keyLabel: { fontSize: 11, fontWeight: '800', letterSpacing: .5, color: t.consoleInk, minWidth: 46 },
   keyValue: { flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '800', color: t.consoleInk },
   keyFrom: { fontSize: 12, fontWeight: '600', color: t.consoleMuted },
   channels: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: t.consoleLine },
   channelRow: { flexDirection: 'row' },
-  consoleNote: { fontSize: 12, color: t.consoleMuted, paddingHorizontal: 14 },
+  consoleNote: { fontSize: 12, color: t.consoleMuted, paddingHorizontal: EDGE },
   detail: { color: t.muted, fontSize: 13, lineHeight: 20 },
   error: { backgroundColor: t.dangerSoft, color: t.errorInk, padding: 12, borderRadius: 8 },
-  taskRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 14, marginTop: 8 },
+  taskRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: EDGE, marginTop: 8 },
   taskButton: { minHeight: 36, paddingHorizontal: 12, justifyContent: 'center', borderRadius: 6, borderWidth: 1, borderColor: t.accent, backgroundColor: t.accentSoft },
   taskButtonText: { color: t.accent, fontSize: 13, fontWeight: '700' },
-  taskError: { marginHorizontal: 14, marginTop: 8 },
-  taskNote: { marginHorizontal: 14, marginTop: 10, padding: 8, borderRadius: 6, backgroundColor: t.surfaceMuted, color: t.muted, fontSize: 13 },
-  taskHint: { marginHorizontal: 14, marginTop: 8, color: t.muted, fontSize: 13 },
+  taskError: { marginHorizontal: EDGE, marginTop: 8 },
+  taskNote: { marginHorizontal: EDGE, marginTop: 10, padding: 8, borderRadius: 6, backgroundColor: t.surfaceMuted, color: t.muted, fontSize: 13 },
+  taskHint: { marginHorizontal: EDGE, marginTop: 8, color: t.muted, fontSize: 13 },
 });

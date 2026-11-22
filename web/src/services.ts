@@ -301,7 +301,8 @@ export class ScenesService {
   }
 }
 
-export const STEM_NAMES = ['vocals', 'guitar', 'bass', 'piano', 'drums', 'other'] as const;
+// Four stems (Demucs htdemucs); guitars, keys and the rest are in other. Six before 2026-11-21.
+export const STEM_NAMES = ['vocals', 'bass', 'drums', 'other'] as const;
 export type StemName = typeof STEM_NAMES[number];
 export interface StemFile { playUrl: string; downloadUrl: string }
 export interface Restoration extends Partial<StemFile> {
@@ -330,15 +331,15 @@ export interface HarmonyPart {
   chords: { start: number; name: string }[];
   notes: HarmonyNote[];
   hits?: DrumHit[];
-  // Set on the ensemble part: guitar, piano and other heard together, which those three stems share.
+  // Set on the ensemble part: the other stem (guitars, keys and the rest) heard as one.
   key?: string;
   // The ensemble's line under the melody (a counter-melody or the top of the accompaniment).
   second?: HarmonyNote[];
 }
 export interface HarmonyNote { start: number; end: number; pitch: number; unit: number; length: number }
 export interface HarmonyGrid { beats: number[]; firstBar: number }
-export const HARMONY_STEMS: readonly string[] = ['guitar', 'piano', 'other', 'bass', 'drums'];
-export const ENSEMBLE_STEMS: readonly string[] = ['guitar', 'piano', 'other'];
+export const HARMONY_STEMS: readonly string[] = ['other', 'bass', 'drums'];
+export const ENSEMBLE_STEMS: readonly string[] = ['other'];
 // The ensemble is found with the whole song; only bass and drums can be redone on their own.
 export const REGENERATED_STEMS: readonly string[] = ['bass', 'drums'];
 export interface StemUploadRequest {

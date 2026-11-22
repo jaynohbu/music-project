@@ -5,7 +5,8 @@ import sys
 import wave
 from pathlib import Path
 
-STEMS = ("drums", "bass", "vocals", "guitar", "piano", "other")
+MODEL = "htdemucs"
+STEMS = ("drums", "bass", "vocals", "other")
 MAX_SECONDS = 900
 
 
@@ -26,10 +27,10 @@ def separate(source: Path, output: Path, device: str, ffmpeg: str) -> dict[str, 
     if not 0 < duration <= MAX_SECONDS:
         raise ValueError(f"Audio must be between 0 and {MAX_SECONDS} seconds.")
     run([
-        sys.executable, "-m", "demucs", "-n", "htdemucs_6s", "-d", device,
+        sys.executable, "-m", "demucs", "-n", MODEL, "-d", device,
         "--shifts", "1", "--jobs", "1", "-o", str(output / "separated"), str(normalized),
     ])
-    stem_directory = output / "separated" / "htdemucs_6s" / "normalized"
+    stem_directory = output / "separated" / MODEL / "normalized"
     files: dict[str, str] = {}
     frames: int | None = None
     for name in STEMS:

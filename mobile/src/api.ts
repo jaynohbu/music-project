@@ -4,7 +4,8 @@ import type { Effects } from './effects';
 import { t } from './i18n';
 
 // The mixer shows stems in the website's order (web/src/services.ts).
-export const STEM_NAMES = ['vocals', 'guitar', 'bass', 'piano', 'drums', 'other'] as const;
+// Four stems (Demucs htdemucs); guitars, keys and the rest are in other. Six before 2026-11-21.
+export const STEM_NAMES = ['vocals', 'bass', 'drums', 'other'] as const;
 export type StemName = typeof STEM_NAMES[number];
 
 export type SongStatus = 'uploading' | 'queued' | 'processing' | 'completed' | 'failed' | 'deleting';
@@ -20,6 +21,8 @@ export interface Song {
   error?: string;
   // 'aac-256k' when the AAC copies exist, otherwise 'wav'. A change means the files were replaced.
   playVersion?: string;
+  // When the split finished; a song split again gets a new time.
+  completedAt?: string;
   // Signed for one hour.
   stems?: Partial<Record<StemName, { playUrl: string; downloadUrl: string }>>;
   restorations?: { id: string; stem: StemName; status: SongStatus; playUrl?: string; playVersion?: string; error?: string }[];
@@ -38,12 +41,12 @@ export interface LyricLine { start: number; end: number; words: LyricWord[] }
 export interface HarmonyNote { start: number; end: number; pitch: number; unit: number; length: number }
 export type DrumName = 'kick' | 'snare' | 'tom' | 'hihat' | 'cymbal';
 export interface DrumHit { unit: number; drum: DrumName }
-// `key` is set on the ensemble part: guitar, piano and other heard together, which those three stems share.
+// `key` is set on the ensemble part: the other stem (guitars, keys and the rest) heard as one.
 // `second` is the ensemble's line under the melody (a counter-melody or the top of the accompaniment).
 export interface HarmonyPart { chords: { start: number; name: string }[]; notes: HarmonyNote[]; hits?: DrumHit[]; key?: string; second?: HarmonyNote[] }
 export interface HarmonyGrid { beats: number[]; firstBar: number }
-export const HARMONY_STEMS: readonly string[] = ['guitar', 'piano', 'other', 'bass', 'drums'];
-export const ENSEMBLE_STEMS: readonly string[] = ['guitar', 'piano', 'other'];
+export const HARMONY_STEMS: readonly string[] = ['other', 'bass', 'drums'];
+export const ENSEMBLE_STEMS: readonly string[] = ['other'];
 // The ensemble is found with the whole song; only bass and drums can be redone on their own.
 export const REGENERATED_STEMS: readonly string[] = ['bass', 'drums'];
 

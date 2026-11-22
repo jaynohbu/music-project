@@ -3,7 +3,7 @@ import { useEffect, useReducer, useRef, useState, type ComponentRef } from 'reac
 import { AppState, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { randomUUID } from 'expo-crypto';
 import { getScene, listReadySongs, updateScene, type SceneEntry, type Song } from '../../api';
-import { StemScrollView } from '../../stem-scroll';
+import { EDGE, StemScrollView } from '../../stem-scroll';
 import { MixerView } from '../../mixer-view';
 import { IconButton, InlineEdit } from '../../mixer-console';
 import type { Mixer } from '../../player';
@@ -194,7 +194,7 @@ function SceneEditor({ id }: { id: string }) {
   </StemScrollView>;
 }
 const makeStyles = (t: Theme) => StyleSheet.create({
-  page: { paddingVertical: 16, paddingHorizontal: 2, gap: 14 },
+  page: { paddingVertical: 16, paddingHorizontal: EDGE, gap: 14 },
   heading: { color: t.ink, fontSize: 26, fontWeight: '700' },
   label: { color: t.ink, fontSize: 15, fontWeight: '600' },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },

@@ -75,16 +75,16 @@ test('a low clear pitch with no song to compare is a bass', () => {
 
 test('the stem whose spectrum matches the input names the instrument', () => {
   const played = tone(523.25, 4, .7);
-  const stems = { piano: levelsOf(tone(523.25, .1, .7)), guitar: levelsOf(tone(196, .1, .25)), bass: levelsOf(tone(65.4, .1, .3)),
-    vocals: levelsOf(tone(330, .1, .15)) };
+  const stems = { other: levelsOf(tone(523.25, .1, .7)), bass: levelsOf(tone(65.4, .1, .3)), vocals: levelsOf(tone(330, .1, .15)) };
   const detector = new detect.InstrumentDetector(RATE, () => stems);
   feed(detector, played);
-  assert.equal(detector.detection.instrument, 'piano');
+  // Other holds the guitars and keys, so a match with it names a guitar.
+  assert.equal(detector.detection.instrument, 'guitar');
 });
 
 test('silent stems are left out of the comparison', () => {
   const quiet = new Float64Array(detect.BAND_COUNT).fill(-120);
-  const stems = { guitar: levelsOf(tone(196, .1, .5)), piano: quiet };
+  const stems = { other: levelsOf(tone(196, .1, .5)), vocals: quiet };
   const detector = new detect.InstrumentDetector(RATE, () => stems);
   feed(detector, tone(196, 4, .5));
   assert.equal(detector.detection.instrument, 'guitar');

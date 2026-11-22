@@ -563,7 +563,7 @@ test('a song being deleted blocks new scene entries, cleanups, analyses and meta
   assert.equal(database.get(A, SONG).title, 'Song');
   assert.deepEqual([...database.items.values()].filter(item => item.parentJobId), [], 'no child record remains');
   assert.equal(started.length, 0, 'no work was started');
-  assert.equal(storage.objects.size, 7, 'no objects were added');
+  assert.equal(storage.objects.size, 5, 'no objects were added');
 });
 
 test('a child created just before the deletion flag is either seen by deletion or removes itself', async () => {

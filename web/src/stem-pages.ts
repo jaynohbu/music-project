@@ -29,7 +29,7 @@ const autoRequested = new Set<string>();
       <span class="eyebrow">SIX-STEM SEPARATION</span>
       <h1>Upload audio to split</h1>
       <button type="button" class="secondary" (click)="back()">Back to Music</button>
-      <p>Separate an audio file into drums, bass, vocals, guitar, piano and other.</p>
+      <p>Separate an audio file into drums, bass, vocals and other (guitars, keys and the rest).</p>
       <form (ngSubmit)="submit()">
         <label for="audio-file">Audio file</label>
         <input id="audio-file" name="audio-file" type="file" accept="audio/*"
@@ -427,7 +427,7 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                       <button type="button" class="secondary" disabled>Finding notes...</button>
                     } @else {
                       <button type="button" class="secondary" (click)="findChords()" [disabled]="!canPlay()"
-                        aria-label="Find chords and melody for guitar, piano, other and bass, and the drum score">{{ track.name === 'drums' ? 'Drum score' : 'Chords & melody' }}</button>
+                        aria-label="Find chords and melody for other and bass, and the drum score">{{ track.name === 'drums' ? 'Drum score' : 'Chords & melody' }}</button>
                     }
                   }
                   @if (isRegenerable(track.name) && harmonyParts()) {
@@ -475,10 +475,10 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                   <p class="hint">Press Regenerate drum score to write this song's drums.</p>
                 } @else if (hasMusic(parts[track.name])) {
                   @if (parts[track.name].key; as key) {
-                    <p class="hint">Key {{ key }} · Guitar, piano and other instruments share this score.</p>
+                    <p class="hint">Key {{ key }} · Guitars, keys and the other instruments, heard together.</p>
                   }
-                  <!-- The ensemble is written at concert pitch on a treble staff, the same on all three tracks. -->
-                  <app-harmony-strip [part]="parts[track.name]" [stem]="isEnsemble(track.name) ? 'piano' : track.name" [grid]="harmonyGrid()!" [time]="position()"></app-harmony-strip>
+                  <!-- The ensemble (other) is written at concert pitch on a treble staff. -->
+                  <app-harmony-strip [part]="parts[track.name]" [stem]="track.name" [grid]="harmonyGrid()!" [time]="position()"></app-harmony-strip>
                 } @else if (parts[track.name]) {
                   <p class="hint">No clear chords or notes were found in this stem.</p>
                 }
@@ -524,7 +524,8 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                 (lostpointercapture)="finishDrag()">
                 @for (peak of track.useCleaned ? track.cleanedPeaks : track.peaks; track $index) {
                   <rect [attr.x]="$index * 6 + 1" [attr.y]="32 - peak * 29"
-                    width="4" [attr.height]="Math.max(2, peak * 58)" rx="1"></rect>
+                    width="4" [attr.height]="Math.max(2, peak * 58)" rx="1"
+                    [class.played]="($index + .5) / $count * duration() <= position()"></rect>
                 }
                   <rect class="section-highlight" [attr.x]="waveformX(sectionStart())" y="0"
                     [attr.width]="waveformX(sectionEndTime() - sectionStart())" height="64"></rect>
@@ -1049,7 +1050,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
       const { stems, ensemble, beats, firstBar } = await response.json() as HarmonyGrid & { stems: Record<string, HarmonyPart>; ensemble?: HarmonyPart };
       if (!this.destroyed && generation === this.generation) {
         this.harmonyGrid.set({ beats, firstBar });
-        // Guitar, piano and other show one shared score, so the song reads as one flow.
+        // The ensemble part is other's score.
         this.harmonyParts.set(ensemble ? { ...stems, ...Object.fromEntries(ENSEMBLE_STEMS.map(name => [name, ensemble])) } : stems);
         void this.loadParts(generation);
       }
@@ -1066,7 +1067,6 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     return name === 'drums' ? 'Regenerate drum score' : 'Regenerate chords & melody';
   }
 
-  isEnsemble(name: string): boolean { return ENSEMBLE_STEMS.includes(name); }
   isRegenerable(name: string): boolean { return REGENERATED_STEMS.includes(name); }
 
   regenerating(name: string): boolean {

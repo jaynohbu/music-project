@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const ts = require('typescript');
-const names = ['vocals', 'guitar', 'bass', 'piano', 'drums', 'other'];
+const names = ['vocals', 'bass', 'drums', 'other'];
 
 function fixture() {
   const contexts = [], shows = [], notifications = new Map(), events = new Map();
@@ -219,12 +219,12 @@ test('Play schedules every original/cleaned source together; routing switches an
   const mixer = await Mixer.create(f.paths, 'Song', '', { vocals: '/audio/cleaned.m4a' });
   await mixer.play();
   const context = f.contexts[0];
-  assert.equal(context.files.length, 7);
+  assert.equal(context.files.length, 5);
   assert.ok(context.files.every(source => source.starts[0] === .2));
   assert.equal(mixer.isPlaying, true);
   mixer.setChannel('vocals', { useCleaned: true, volume: .5, preGain: 150, solo: true });
   assert.equal(mixer.channel('vocals').useCleaned, true);
-  assert.equal(mixer.hasCleaned('guitar'), false);
+  assert.equal(mixer.hasCleaned('other'), false);
   assert.equal(mixer.stems.vocals.originalGain.gain.value, 0);
   assert.equal(mixer.stems.vocals.cleanedGain.gain.value, 1);
   assert.equal(mixer.stems.vocals.gain.gain.value, .5);
@@ -354,7 +354,7 @@ test('the stem a live take replaces is silent without changing its channel', asy
   assert.equal(mixer.stems.bass.gain.gain.value, 0);
   assert.equal(mixer.channels.bass.muted, false);
   assert.equal(mixer.channels.bass.volume, .7);
-  assert.equal(mixer.stems.guitar.gain.gain.value, .8);
+  assert.equal(mixer.stems.other.gain.gain.value, .8);
   mixer.setReplacedStem(null);
   assert.equal(mixer.stems.bass.gain.gain.value, .7);
   await mixer.close();
@@ -432,7 +432,7 @@ test('cache deduplicates simultaneous downloads and reference-counts open songs'
   const f = cacheFixture(), progress = [];
   const firstHold = f.cache.holdSong('song'), secondHold = f.cache.holdSong('song');
   await Promise.all([f.cache.songFiles(f.song, () => {}), f.cache.songFiles(f.song, value => progress.push(value))]);
-  assert.equal(f.tasks.length, 6); assert.ok(progress.includes(1));
+  assert.equal(f.tasks.length, 4); assert.ok(progress.includes(1));
   firstHold(); f.cache.forgetSong('song'); assert.equal(f.cache.cacheSize().songs, 1);
   secondHold(); f.cache.forgetSong('song'); assert.equal(f.cache.cacheSize().songs, 0);
 });
@@ -440,9 +440,9 @@ test('cache deduplicates simultaneous downloads and reference-counts open songs'
 test('missing cached files are downloaded again rather than handed to the audio engine', async () => {
   const f = cacheFixture(), release = f.cache.holdSong('song');
   await f.cache.songFiles(f.song, () => {});
-  f.disk.delete('/docs/songs/song/guitar.m4a');
+  f.disk.delete('/docs/songs/song/other.m4a');
   await f.cache.songFiles(f.song, () => {});
-  assert.equal(f.tasks.length, 12); assert.ok(f.disk.has('/docs/songs/song/guitar.m4a'));
+  assert.equal(f.tasks.length, 8); assert.ok(f.disk.has('/docs/songs/song/other.m4a'));
   release();
 });
 

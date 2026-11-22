@@ -27,7 +27,7 @@ test('splitValues never crosses a bar line', () => {
 });
 
 test('notePieces places middle C under the treble staff with a ledger line', () => {
-  const [piece] = score.notePieces('piano', { start: 0, end: 1, pitch: 60, unit: 0, length: 4 }, 0);
+  const [piece] = score.notePieces('other', { start: 0, end: 1, pitch: 60, unit: 0, length: 4 }, 0);
   assert.equal(piece.y, 96);
   assert.deepEqual(piece.ledgers, [96]);
   assert.equal(piece.hollow, false);
@@ -36,8 +36,8 @@ test('notePieces places middle C under the treble staff with a ledger line', () 
   assert.equal(piece.accidental, '');
 });
 
-test('notePieces ties a note across the bar and writes guitar an octave up', () => {
-  const pieces = score.notePieces('guitar', { start: 0, end: 1, pitch: 49, unit: 12, length: 8 }, 0);
+test('notePieces ties a note across the bar', () => {
+  const pieces = score.notePieces('other', { start: 0, end: 1, pitch: 61, unit: 12, length: 8 }, 0);
   assert.deepEqual(pieces.map(piece => piece.x), [12 * 16, 16 * 16]);
   assert.ok(pieces[0].tie && !pieces[1].tie);
   assert.equal(pieces[0].accidental, '♯');
@@ -135,7 +135,7 @@ test('key signatures count their sharps or flats and sit where they are written 
 });
 
 test('notes are spelled for the key: signature notes plain, naturals marked, black keys in the key\'s sharps or flats', () => {
-  const sign = (pitch, key) => score.notePieces('piano', { start: 0, end: 1, pitch, unit: 0, length: 4 }, 0, undefined, score.keySignature(key))[0];
+  const sign = (pitch, key) => score.notePieces('other', { start: 0, end: 1, pitch, unit: 0, length: 4 }, 0, undefined, score.keySignature(key))[0];
   assert.equal(sign(66, 'G').accidental, '', 'F♯ is in G major');
   assert.equal(sign(65, 'G').accidental, '♮', 'F natural in G major');
   assert.equal(sign(70, 'F').accidental, '', 'B♭ is in F major');

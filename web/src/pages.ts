@@ -98,7 +98,7 @@ export class LoginPage {
             </div>
             <p class="hint">{{ job.createdAt | date:'medium' }}</p>
             @if (job.author) { <p class="hint">By {{ job.author }}</p> }
-            <p class="hint">Six-stem audio separation</p>
+            <p class="hint">Four-stem audio separation</p>
             @if (job.status === 'completed') {
               <a class="download" [routerLink]="['/mixer', job.jobId]">Open stem mixer</a>
               <a class="download" routerLink="/scenes" [queryParams]="{song: job.jobId}">Add to scene</a>

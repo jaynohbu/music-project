@@ -136,7 +136,7 @@ test('separation uses two-hour window, uploads fifteen minutes, failures ten min
   assert.equal(jobExpiry(queued), Math.ceil((time + 130 * 60000) / 1000));
 });
 
-test('completed stem jobs return all six signed play/download pairs', async () => {
+test('completed stem jobs return all four signed play/download pairs', async () => {
   const value = { ...job(), status: 'completed',
     stems: Object.fromEntries(STEM_NAMES.map(name => [name, { key: `${name}.wav` }])) };
   let signed = 0;
@@ -145,8 +145,8 @@ test('completed stem jobs return all six signed play/download pairs', async () =
     signer: async () => `https://signed/${++signed}`,
   });
   const result = JSON.parse((await handler(event(`jobs/${id}`, 'GET'))).body);
-  assert.equal(Object.keys(result.job.stems).length, 6);
-  assert.equal(signed, 12);
+  assert.equal(Object.keys(result.job.stems).length, 4);
+  assert.equal(signed, 8);
   assert.ok(result.job.stems.vocals.downloadUrl);
   assert.equal(result.job.playVersion, 'wav');
 });
@@ -223,10 +223,10 @@ const completionFields = update => Object.fromEntries(Object.entries(update.Expr
   .filter(([alias]) => alias.startsWith('#f'))
   .map(([alias, name]) => [name, update.ExpressionAttributeValues[`:v${alias.slice(2)}`]]));
 
-test('worker saves six WAVs and their AAC copies before completing and aliases reserved removals', async () => {
+test('worker saves four WAVs and their AAC copies before completing and aliases reserved removals', async () => {
   const { updates, stored } = await workerFixture();
-  assert.equal(stored.length, 12);
-  const wavs = stored.slice(0, 6), copies = stored.slice(6);
+  assert.equal(stored.length, 8);
+  const wavs = stored.slice(0, 4), copies = stored.slice(4);
   assert.ok(wavs.every(item => item.ContentType === 'audio/wav' && item.Key.endsWith('.wav')));
   assert.deepEqual(copies.map(item => item.Key), wavs.map(item => item.Key.replace(/\.wav$/, '.m4a')));
   assert.ok(copies.every(item => item.ContentType === 'audio/mp4'));
@@ -236,7 +236,7 @@ test('worker saves six WAVs and their AAC copies before completing and aliases r
   assert.ok(completion.UpdateExpression.includes('REMOVE #r'));
   const fields = completionFields(completion);
   assert.equal(fields.playVersion, 'aac-256k');
-  assert.equal(Object.keys(fields.stems).length, 6);
+  assert.equal(Object.keys(fields.stems).length, 4);
   assert.deepEqual(fields.stems.vocals, {
     key: `users/owner/stems/${id}/vocals.wav`, bytes: 444, playKey: `users/owner/stems/${id}/vocals.m4a`, playBytes: 3,
   });
@@ -245,11 +245,11 @@ test('worker saves six WAVs and their AAC copies before completing and aliases r
 test('a failed AAC copy still completes the song with WAV playback', async () => {
   const { updates, stored } = await workerFixture(undefined, 1, {
     encode: async (input, output) => {
-      if (input.endsWith('piano.wav')) throw new Error('encoder crashed');
+      if (input.endsWith('other.wav')) throw new Error('encoder crashed');
       await writeFile(output, 'aac');
     },
   });
-  assert.equal(stored.length, 6, 'no copy is uploaded when one stem fails to encode');
+  assert.equal(stored.length, 4, 'no copy is uploaded when one stem fails to encode');
   const fields = completionFields(updates.at(-1));
   assert.equal(fields.status, 'completed');
   assert.equal('playVersion' in fields, false);
@@ -257,10 +257,10 @@ test('a failed AAC copy still completes the song with WAV playback', async () =>
 });
 
 test('a failed AAC upload removes the copies already uploaded and keeps the WAVs', async () => {
-  const { updates, stored } = await workerFixture(undefined, 1, { failPut: key => key.endsWith('piano.m4a') });
+  const { updates, stored } = await workerFixture(undefined, 1, { failPut: key => key.endsWith('other.m4a') });
   const puts = stored.filter(item => item.kind === 'PutObjectCommand');
   const deletes = stored.filter(item => item.kind === 'DeleteObjectCommand').map(item => item.Key);
-  assert.equal(puts.filter(item => item.Key.endsWith('.wav')).length, 6);
+  assert.equal(puts.filter(item => item.Key.endsWith('.wav')).length, 4);
   assert.deepEqual(deletes, puts.filter(item => item.Key.endsWith('.m4a')).map(item => item.Key));
   const fields = completionFields(updates.at(-1));
   assert.equal(fields.status, 'completed');
@@ -283,7 +283,7 @@ test('the real encoder writes a fast-start AAC file', { skip: !hasFfmpeg }, asyn
 
 test('worker accepts exactly fifteen minutes and rejects any longer output before uploading', async () => {
   const accepted = await workerFixture(undefined, 900);
-  assert.equal(accepted.stored.length, 12);
+  assert.equal(accepted.stored.length, 8);
   assert.equal(accepted.updates.at(-1).ExpressionAttributeValues[':v0'], 'completed');
   const rejected = await workerFixture(undefined, 900 + 1 / 44100);
   assert.equal(rejected.stored.length, 0);
@@ -291,7 +291,7 @@ test('worker accepts exactly fifteen minutes and rejects any longer output befor
 });
 
 test('missing one stem fails the whole job with no partial uploads', async () => {
-  const { updates, stored } = await workerFixture('piano');
+  const { updates, stored } = await workerFixture('other');
   assert.equal(stored.length, 0);
   const failure = updates.at(-1);
   assert.equal(failure.ExpressionAttributeValues[':v0'], 'failed');

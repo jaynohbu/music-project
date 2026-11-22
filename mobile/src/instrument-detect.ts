@@ -19,9 +19,8 @@ const DECIDE_FRAMES = 120;
 // A stem must match this much better than the next one to be trusted.
 const STEM_MARGIN = 0.04;
 const SILENT_STEM_DB = -75;
-const STEM_INSTRUMENT: Record<StemName, InstrumentId> = {
-  vocals: 'vocals', guitar: 'guitar', bass: 'bass', piano: 'piano', drums: 'drums', other: 'other',
-};
+// Other holds the guitars and keys; a player matching it is most likely a guitarist.
+const STEM_INSTRUMENT: Record<StemName, InstrumentId> = { vocals: 'vocals', bass: 'bass', drums: 'drums', other: 'guitar' };
 
 // Average power per band, in dB, from linear magnitudes or from dB values (an AnalyserNode's output).
 export function bandLevels(spectrum: ArrayLike<number>, binHz: number, decibels: boolean): Float64Array {

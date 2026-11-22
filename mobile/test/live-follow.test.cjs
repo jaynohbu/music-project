@@ -108,9 +108,9 @@ test('noise alone gives no notes for any instrument', () => {
 });
 
 test('every instrument stands in for a band stem or none', () => {
-  const stems = ['vocals', 'guitar', 'bass', 'piano', 'drums', 'other'];
+  const stems = ['vocals', 'bass', 'drums', 'other'];
   for (const item of live.INSTRUMENTS) assert.ok(item.stem === null || stems.includes(item.stem), item.id);
-  assert.equal(live.instrument('keyboard').stem, 'piano');
+  assert.equal(live.instrument('keyboard').stem, 'other');
   assert.equal(live.instrument(undefined).id, 'guitar');
 });
 

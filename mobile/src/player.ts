@@ -1,4 +1,4 @@
-// The mixer's audio engine: six stems read from disk and decoded as they play, all
+// The mixer's audio engine: the stems read from disk and decoded as they play, all
 // driven by one audio context so they stay sample-aligned (design doc, Audio engine).
 import {
   AnalyserNode, AudioContext, AudioManager, MediaElementAudioSourceNode, PlaybackNotificationManager,

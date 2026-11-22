@@ -14,7 +14,7 @@ Replace the WebView wrapper with a native Expo app that plays stems from its own
 |---|---|---|
 | App | Installed from EAS `staging` builds on the user's iPhone; signed-in use daily. Latest build `1109096e` (commit `24135be`) | `mobile/src/` |
 | Sign-in | Email + device ID, as designed. Codes now go through SES, which is in sandbox (see Constraints) | `mobile/src/auth.ts`, `backend/accounts.mjs` |
-| Audio engine | Six stems streamed from disk, full effects, key change through a library patch | `mobile/src/player.ts`, `mobile/patches/` |
+| Audio engine | Four stems streamed from disk, full effects, key change through a library patch | `mobile/src/player.ts`, `mobile/patches/` |
 | Score analysis | Version 5: ensemble score (key, extended chords, melody, second line), bass and drum parts, hi-hat filling. Found automatically when a song is first opened | `backend/analyze_harmony.py`, `backend/note_lines.py` |
 | Live input | A mixer channel like a stem; instrument detected automatically; take saved per song | `mobile/src/live-*.ts`, `mobile/src/instrument-detect.ts`, [live-follow.md](./live-follow.md) |
 | Scenes | Mix, live mix and key change saved per scene entry; nothing saved from Music | `backend/scene-api.mjs`, `mobile/src/mixer-settings.ts` |
@@ -36,7 +36,7 @@ App (Expo)
  └ Local cache: most recent 20 songs or 2 GB, whichever comes first
 Server (existing AWS stack)
  ├ API: accounts, song list, scenes, usage limits, lyrics and score analysis
- ├ Split worker: on-demand Fargate task (htdemucs_6s), also produces AAC
+ ├ Split worker: on-demand Fargate task (htdemucs, four stems; htdemucs_6s before 2026-11-21), also produces AAC
  ├ Analysis worker: same image; lyrics, ensemble score, bass and drum parts
  └ S3: WAV (original, downloads) + AAC (playback, cache) + analysis JSON
 ```
@@ -74,7 +74,7 @@ Server (existing AWS stack)
 - **Timing:** ffmpeg writes an edit list for the AAC start delay. Decoding with ffmpeg, a click lands on the same sample as in the WAV, so the app (whose engine decodes with FFmpeg) stays aligned with lyrics, chords and WAV cleaned stems. Browser decoders were not checked; check the website's mixer against lyrics after the deploy.
 - **Deletion must remove AAC files.** `restoration-api.mjs:142` deletes by exact key and needs changing. Check `createSongDeletion` in `scene-api.mjs` too.
 
-| 6 stems | WAV | AAC 256 kbps |
+| 4 stems | WAV | AAC 256 kbps |
 |---|---|---|
 | 4 minutes | 254 MB | 46 MB |
 | 15 minutes (maximum) | 953 MB | 173 MB |
@@ -132,6 +132,13 @@ Enforce on the server only.
 - **Lyrics and chords:** one run per song, as before; a failed run can be retried. Regenerating one stem's chords: once per stem and source (original or cleaned stem).
 - **One new account per device:** `AccountDevices` has a `ByDevice` index. A device request that would create a new account for a device already linked to another email deletes the account it just made and returns 409 `DEVICE_HAS_ACCOUNT`. The user pool hides whether an email exists, so the check runs after the create. Signing in to other existing accounts from that device still works.
 
+### Four stems (2026-11-21)
+
+- Splits use Demucs `htdemucs`: vocals, drums, bass and other. Guitars, keys and every other pitched part are in other. `htdemucs_ft` (cleaner, about 4× the CPU time) and a GPU worker were considered; the user chose plain `htdemucs` on the current Fargate CPU worker.
+- The score's ensemble is now other alone (below, read "other" for "guitar, piano and other"); bass and drums are unchanged.
+- Existing songs were split again in place (same job IDs, titles and scene entries) by `backend/resplit-songs.mjs`, from the original where one was kept (Stairway in `music-files`, Our God from the old library WAV and from a saved upload) and otherwise from the six stems summed back together. Their cleaned versions and scores were removed (scores come back when the song is opened); lyrics stayed. Scene entries lost their guitar and piano faders. A backup of each song's record and stems is under `backup/resplit-2026-11-21/` in the audio bucket.
+- The app cache keys a song by `playVersion@completedAt`, so a song split again is downloaded again. Live input: guitar, keyboard and piano stand in for other.
+
 ### Score analysis (2026-11-20, harmony version 5)
 
 The user found the per-stem scores of guitar, piano and other torn apart and hard to follow, so they are analysed as one ensemble. Decided with the user:
@@ -165,7 +172,9 @@ The user found the per-stem scores of guitar, piano and other torn apart and har
 
 ### Rejected experiments (2026-11-06)
 
-- **4 stems instead of 6:** started, then reversed by the user. The work is kept in `git stash` ("4-stem switch + song chords under lyrics").
+- **Three-part split by synthesis (2026-11-21):** fitted rhythm guitar (strums over half-bar chord shapes), solo guitar (one pitch at a time) and keys (held chord shapes) to the band without vocals, bass and drums, by matching their sum to the magnitude spectrogram. On the Stairway solo it ended at lead 56%, rhythm 35%, keys 9%. The user listened and rejected it; the script, outputs and listening page were deleted.
+- **MusicGen Melody bar-by-bar stem generation (2026-11-21):** measured on Fargate (4 vCPU, 16 GB) with the 4-stem Other of Stairway as the melody condition. About 91 s per bar for 3 candidates, batching gave almost nothing (CPU-bound), adding the bars before and after cost 3x time and hit 16.9 GB with no better scores, onset similarity was low. The user listened and rejected it; everything from the test was deleted. The model weights are also non-commercial (CC-BY-NC).
+- **4 stems instead of 6 (2026-11-06):** started, then reversed by the user; adopted later, on 2026-11-21 (see Four stems). The first attempt is still in `git stash`.
 - **Harmonic-guided cross-stem refinement** (moving bass harmonics between stems, giving Other back to guitar/piano/bass) and **residual redistribution**: measured on remixed server stems, bass got 2–5 dB worse and guitar 1–2 dB worse; residual sharing helped piano but hurt guitar and bass. Not shipped.
 - **Residual stem:** the Stairway residual (mix minus six stems) is −20.3 dB and tonal. It was not built after the experiments stopped. Separately, Demucs' default clip rescale lowered the drums about 1 dB in that song.
 
@@ -405,7 +414,7 @@ Playing along with an instrument while the stems follow the player's tempo, and 
 The app now has the website's lyrics and score in each stem card, between the header and the timeline:
 
 - **Vocals:** "Lyrics" starts finding lyrics. Once found, a word strip glides so the sung word reaches the middle, and its neighbours are lit more faintly. "Edit lyrics" pauses playback and opens a full-screen editor with timed rows, add-line buttons and an in-modal discard confirmation. Saving moves the cursor one second before the first change.
-- **Guitar, piano, other, bass:** "Chords & melody" runs the whole score. The result is a staff with chords, notes, rests, ties and a clef. "Regenerate" redoes one stem from the version being heard (original or cleaned).
+- **Other, bass:** "Chords & melody" runs the whole score. The result is a staff with chords, notes, rests, ties and a clef. "Regenerate" redoes one stem from the version being heard (original or cleaned).
 - **Drums:** a drum staff with crossed cymbals, beamed hands, the kick as a separate voice and pattern letters.
 - The API calls, 4-second polling, wording and empty and failed messages are the same as the website's.
 

@@ -138,7 +138,7 @@ export function createStemWorker({
       const messages = {
         download: 'Unable to read the uploaded audio. Upload again.',
         separate: `Audio separation failed. Use decodable audio up to ${STEM_MAX_DURATION} seconds; check the worker and Demucs installation.`,
-        validate: 'Separation did not produce six valid aligned WAV stems.',
+        validate: 'Separation did not produce four valid aligned WAV stems.',
         upload: 'Unable to save the separated stems. Please try again.',
         record: 'Unable to record the separation result. Check database permissions and connectivity.',
       };

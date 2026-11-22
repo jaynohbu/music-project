@@ -11,6 +11,7 @@ import {
 } from './score';
 import { Button, ButtonRow, formatTime } from './ui';
 import { useT } from './language';
+import { EDGE as PAGE_EDGE } from './stem-scroll';
 import { type Theme, useStyles, useTheme } from './theme';
 
 // Matches the mixer's 100ms position timer, so the strips glide between updates.
@@ -341,14 +342,14 @@ export function LyricsEditor({ lines, duration, onSave, onClose }: {
 
 const makeStyles = (t: Theme) => StyleSheet.create({
   fade: { position: 'absolute', top: 0, bottom: 0, width: '12%' },
-  lyrics: { overflow: 'hidden', height: 36, marginTop: 10, marginHorizontal: 14, borderRadius: 6, backgroundColor: t.strip },
+  lyrics: { overflow: 'hidden', height: 36, marginTop: 10, marginHorizontal: PAGE_EDGE, borderRadius: 6, backgroundColor: t.strip },
   // Wide enough for any song, so the words are never wrapped to the strip's width.
   lyricsFlow: { position: 'absolute', left: 0, top: 6, width: 200000, flexDirection: 'row' },
   lyricsLine: { flexDirection: 'row', gap: 7, marginRight: 34 },
   word: { color: t.wordDim, fontSize: 16, lineHeight: 24 },
   wordNear: { color: t.wordNear },
   wordActive: { color: t.wordActive, fontWeight: '700' },
-  harmony: { marginTop: 10, marginHorizontal: 14, borderRadius: 6, backgroundColor: t.strip, overflow: 'hidden' },
+  harmony: { marginTop: 10, marginHorizontal: PAGE_EDGE, borderRadius: 6, backgroundColor: t.strip, overflow: 'hidden' },
   staffLine: { position: 'absolute', left: 0, right: 0, height: 1, marginTop: -0.5, backgroundColor: t.staff },
   window: { position: 'absolute', top: 0, bottom: 0, right: 0, overflow: 'hidden' },
   flow: { position: 'absolute', top: 0, width: 1 },

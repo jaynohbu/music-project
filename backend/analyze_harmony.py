@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Finds the song's chords and melody from its harmonic stems together, and the bass and drum parts, as JSON.
+"""Finds the song's chords and melody from its harmonic stems, and the bass and drum parts, as JSON.
 
-Guitar, piano and other are heard as one ensemble: one chord progression (bass supplies the roots), a
-melody line (the highest clear voice) and a second line under it. Output is approximate."""
+The harmonic stems (other, which holds guitars, keys and the rest) are heard as one ensemble: one chord
+progression (bass supplies the roots), a melody line (the highest clear voice) and a second line under it.
+Output is approximate."""
 import argparse
 import json
 import os
@@ -61,6 +62,26 @@ MAJOR_PROFILE = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 
 MINOR_PROFILE = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
 MAJOR_FAMILY = ((0, ''), (2, 'm'), (4, 'm'), (5, ''), (7, ''), (9, 'm'))
 MINOR_FAMILY = ((0, 'm'), (3, ''), (5, 'm'), (7, 'm'), (7, ''), (8, ''), (10, ''))
+# Progression rules for the ensemble's chords (harmony version 6). Chords whose notes all sit in the key's scale
+# come first; common borrowed chords and secondary dominants cost a little, anything else more, so a chord
+# outside the key needs clearly stronger evidence than one inside it.
+MAJOR_SCALE = (0, 2, 4, 5, 7, 9, 11)
+MINOR_SCALE = (0, 2, 3, 5, 7, 8, 10, 11)  # Natural minor with the raised seventh, so V and V7 are in the key.
+BORROWED = {False: {(10, ''), (10, '7'), (5, 'm'), (8, ''), (3, ''), (2, ''), (2, '7'), (4, ''), (4, '7'), (9, ''), (9, '7'), (0, '7')},
+            True: {(5, ''), (0, ''), (2, ''), (2, '7'), (1, ''), (10, '7')}}
+OUTSIDE_COST = {'borrowed': 0.05, 'other': 0.15}
+# Log bonuses for a chord change by how the root moves, in semitones up: up a fourth (V-I, ii-V) is the
+# strongest, then up a fifth (I-V, IV-I), steps and thirds; a tritone or a major/minor flip on one root is rare.
+ROOT_MOTION = {5: 0.8, 7: 0.4, 2: 0.3, 10: 0.3, 3: 0.2, 4: 0.2, 8: 0.2, 9: 0.2, 1: -0.3, 11: -0.1, 6: -0.3, 0: -0.5}
+RESOLUTION = 0.5  # A dominant (V or vii) going home to the tonic, or deceptively to vi.
+# Chords change on the first beat of a bar or half bar; a change elsewhere costs this much (log).
+OFF_BEAT_CHANGE = 2.0
+WEAK_BEAT_CHANGE = 1.0
+# The melody is evidence too: the share of its notes a chord holds, against half, at this weight.
+MELODY_FIT = 0.15
+# A line note on a strong beat (first or third) outside its chord moves to the nearest chord tone, unless the
+# detector was this sure of it; any note outside both the scale and its chord moves to the nearest that fits.
+SURE_NOTE = 0.7
 # ADTOF model output, in its order, with the authors' peak thresholds.
 DRUMS = ('kick', 'snare', 'tom', 'hihat', 'cymbal')
 DRUM_THRESHOLDS = (0.22, 0.24, 0.32, 0.22, 0.30)
@@ -120,6 +141,128 @@ def chord_path(chroma, bonus, weight=8, stay=0.985, shapes=SHAPES):
     for frame in range(frames - 1, 0, -1):
         path[frame - 1] = back[path[frame], frame]
     return [names[index] for index in path]
+
+
+def chord_shapes(shapes=RICH_SHAPES):
+    """Root and suffix of each template, in chord_templates order."""
+    return [(root, suffix) for root in range(12) for suffix in shapes]
+
+
+def chord_tones(root, suffix):
+    return {(root + step) % 12 for step in RICH_SHAPES[suffix]}
+
+
+def key_scale(key_root, minor):
+    return {(key_root + step) % 12 for step in (MINOR_SCALE if minor else MAJOR_SCALE)}
+
+
+def outside_cost(chords, key_root, minor):
+    """What naming each chord costs in this key: nothing inside the scale, a little for common borrowings."""
+    scale = key_scale(key_root, minor)
+    costs = []
+    for root, suffix in chords:
+        if chord_tones(root, suffix) <= scale:
+            costs.append(0.0)
+        elif ((root - key_root) % 12, suffix) in BORROWED[minor]:
+            costs.append(OUTSIDE_COST['borrowed'])
+        else:
+            costs.append(OUTSIDE_COST['other'])
+    return np.array(costs)[:, None]
+
+
+def progression_moves(chords, key_root, minor):
+    """Log bonus for each change from one chord to another, by root motion and resolution."""
+    count = len(chords)
+    moves = np.zeros((count, count))
+    tonic, deceptive = (0, 8) if minor else (0, 9)
+    for i, (from_root, _) in enumerate(chords):
+        from_degree = (from_root - key_root) % 12
+        for j, (to_root, _) in enumerate(chords):
+            if i == j:
+                continue
+            to_degree = (to_root - key_root) % 12
+            moves[i, j] = ROOT_MOTION[(to_root - from_root) % 12]
+            if from_degree in (7, 11) and to_degree in (tonic, deceptive):
+                moves[i, j] += RESOLUTION
+    return moves
+
+
+def change_costs(frames, beats, bar):
+    """Log cost of a chord change at each frame: free on a bar's first or third beat, more elsewhere."""
+    costs = np.full(frames, OFF_BEAT_CHANGE)
+    for index, beat in enumerate(beats):
+        frame = int(round(beat / SECONDS))
+        if 0 <= frame < frames:
+            cost = 0.0 if (index - bar) % 2 == 0 else WEAK_BEAT_CHANGE
+            costs[max(frame - 1, 0):frame + 2] = np.minimum(costs[max(frame - 1, 0):frame + 2], cost)
+    return costs
+
+
+def melody_chroma(line, frames):
+    """The melody's pitch classes per frame."""
+    chroma = np.zeros((12, frames))
+    for note in line:
+        chroma[note['pitch'] % 12, int(note['start'] / SECONDS):min(int(note['end'] / SECONDS) + 1, frames)] = 1
+    return chroma
+
+
+def progression_path(chroma, melody, key_root, minor, beats, bar, weight=8, stay=0.985):
+    """Viterbi over the key's chords: sound and melody say which chord, progression rules say which follows."""
+    chords = chord_shapes()
+    _, templates = chord_templates(RICH_SHAPES)
+    frames = chroma.shape[1]
+    sound = templates @ (chroma / np.maximum(np.linalg.norm(chroma, axis=0, keepdims=True), 1e-6))
+    held = templates > 0
+    sung = melody.sum(axis=0)
+    fit = np.where(sung > 0, (held.astype(float) @ melody) / np.maximum(sung, 1e-6) - 0.5, 0)
+    richer = np.array([[0 if suffix in SHAPES else -RICH_PENALTY] for _, suffix in chords])
+    scores = (sound + MELODY_FIT * fit + richer - outside_cost(chords, key_root, minor)) * weight
+    count = len(chords)
+    moves = np.log((1 - stay) / (count - 1)) + progression_moves(chords, key_root, minor)
+    np.fill_diagonal(moves, np.log(stay))
+    changing = ~np.eye(count, dtype=bool)
+    costs = change_costs(frames, beats, bar)
+    best = scores[:, 0]
+    back = np.zeros((count, frames), dtype=int)
+    for frame in range(1, frames):
+        step = best[:, None] + moves - changing * costs[frame]
+        back[:, frame] = step.argmax(axis=0)
+        best = step.max(axis=0) + scores[:, frame]
+    path = np.zeros(frames, dtype=int)
+    path[-1] = best.argmax()
+    for frame in range(frames - 1, 0, -1):
+        path[frame - 1] = back[path[frame], frame]
+    return [chords[index] for index in path]
+
+
+def chord_name(root, suffix):
+    return NOTES[root] + suffix
+
+
+def fit_line(line, events, path, key_root, minor, beats, bar):
+    """Moves doubtful notes into the harmony: off-chord notes on strong beats, and notes outside scale and chord."""
+    scale = key_scale(key_root, minor)
+    fitted = []
+    for note in line:
+        frame = min(int(note['start'] / SECONDS), len(path) - 1)
+        tones = chord_tones(*path[frame])
+        position = float(np.interp(note['start'], beats, np.arange(len(beats))))
+        strong = abs(position - round(position)) < 0.15 and (round(position) - bar) % 2 == 0
+        sure = max((event[3] for event in events if event[2] == note['pitch'] and event[0] <= note['start'] + 0.05
+                    and event[1] >= note['start']), default=0)
+        pitch_class = note['pitch'] % 12
+        allowed = None
+        if strong and pitch_class not in tones and sure < SURE_NOTE:
+            allowed = tones
+        elif pitch_class not in tones and pitch_class not in scale:
+            allowed = tones | scale
+        if allowed:
+            # The nearest fitting pitch; on a tie, the one below.
+            moved = min((note['pitch'] + step for step in range(-6, 7) if (note['pitch'] + step) % 12 in allowed),
+                        key=lambda pitch: (abs(pitch - note['pitch']), pitch))
+            note = {**note, 'pitch': moved}
+        fitted.append(note)
+    return fitted
 
 
 def note_events(path):
@@ -289,17 +432,15 @@ def slash_chords(chords, bass_chroma, bass_level, frames):
     return named
 
 
-def ensemble_part(stems, names, chromas, levels, frames, loudest, floor, beats):
-    """Guitar, piano and other heard together: one key, one chord progression, a melody and a second line."""
+def ensemble_part(stems, names, chromas, levels, frames, loudest, floor, beats, bar):
+    """The harmonic stems heard together: one key, a chord progression that follows the key and the melody,
+    a melody and a second line, each note fitted to its chord where the detection is doubtful."""
     import soundfile
     import tempfile
     harmony = sum(normalized(chromas[name][:, :frames]) for name in names)
     together = sum(chromas[name][:, :frames] for name in names)
     chroma = harmony + (0.6 * normalized(chromas['bass'][:, :frames]) if 'bass' in chromas else 0)
     audible = (loudest > floor)
-    chords = chord_changes(chord_path(chroma, key_bonus(together, shapes=RICH_SHAPES), shapes=RICH_SHAPES), audible)
-    if 'bass' in chromas:
-        chords = slash_chords(chords, chromas['bass'], levels['bass'], frames)
     mix = None
     for name in names:
         audio, rate = librosa.load(stems[name], sr=22050, mono=True)
@@ -310,6 +451,12 @@ def ensemble_part(stems, names, chromas, levels, frames, loudest, floor, beats):
     melody = clear_line([event for event in events if event[2] >= MELODY_LOWEST], ENSEMBLE_STRENGTH)
     second = clear_line(under(melody, [event for event in events if event[2] >= SECOND_LOWEST]), ENSEMBLE_STRENGTH)
     root, minor = song_key(together)
+    path = progression_path(chroma, melody_chroma(melody, frames), root, minor, beats, bar)
+    chords = chord_changes([chord_name(*chord) for chord in path], audible)
+    if 'bass' in chromas:
+        chords = slash_chords(chords, chromas['bass'], levels['bass'], frames)
+    melody = fit_line(melody, events, path, root, minor, beats, bar)
+    second = fit_line(second, events, path, root, minor, beats, bar)
     return {'key': f"{NOTES[root]}{'m' if minor else ''}", 'chords': chords,
             'notes': note_values(melody, beats), 'second': note_values(second, beats)}
 
@@ -348,7 +495,6 @@ def analyze(stems, only=None, grid=None):
     together = sum(chromas[name][:, :frames] for name in harmonic_stems)
     bonus = key_bonus(together)
     result = {}
-    ensemble = ensemble_part(stems, harmonic_stems, chromas, levels, frames, loudest, floor, beats) if only is None else None
     if 'bass' in stems and only in (None, 'bass'):
         # A bass mostly plays roots, so the other stems supply major or minor; it follows only the bass's sound.
         bass_chroma = normalized(chromas['bass'][:, :frames]) + normalized(together)
@@ -359,6 +505,8 @@ def analyze(stems, only=None, grid=None):
     else:
         bar = first_bar(result['bass']['notes'], drum_units(drum_times(activity), beats)[0])
         result['drums'] = drum_part(activity, beats, stems['drums'])
+    # The ensemble's chords change on bars, so it needs the bar found from bass and drums.
+    ensemble = ensemble_part(stems, harmonic_stems, chromas, levels, frames, loudest, floor, beats, bar) if only is None else None
     found = {'beats': [round(beat, 3) for beat in beats], 'firstBar': bar, 'stems': result}
     if ensemble:
         found['ensemble'] = ensemble

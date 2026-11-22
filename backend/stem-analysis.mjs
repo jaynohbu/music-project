@@ -41,7 +41,7 @@ const checkNotes = (notes, duration) => Array.isArray(notes) && notes.every(note
   note.pitch <= 127 && validTime(note.start, duration) && validTime(note.end, duration) && note.end >= note.start &&
   Number.isInteger(note.unit) && note.unit >= 0 && Number.isInteger(note.length) && note.length >= 1);
 
-// Guitar, piano and other together: the song's key, one chord progression, a melody and the line under it.
+// The other stem (guitars, keys and the rest): the song's key, one chord progression, a melody and the line under it.
 function checkEnsemble(ensemble, duration) {
   return ensemble === undefined || (typeof ensemble?.key === 'string' && /^[A-G][#b]?m?$/.test(ensemble.key) &&
     checkChords(ensemble.chords, duration) && checkNotes(ensemble.notes, duration) &&
@@ -60,7 +60,7 @@ export function checkHarmony(value, duration) {
   return value;
 }
 
-export const HARMONY_STEMS = ['guitar', 'piano', 'other', 'bass', 'drums'];
+export const HARMONY_STEMS = ['other', 'bass', 'drums'];
 
 const LYRICS = {
   type: 'lyrics', code: 'LYRICS', stems: () => ['vocals'], check: checkLyrics,
