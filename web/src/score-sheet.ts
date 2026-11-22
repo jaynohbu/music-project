@@ -4,7 +4,7 @@
 import type { HarmonyGrid, HarmonyPart } from './services';
 import {
   BEAM_HEIGHT, BOTTOM_LINE_Y, CLEFS, CYMBAL_LEDGER, LINE_GAP as STAFF_GAP, MIDDLE_LINE_Y, UNIT_WIDTH, UNITS_PER_BAR,
-  drumScore, keySignature, notePieces, positionAt, scoreRests, signatureMarks, type NotePiece, type ScoreRest,
+  beamNotes, drumScore, keySignature, notePieces, positionAt, scoreRests, signatureMarks, type NotePiece, type ScoreRest,
 } from './harmony-strip';
 
 const STAFF_LINES = [0, 1, 2, 3, 4].map(line => BOTTOM_LINE_Y - line * STAFF_GAP);
@@ -86,8 +86,11 @@ export function sheetPages(part: HarmonyPart, stem: string, grid: HarmonyGrid, t
   const drums = stem === 'drums';
   const signature = keySignature(drums ? undefined : part.key ?? songKey);
   const voices = !drums && !!part.second?.length;
-  const notes = drums ? [] : part.notes.map(note => notePieces(stem, note, grid.firstBar, voices ? 'up' : undefined, signature));
-  const second = voices ? part.second!.map(note => notePieces(stem, note, grid.firstBar, 'down', signature)) : [];
+  const melody = beamNotes(drums ? [] : part.notes.map(note => notePieces(stem, note, grid.firstBar, voices ? 'up' : undefined, signature)),
+    voices ? 'up' : undefined);
+  const lower = beamNotes(voices ? part.second!.map(note => notePieces(stem, note, grid.firstBar, 'down', signature)) : [], 'down');
+  const notes = melody.notes, second = lower.notes;
+  const noteBeams = [...lower.beams.map(beam => ({ ...beam, color: SECOND })), ...melody.beams.map(beam => ({ ...beam, color: INK }))];
   const drawn = drumScore(part.hits ?? [], grid.firstBar);
   const rests = drums ? drawn.rests : scoreRests(part.notes, grid.firstBar);
   const chords = drums ? [] : part.chords.map(chord => ({ name: chord.name, unit: Math.round(positionAt(grid.beats, chord.start) / 2) * 2 }));
@@ -109,6 +112,7 @@ export function sheetPages(part: HarmonyPart, stem: string, grid: HarmonyGrid, t
     reach(...stroke.heads.flatMap(head => [head.y - 5, head.y + 5]), ...stroke.stems.flatMap(item => [item.from, item.to]));
   }
   for (const beam of drawn.beams) reach(beam.y, beam.y + BEAM_HEIGHT);
+  for (const beam of noteBeams) reach(beam.y1, beam.y2, beam.y1 + BEAM_HEIGHT, beam.y2 + BEAM_HEIGHT);
   const chordY = low - 8, top = (chords.length ? chordY - 16 : low) - 14;
   const lineHeight = high + 6 - top;
 
@@ -154,6 +158,8 @@ export function sheetPages(part: HarmonyPart, stem: string, grid: HarmonyGrid, t
     svg += drawn.beams.filter(beam => drums && inside(beam.x, start))
       .map(beam => `<rect x="${beam.x}" y="${beam.y}" width="${beam.width}" height="${BEAM_HEIGHT}" fill="${INK}"/>`).join('');
     if (drums) svg += drawn.strokes.filter(stroke => inside(stroke.x, start)).map(strokeMark).join('');
+    svg += noteBeams.filter(beam => inside(beam.x1, start)).map(beam =>
+      `<path d="M${beam.x1} ${beam.y1} L${beam.x2} ${beam.y2} L${beam.x2} ${beam.y2 + BEAM_HEIGHT} L${beam.x1} ${beam.y1 + BEAM_HEIGHT} Z" fill="${beam.color}"/>`).join('');
     svg += second.filter(pieces => inside(pieces[0].x, start)).map(pieces => pieces.map(piece => noteMark(piece, SECOND)).join('')).join('');
     svg += notes.filter(pieces => inside(pieces[0].x, start)).map(pieces => pieces.map(piece => noteMark(piece, INK)).join('')).join('');
     svg += '</g></g>';

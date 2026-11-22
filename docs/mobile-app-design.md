@@ -429,6 +429,8 @@ The staff uses `react-native-svg`. It draws in four-bar chunks and mounts only t
 
 `react-native-svg` is a native module, so this needs a new native build. Builds 93fc2cf2 and earlier do not include it.
 
+**Beams (2026-11-22).** Eighths and shorter that follow each other within one beat are joined by beams instead of flags (`beamNotes` in `src/score.ts`, the same block in `web/src/harmony-strip.ts`, checked by `web/test/score-sheet.test.mjs`). Each group's stems go one way (the voice's side when two lines share the staff, else where most notes sit); the beam follows the notes at a slant of at most 0.2 and moves out until every stem is at least 20 long; runs of sixteenths get one second beam, a lone sixteenth a stub. Used by the app and website strips, the full score and the PDF.
+
 **Rails while dragging (2026-11-22).** Holding any mixer control (fader, knob, markers, waveform) hides both scroll rails; letting go shows them again. `railCover` in `src/stem-scroll.tsx` also checks every 3 s while hidden and shows them if nothing moved, in case a release is lost.
 
 **Score PDF and full score (2026-11-22).** Each written score (other, bass, drums) has "Full score" and "Save PDF" buttons. `src/score-sheet.ts` lays the strip's marks out four bars to a line on A4 pages, with the title, the artist (right, under the title), part and key, tempo, a clef and key signature on every line, bar numbers and page numbers. `sheetPages` returns each page as an SVG string and `scoreSheet` wraps them in printable HTML, so both are pure and tested in `test/score-sheet.test.cjs`.

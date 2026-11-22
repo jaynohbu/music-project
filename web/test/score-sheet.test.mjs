@@ -19,3 +19,9 @@ test('key change moves chords and notes the same as in the app', () => {
   const block = source => source.slice(source.indexOf('// Key change:'), source.indexOf('\n}\n', source.indexOf('export function transposePart')) + 2);
   assert.equal(block(read('../src/harmony-strip.ts')), block(read('../../mobile/src/score.ts')));
 });
+
+test('notes are beamed the same as in the app', () => {
+  const block = source => source.slice(source.indexOf('// Printed music joins eighths'), source.indexOf('// Rests fill the silence'));
+  assert.ok(block(read('../src/harmony-strip.ts')).length > 100);
+  assert.equal(block(read('../src/harmony-strip.ts')), block(read('../../mobile/src/score.ts')));
+});

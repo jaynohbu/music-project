@@ -151,3 +151,37 @@ test('notes are spelled for the key: signature notes plain, naturals marked, bla
   assert.notEqual(sign(63, 'D').y, sign(63, 'F').y);
   assert.equal(sign(72, 'C#').y, sign(71, 'C').y, 'B♯ in C♯ major sits where B does');
 });
+
+test('beamNotes joins eighths and sixteenths within a beat and drops their flags', () => {
+  const note = (unit, pitch, length) => ({ start: 0, end: 0, unit, pitch, length });
+  // Two eighths, then four sixteenths, then a quarter: two groups and one note left alone.
+  const written = [note(0, 67, 2), note(2, 71, 2), note(4, 72, 1), note(5, 74, 1), note(6, 72, 1), note(7, 71, 1), note(8, 67, 4)]
+    .map(item => score.notePieces('other', item, 0));
+  const { notes, beams } = score.beamNotes(written);
+  assert.ok(notes.slice(0, 6).every(([piece]) => piece.flags.length === 0), 'Beamed notes have no flags');
+  assert.equal(notes[6][0].flags.length, 0, 'A quarter never had a flag');
+  // One beam over the eighths; over the sixteenths a main beam and a second one.
+  assert.equal(beams.length, 3);
+  const [eighths, main, second] = beams;
+  assert.equal(eighths.x1, notes[0][0].stem.x);
+  assert.equal(eighths.x2, notes[1][0].stem.x);
+  assert.ok(Math.abs((eighths.y2 - eighths.y1) / (eighths.x2 - eighths.x1)) <= 0.2, 'The beam tilts only a little');
+  for (const [piece] of notes.slice(0, 2)) {
+    const at = eighths.y1 + (eighths.y2 - eighths.y1) * (piece.stem.x - eighths.x1) / (eighths.x2 - eighths.x1);
+    assert.ok(Math.abs(piece.stem.end - at) < 0.01, 'Every stem reaches the beam');
+    assert.ok(Math.abs(piece.y - piece.stem.end) >= 20, 'Stems stay long enough');
+  }
+  assert.ok(Math.abs(Math.abs(second.y1 - main.y1) - 5) < 1e-9, 'The second beam sits 5 inside the first, toward the notes');
+  assert.equal(second.x1, main.x1);
+  assert.equal(second.x2, main.x2, 'One second beam spans the run of sixteenths');
+  assert.deepEqual(written[0][0].flags.length, 1, 'The input is left as it was');
+});
+
+test('beamNotes keeps a fixed stem side, and does not join across a beat or a rest', () => {
+  const note = (unit, pitch, length) => ({ start: 0, end: 0, unit, pitch, length });
+  const low = [note(2, 60, 2), note(4, 60, 2), note(8, 60, 2), note(12, 60, 2), note(14, 60, 2)].map(item => score.notePieces('other', item, 0, 'down'));
+  const { notes, beams } = score.beamNotes(low, 'down');
+  assert.equal(beams.length, 1, 'Only the last two share a beat back to back');
+  assert.ok(notes[3][0].stem.end > notes[3][0].y, 'Stems go down');
+  assert.equal(notes[0][0].flags.length, 1, 'A lone eighth keeps its flag');
+});

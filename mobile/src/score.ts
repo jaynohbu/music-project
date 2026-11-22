@@ -137,8 +137,9 @@ export function gapAfter(rows: LyricRow[], index: number, duration: number): { s
   return end - start >= SHORTEST_NEW_LINE ? { start, end } : null;
 }
 
+// `unit` and `value` are the written note's start and length in sixteenths.
 export interface NotePiece {
-  x: number; y: number; hollow: boolean; stem?: { x: number; end: number };
+  unit: number; value: number; x: number; y: number; hollow: boolean; stem?: { x: number; end: number };
   flags: string[]; dot?: { x: number; y: number }; tie?: string; ledgers: number[]; accidental: string;
 }
 export interface ScoreRest { x: number; units: number }
@@ -197,7 +198,7 @@ export function notePieces(stem: string, note: HarmonyNote, firstBar: number, vo
     const next = parts[index + 1];
     const bow = up ? 7 : -7;
     return {
-      x, y, ledgers, flags,
+      unit: part.unit, value: part.value, x, y, ledgers, flags,
       hollow: part.value >= 8,
       stem: part.value === 16 ? undefined : { x: stemX, end },
       dot: [3, 6, 12].includes(part.value) ? { x: x + 9, y: Math.round(y / LINE_GAP) * LINE_GAP === y ? y - 4 : y } : undefined,
@@ -205,6 +206,57 @@ export function notePieces(stem: string, note: HarmonyNote, firstBar: number, vo
       accidental: index === 0 ? accidental : '',
     };
   });
+}
+
+// Printed music joins eighths and shorter that fall in the same beat with beams instead of flags.
+export interface NoteBeam { x1: number; y1: number; x2: number; y2: number }
+const BEAM_THICKNESS = 3, BEAM_SPACE = 5, BEAM_STUB = 6, MAX_SLANT = 0.2, SHORTEST_STEM = 20;
+// Notes back to back within one beat are joined; a rest, a longer note or a new beat ends the group. Their stems
+// all go one way (`voice` when two lines share the staff, else the side most of them sit on) and reach a beam
+// that follows the line of the notes, tilted at most a little, with a second beam over sixteenths.
+// The beams are returned by their top edge, BEAM_THICKNESS deep.
+export function beamNotes(notes: NotePiece[][], voice?: 'up' | 'down'): { notes: NotePiece[][]; beams: NoteBeam[] } {
+  const copies = notes.map(pieces => pieces.map(piece => ({ ...piece })));
+  const pieces = copies.flat().sort((a, b) => a.unit - b.unit);
+  const beams: NoteBeam[] = [];
+  const groups: NotePiece[][] = [];
+  for (const piece of pieces) {
+    const group = groups[groups.length - 1], last = group?.[group.length - 1];
+    const joins = piece.value < 4 && last && last.value < 4 && last.unit + last.value === piece.unit
+      && Math.floor(last.unit / 4) === Math.floor(piece.unit / 4);
+    if (joins) group.push(piece); else groups.push([piece]);
+  }
+  for (const group of groups) {
+    if (group.length < 2) continue;
+    const up = voice ? voice === 'up' : group.filter(piece => piece.y >= MIDDLE_LINE_Y).length * 2 >= group.length;
+    const side = up ? -1 : 1;
+    const stemX = (piece: NotePiece) => piece.x + (up ? HEAD_OFFSET : -HEAD_OFFSET);
+    const first = group[0], last = group[group.length - 1];
+    const x1 = stemX(first), x2 = stemX(last);
+    const slope = Math.max(-MAX_SLANT, Math.min(MAX_SLANT, (last.y - first.y) / Math.max(x2 - x1, 1)));
+    // Through the first stem's end, then moved away from the notes until every stem is long enough.
+    const shortest = SHORTEST_STEM + (group.some(piece => piece.value === 1) ? BEAM_SPACE : 0);
+    let start = first.y + side * STEM_LENGTH;
+    for (const piece of group) {
+      const at = start + slope * (stemX(piece) - x1), limit = piece.y + side * shortest;
+      if (up ? at > limit : at < limit) start += limit - at;
+    }
+    const lineAt = (x: number) => start + slope * (x - x1);
+    const edge = (y: number, inner: number) => y - (up ? 0 : BEAM_THICKNESS) - side * inner;
+    beams.push({ x1, y1: edge(lineAt(x1), 0), x2, y2: edge(lineAt(x2), 0) });
+    group.forEach((piece, index) => {
+      piece.stem = { x: stemX(piece), end: lineAt(stemX(piece)) };
+      piece.flags = [];
+      // The second beam spans each run of sixteenths; a lone one gets a stub toward its neighbour.
+      if (piece.value !== 1 || group[index - 1]?.value === 1) return;
+      let end = index;
+      while (group[end + 1]?.value === 1) end++;
+      const from = end > index ? stemX(piece) : index < group.length - 1 ? stemX(piece) : stemX(piece) - BEAM_STUB;
+      const to = end > index ? stemX(group[end]) : from + BEAM_STUB;
+      beams.push({ x1: from, y1: edge(lineAt(from), BEAM_SPACE), x2: to, y2: edge(lineAt(to), BEAM_SPACE) });
+    });
+  }
+  return { notes: copies, beams };
 }
 
 // Rests fill the silence before and between notes.

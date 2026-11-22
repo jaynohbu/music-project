@@ -6,8 +6,8 @@ import Svg, { Circle, Ellipse, G, Line, Path, Rect, Text as SvgText } from 'reac
 import type { HarmonyGrid, HarmonyPart, LyricLine, LyricWord } from './api';
 import {
   BEAM_HEIGHT, CLEFS, CYMBAL_LEDGER, HELD_AFTER_WORD, MIDDLE_LINE_Y, STAFF_LINES, UNIT_WIDTH, UNITS_PER_BAR,
-  drumScore, editedLines, firstChange, gapAfter, keySignature, lineText, lyricIndex, notePieces, positionAt, reachedIndex, scoreRests,
-  signatureMarks, type KeySignature, type LyricRow, type NotePiece, type ScoreRest,
+  beamNotes, drumScore, editedLines, firstChange, gapAfter, keySignature, lineText, lyricIndex, notePieces, positionAt, reachedIndex, scoreRests,
+  signatureMarks, type KeySignature, type LyricRow, type NoteBeam, type NotePiece, type ScoreRest,
 } from './score';
 import { Button, ButtonRow, formatTime } from './ui';
 import { useT } from './language';
@@ -104,6 +104,8 @@ interface Score {
   notes: NotePiece[][];
   // The line under the melody, drawn lighter with its stems down.
   second: NotePiece[][];
+  // Beams over the melody's and the second line's short notes.
+  noteBeams: (NoteBeam & { second: boolean })[];
   strokes: ReturnType<typeof drumScore>['strokes'];
   beams: ReturnType<typeof drumScore>['beams'];
   rests: ScoreRest[];
@@ -117,7 +119,7 @@ const CHORD_TEXT = 15, CHORD_GAP = 6, EDGE = 6;
 // The clef's column, and each sharp or flat of the key signature after it.
 const CLEF_WIDTH = 44, MARK_WIDTH = 8;
 // The highest and lowest y any mark of the score reaches, staff included.
-function extent(notes: NotePiece[][], second: NotePiece[][], strokes: Score['strokes'], beams: Score['beams']) {
+function extent(notes: NotePiece[][], second: NotePiece[][], strokes: Score['strokes'], beams: Score['beams'], noteBeams: NoteBeam[]) {
   let low = STAFF_LINES[4], high = STAFF_LINES[0];
   const reach = (...ys: number[]) => { for (const y of ys) { low = Math.min(low, y); high = Math.max(high, y); } };
   for (const piece of [...notes, ...second].flat()) {
@@ -130,6 +132,7 @@ function extent(notes: NotePiece[][], second: NotePiece[][], strokes: Score['str
     if (stroke.ledger) reach(CYMBAL_LEDGER);
   }
   for (const beam of beams) reach(beam.y, beam.y + BEAM_HEIGHT);
+  for (const beam of noteBeams) reach(beam.y1, beam.y2, beam.y1 + BEAM_HEIGHT, beam.y2 + BEAM_HEIGHT);
   return { low, high };
 }
 
@@ -149,18 +152,21 @@ function layout(part: HarmonyPart, stem: string, grid: HarmonyGrid, signature: K
     for (let unit = grid.firstBar * 4; unit < grid.beats.length * 4; unit += UNITS_PER_BAR) bars.push(unit * UNIT_WIDTH - UNIT_WIDTH / 2);
   }
   const voices = !drums && !!part.second?.length;
-  const notes = drums ? [] : part.notes.map(note => notePieces(stem, note, grid.firstBar, voices ? 'up' : undefined, signature));
-  const second = voices ? part.second!.map(note => notePieces(stem, note, grid.firstBar, 'down', signature)) : [];
+  const melody = beamNotes(drums ? [] : part.notes.map(note => notePieces(stem, note, grid.firstBar, voices ? 'up' : undefined, signature)),
+    voices ? 'up' : undefined);
+  const lower = beamNotes(voices ? part.second!.map(note => notePieces(stem, note, grid.firstBar, 'down', signature)) : [], 'down');
+  const notes = melody.notes, second = lower.notes;
+  const noteBeams = [...lower.beams.map(beam => ({ ...beam, second: true })), ...melody.beams.map(beam => ({ ...beam, second: false }))];
   const strokes = drums ? drawn.strokes : [], beams = drums ? drawn.beams : [];
   let top = 0, height = CHORDS_ONLY, chordY = 18;
   if (written) {
-    const { low, high } = extent(notes, second, strokes, beams);
+    const { low, high } = extent(notes, second, strokes, beams, noteBeams);
     chordY = low - CHORD_GAP;
     top = (chords.length ? chordY - CHORD_TEXT : low) - EDGE;
     height = high + EDGE - top;
   }
   return {
-    drums, written, chords, bars, notes, second, strokes, beams,
+    drums, written, chords, bars, notes, second, strokes, beams, noteBeams,
     rests: drums ? drawn.rests : scoreRests(part.notes, grid.firstBar),
     spans: drums ? drawn.strokes : part.notes, top, height, chordY,
   };
@@ -226,6 +232,8 @@ const Chunk = memo(function Chunk({ score, chunk, activeChord, activeNote }: {
     {score.rests.map((rest, index) => inside(rest.x) && <RestMark key={index} rest={rest} />)}
     {score.beams.map((beam, index) => inside(beam.x) && <Rect key={index} x={beam.x} y={beam.y} width={beam.width} height={BEAM_HEIGHT} fill={theme.note} />)}
     {score.strokes.map((stroke, index) => inside(stroke.x) && <StrokeMark key={stroke.unit} stroke={stroke} color={index === activeNote ? theme.accent : theme.note} />)}
+    {score.noteBeams.map((beam, index) => inside(beam.x1) && <Path key={`beam-${index}`} fill={beam.second ? theme.staff : theme.note}
+      d={`M${beam.x1} ${beam.y1} L${beam.x2} ${beam.y2} L${beam.x2} ${beam.y2 + BEAM_HEIGHT} L${beam.x1} ${beam.y1 + BEAM_HEIGHT} Z`} />)}
     {score.second.map((pieces, index) => inside(pieces[0].x) && <NoteMark key={`second-${index}`} pieces={pieces} color={theme.staff} />)}
     {score.notes.map((pieces, index) => inside(pieces[0].x) && <NoteMark key={index} pieces={pieces} color={index === activeNote ? theme.accent : theme.note} />)}
   </Svg>;
