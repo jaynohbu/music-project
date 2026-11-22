@@ -127,11 +127,7 @@ export function notePieces(stem: string, note: HarmonyNote, firstBar: number, vo
     const x = part.unit * UNIT_WIDTH;
     const stemX = x + (up ? HEAD_OFFSET : -HEAD_OFFSET);
     const end = y + (up ? -STEM_LENGTH : STEM_LENGTH);
-    const count = part.value === 1 ? 2 : part.value === 2 || part.value === 3 ? 1 : 0;
-    const flags = Array.from({ length: count }, (_, flag) => {
-      const from = end + (up ? flag * 6 : -flag * 6);
-      return `M${stemX} ${from} q7 ${up ? 6 : -6} 6 ${up ? 14 : -14}`;
-    });
+    const flags = flagPaths(stemX, end, part.value, up);
     const next = parts[index + 1];
     const bow = up ? 7 : -7;
     return {
@@ -148,47 +144,75 @@ export function notePieces(stem: string, note: HarmonyNote, firstBar: number, vo
 // Printed music joins eighths and shorter that fall in the same beat with beams instead of flags.
 export interface NoteBeam { x1: number; y1: number; x2: number; y2: number }
 const BEAM_THICKNESS = 3, BEAM_SPACE = 5, BEAM_STUB = 6, MAX_SLANT = 0.2, SHORTEST_STEM = 20;
+const flagPaths = (stemX: number, end: number, value: number, up: boolean) =>
+  Array.from({ length: value === 1 ? 2 : value === 2 || value === 3 ? 1 : 0 }, (_, flag) =>
+    `M${stemX} ${end + (up ? flag * 6 : -flag * 6)} q7 ${up ? 6 : -6} 6 ${up ? 14 : -14}`);
+// Notes starting together with the same value are one chord: one stem, drawn from the head farthest from its
+// end, reaching past the nearest; the other heads have none. A chord counts as one note below.
 // Notes back to back within one beat are joined; a rest, a longer note or a new beat ends the group. Their stems
 // all go one way (`voice` when two lines share the staff, else the side most of them sit on) and reach a beam
 // that follows the line of the notes, tilted at most a little, with a second beam over sixteenths.
 // The beams are returned by their top edge, BEAM_THICKNESS deep.
 export function beamNotes(notes: NotePiece[][], voice?: 'up' | 'down'): { notes: NotePiece[][]; beams: NoteBeam[] } {
   const copies = notes.map(pieces => pieces.map(piece => ({ ...piece })));
-  const pieces = copies.flat().sort((a, b) => a.unit - b.unit);
+  const together = new Map<string, NotePiece[]>();
+  for (const piece of copies.flat()) {
+    const key = `${piece.unit}:${piece.value}`;
+    together.set(key, [...(together.get(key) ?? []), piece]);
+  }
+  const chords = [...together.values()].sort((a, b) => a[0].unit - b[0].unit);
+  const middle = (heads: NotePiece[]) => heads.reduce((sum, head) => sum + head.y, 0) / heads.length;
+  const near = (heads: NotePiece[], up: boolean) => up ? Math.min(...heads.map(head => head.y)) : Math.max(...heads.map(head => head.y));
+  // The stem goes on the far head; the others lose theirs.
+  const stemOn = (heads: NotePiece[], up: boolean, end: number) => {
+    const far = heads.reduce((best, head) => (up ? head.y > best.y : head.y < best.y) ? head : best);
+    for (const head of heads) { head.stem = undefined; head.flags = []; }
+    if (far.value === 16) return far;
+    const x = far.x + (up ? HEAD_OFFSET : -HEAD_OFFSET);
+    far.stem = { x, end };
+    far.flags = flagPaths(x, end, far.value, up);
+    return far;
+  };
+  for (const heads of chords) {
+    if (heads.length < 2) continue;
+    const up = voice ? voice === 'up' : middle(heads) >= MIDDLE_LINE_Y;
+    stemOn(heads, up, near(heads, up) + (up ? -STEM_LENGTH : STEM_LENGTH));
+  }
   const beams: NoteBeam[] = [];
-  const groups: NotePiece[][] = [];
-  for (const piece of pieces) {
-    const group = groups[groups.length - 1], last = group?.[group.length - 1];
+  const groups: NotePiece[][][] = [];
+  for (const heads of chords) {
+    const piece = heads[0];
+    const group = groups[groups.length - 1], last = group?.[group.length - 1][0];
     const joins = piece.value < 4 && last && last.value < 4 && last.unit + last.value === piece.unit
       && Math.floor(last.unit / 4) === Math.floor(piece.unit / 4);
-    if (joins) group.push(piece); else groups.push([piece]);
+    if (joins) group.push(heads); else groups.push([heads]);
   }
   for (const group of groups) {
     if (group.length < 2) continue;
-    const up = voice ? voice === 'up' : group.filter(piece => piece.y >= MIDDLE_LINE_Y).length * 2 >= group.length;
+    const up = voice ? voice === 'up' : group.filter(heads => middle(heads) >= MIDDLE_LINE_Y).length * 2 >= group.length;
     const side = up ? -1 : 1;
-    const stemX = (piece: NotePiece) => piece.x + (up ? HEAD_OFFSET : -HEAD_OFFSET);
+    const stemX = (heads: NotePiece[]) => heads[0].x + (up ? HEAD_OFFSET : -HEAD_OFFSET);
     const first = group[0], last = group[group.length - 1];
     const x1 = stemX(first), x2 = stemX(last);
-    const slope = Math.max(-MAX_SLANT, Math.min(MAX_SLANT, (last.y - first.y) / Math.max(x2 - x1, 1)));
+    const slope = Math.max(-MAX_SLANT, Math.min(MAX_SLANT, (near(last, up) - near(first, up)) / Math.max(x2 - x1, 1)));
     // Through the first stem's end, then moved away from the notes until every stem is long enough.
-    const shortest = SHORTEST_STEM + (group.some(piece => piece.value === 1) ? BEAM_SPACE : 0);
-    let start = first.y + side * STEM_LENGTH;
-    for (const piece of group) {
-      const at = start + slope * (stemX(piece) - x1), limit = piece.y + side * shortest;
+    const shortest = SHORTEST_STEM + (group.some(heads => heads[0].value === 1) ? BEAM_SPACE : 0);
+    let start = near(first, up) + side * STEM_LENGTH;
+    for (const heads of group) {
+      const at = start + slope * (stemX(heads) - x1), limit = near(heads, up) + side * shortest;
       if (up ? at > limit : at < limit) start += limit - at;
     }
     const lineAt = (x: number) => start + slope * (x - x1);
     const edge = (y: number, inner: number) => y - (up ? 0 : BEAM_THICKNESS) - side * inner;
     beams.push({ x1, y1: edge(lineAt(x1), 0), x2, y2: edge(lineAt(x2), 0) });
-    group.forEach((piece, index) => {
-      piece.stem = { x: stemX(piece), end: lineAt(stemX(piece)) };
-      piece.flags = [];
+    group.forEach((heads, index) => {
+      stemOn(heads, up, lineAt(stemX(heads))).flags = [];
       // The second beam spans each run of sixteenths; a lone one gets a stub toward its neighbour.
-      if (piece.value !== 1 || group[index - 1]?.value === 1) return;
+      const value = (at: number) => group[at]?.[0].value;
+      if (value(index) !== 1 || value(index - 1) === 1) return;
       let end = index;
-      while (group[end + 1]?.value === 1) end++;
-      const from = end > index ? stemX(piece) : index < group.length - 1 ? stemX(piece) : stemX(piece) - BEAM_STUB;
+      while (value(end + 1) === 1) end++;
+      const from = end > index ? stemX(heads) : index < group.length - 1 ? stemX(heads) : stemX(heads) - BEAM_STUB;
       const to = end > index ? stemX(group[end]) : from + BEAM_STUB;
       beams.push({ x1: from, y1: edge(lineAt(from), BEAM_SPACE), x2: to, y2: edge(lineAt(to), BEAM_SPACE) });
     });

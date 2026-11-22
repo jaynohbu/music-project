@@ -37,17 +37,21 @@ test('comping strikes the style rhythm on the song beats with the chord of the m
   assert.equal(events.find(event => event.time === 0.5).duration, 0.5);
 });
 
-test('guitar strums roll upward and melody parts add the lines over softer comping, moved by the key change', () => {
+test('guitar strums roll upward, and no chord is silence', () => {
+  const grid = { beats: Array.from({ length: 17 }, (_, i) => i * 0.5), firstBar: 0 };
+  const part = { chords: [{ start: 0, name: 'C' }, { start: 2, name: 'N.C.' }], notes: [] };
+  const events = a.comping(part, grid, [[[0, 4, 100]]], 'guitar');
+  assert.ok(events[1].time > events[0].time && events[1].pitch > events[0].pitch);
+  assert.ok(events.length > 0 && events.every(event => event.time < 2), 'Nothing after N.C.');
+});
+
+test('melody + chords parts play the score as written, moved by the key change', () => {
   const grid = { beats: Array.from({ length: 9 }, (_, i) => i * 0.5), firstBar: 0 };
-  const part = { chords: [{ start: 0, name: 'C' }], notes: [{ start: 0.5, end: 1, pitch: 72, unit: 4, length: 4 }],
-    second: [{ start: 0.5, end: 1, pitch: 55, unit: 4, length: 4 }] };
-  const strum = a.comping(part, grid, [[[0, 4, 100]]], 'guitar').slice(0, 3);
-  assert.ok(strum[1].time > strum[0].time && strum[1].pitch > strum[0].pitch);
-  const melody = a.accompanimentEvents('keys-melody', part, grid, [[[0, 4, 100]]], 2);
-  assert.ok(melody.some(event => event.pitch === 74 && event.velocity === 108), 'Melody moved up two semitones');
-  assert.ok(melody.some(event => event.pitch === 69 && event.velocity === 76), 'Second line lifted into the right hand');
-  assert.ok(melody.filter(event => event.velocity < 76).length >= 5, 'Comping is softer');
-  assert.ok(melody.every((event, i) => !i || event.time >= melody[i - 1].time), 'Sorted by time');
+  const part = { chords: [{ start: 0, name: 'C' }], notes: [{ start: 0.5, end: 1, pitch: 60, unit: 4, length: 4 },
+    { start: 0.5, end: 1, pitch: 64, unit: 4, length: 4 }, { start: 1, end: 1.5, pitch: 43, unit: 8, length: 4 }] };
+  const played = a.accompanimentEvents('keys-melody', part, grid, [[[0, 4, 100]]], 2);
+  assert.deepEqual(played.map(event => [event.time, event.pitch]), [[0.5, 62], [0.5, 66], [1, 45]]);
+  assert.ok(played.every(event => event.velocity === 100));
 });
 
 test('the nearest sample plays at the rate of the missing semitones', () => {

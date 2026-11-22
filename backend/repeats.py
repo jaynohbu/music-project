@@ -1,15 +1,15 @@
-"""Repeated passages in the ensemble's melody, found the way BLAST finds similar sequences.
+"""Repeated passages in the ensemble's notes, found the way BLAST finds similar sequences.
 
 Bars are the letters. A seed is a pair of bars that sound alike; it is extended a bar at a time in both
 directions, crossing a weaker bar or two as BLAST's drop-off does, and the longest reach that keeps the whole
 passage at least 70% alike is kept. Passages that match one another form a family (a chorus heard three
-times, a riff heard eight). The clearest member of each family is copied over the others, melody and chords
+times, a riff heard eight). The clearest member of each family is copied over the others, notes and chords
 both, and the second line is dropped inside every member: a repeat is played the same way, and the faint
 notes under it are what the detection is least sure of.
 
 Detection hears a repeat a little differently each time, so passages are compared on what sounds rather than
-note by note: for each eighth of a bar, the pitch classes of the melody and the second line that are sounding
-there. Only the melody is copied.
+note by note: for each eighth of a bar, the pitch classes of the notes (and any second line) sounding
+there. Only the notes are copied.
 """
 import numpy as np
 
@@ -33,7 +33,8 @@ def bar_notes(notes, origin, count):
 
 
 class Heard:
-    """What sounds in each eighth of each bar, and how many notes start in each bar."""
+    """What sounds in each eighth of each bar, and on how many sixteenths notes start in each bar (a chord's
+    notes start together, so a held chord counts once)."""
     def __init__(self, notes, origin, count):
         self.count = count
         self.grid = np.zeros((count * SLOTS, 12), bool)
@@ -44,8 +45,9 @@ class Heard:
             first = (note['unit'] - origin) // per_slot
             last = max(first + 1, (note['unit'] + note['length'] - origin + per_slot - 1) // per_slot)
             self.grid[max(0, first):min(len(self.grid), last), note['pitch'] % 12] = True
-            if 0 <= (note['unit'] - origin) // BAR < count:
-                self.onsets[(note['unit'] - origin) // BAR] += 1
+        for unit in {note['unit'] for note in notes}:
+            if 0 <= (unit - origin) // BAR < count:
+                self.onsets[(unit - origin) // BAR] += 1
 
     def __len__(self):
         return self.count

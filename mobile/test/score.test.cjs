@@ -177,6 +177,22 @@ test('beamNotes joins eighths and sixteenths within a beat and drops their flags
   assert.deepEqual(written[0][0].flags.length, 1, 'The input is left as it was');
 });
 
+test('notes starting together are one chord: one stem past the nearest head, beamed as one note', () => {
+  const note = (unit, pitch, length) => ({ start: 0, end: 0, unit, pitch, length });
+  // A C major triad held a quarter, then two eighth-note chords of E-G in one beat.
+  const written = [note(0, 60, 4), note(0, 64, 4), note(0, 67, 4), note(4, 64, 2), note(4, 67, 2), note(6, 64, 2), note(6, 67, 2)]
+    .map(item => score.notePieces('other', item, 0));
+  const { notes, beams } = score.beamNotes(written);
+  const [c, e, g] = notes.slice(0, 3).map(([piece]) => piece);
+  assert.ok(c.stem && !e.stem && !g.stem, 'One stem, on the lowest head when stems go up');
+  assert.ok(c.stem.end < g.y - 20, 'It reaches past the top head');
+  assert.equal(beams.length, 1, 'The two eighth chords share one beam');
+  const stems = notes.slice(3).map(([piece]) => piece).filter(piece => piece.stem);
+  assert.equal(stems.length, 2, 'One stem per chord');
+  assert.ok(stems.every(piece => piece.flags.length === 0 && piece.y === Math.max(...notes.slice(3).map(([p]) => p.y))));
+  assert.ok(stems.every(piece => Math.abs(piece.stem.end - beams[0].y1 - (piece.stem.x - beams[0].x1) * (beams[0].y2 - beams[0].y1) / (beams[0].x2 - beams[0].x1)) < 0.01));
+});
+
 test('beamNotes keeps a fixed stem side, and does not join across a beat or a rest', () => {
   const note = (unit, pitch, length) => ({ start: 0, end: 0, unit, pitch, length });
   const low = [note(2, 60, 2), note(4, 60, 2), note(8, 60, 2), note(12, 60, 2), note(14, 60, 2)].map(item => score.notePieces('other', item, 0, 'down'));

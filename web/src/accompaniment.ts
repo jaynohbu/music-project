@@ -1,6 +1,6 @@
 // Live accompaniment: parts played from the song's score instead of a recording. The rhythm parts strike every
-// tone of each chord on a style's comping rhythm; the melody parts put the Harmonic melody and its second line
-// over that comping. Styles and sounds come from public/accompaniment/styles.json (tools/accompaniment), and the
+// tone of each chord on a style's comping rhythm; the melody + chords parts play the Harmonic score as written:
+// every chord tone the guitars and keys were heard playing. No chord (N.C.) is silence for both. Styles and sounds come from public/accompaniment/styles.json (tools/accompaniment), and the
 // analysis ranks them for the song (backend/accompaniment.py). Pure functions only, so they can be unit-tested.
 import type { HarmonyGrid, HarmonyNote, HarmonyPart } from './services';
 
@@ -108,16 +108,15 @@ export function comping(part: HarmonyPart, grid: HarmonyGrid, pattern: Stroke[][
   return events;
 }
 
-const line = (notes: HarmonyNote[] | undefined, velocity: number, lift: boolean): NoteEvent[] => (notes ?? []).map(note => ({
-  time: note.start, duration: Math.max(0.08, note.end - note.start), pitch: note.pitch + (lift && note.pitch < 60 ? 12 : 0), velocity,
+const line = (notes: HarmonyNote[] | undefined, velocity: number): NoteEvent[] => (notes ?? []).map(note => ({
+  time: note.start, duration: Math.max(0.08, note.end - note.start), pitch: note.pitch, velocity,
 }));
 
 // Every note of a part, in song seconds, moved by the key change.
 export function accompanimentEvents(kind: AccompanimentKind, part: HarmonyPart, grid: HarmonyGrid, pattern: Stroke[][], semitones = 0): NoteEvent[] {
   const family = familyOf(kind);
-  const events = kind.endsWith('rhythm') ? comping(part, grid, pattern, family)
-    // The melody and its second line over softer comping; on keys the lines sit in the right hand's octave.
-    : [...comping(part, grid, pattern, family, 0.65), ...line(part.notes, 108, family === 'keys'), ...line(part.second, 76, family === 'keys')];
+  // Older scores have a melody and a second line instead of every chord tone; the second line plays softer.
+  const events = kind.endsWith('rhythm') ? comping(part, grid, pattern, family) : [...line(part.notes, 100), ...line(part.second, 76)];
   return events.map(event => ({ ...event, pitch: event.pitch + semitones })).sort((a, b) => a.time - b.time);
 }
 

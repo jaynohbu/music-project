@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Finds the song's chords and melody from its harmonic stems, and the bass and drum parts, as JSON.
 
-The harmonic stems (other, which holds guitars, keys and the rest) are heard as one ensemble: one chord
-progression (bass supplies the roots), a melody line (the highest clear voice) and a second line under it.
-Output is approximate."""
+The harmonic stems (other, which holds guitars, keys and the rest) are heard as one ensemble: one key, one
+chord progression (bass supplies the roots), and every note the guitars and keys play that belongs to the chord
+of the moment, written as chords on one staff. Output is approximate."""
 import argparse
+import bisect
 import json
 import os
+import re
 import sys
 
 import librosa
@@ -14,7 +16,8 @@ import numpy as np
 
 from scipy.signal import find_peaks
 
-from note_lines import BEAT_DRUMS, clear_line, drum_units, first_bar, note_values, struck_line
+from note_lines import (BEAT_DRUMS, LEGATO_UNITS, clear_line, drum_units, first_bar, grid_position, grid_shift,
+                        note_values, struck_line)
 from repeats import unify
 
 RATE = 22050
@@ -22,6 +25,18 @@ HOP = 2048
 SECONDS = HOP / RATE
 BEAT_HOP = 512
 NOTES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B']
+# Names in the song's key: sharp keys write G#m, flat keys Db; C major and A minor keep the common mix above.
+SHARP_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+FLAT_NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B']
+SHARP_KEYS = {False: {2, 4, 6, 7, 9, 11}, True: {1, 4, 6, 8, 11}}
+KEY_NAMES = {False: ['C', 'Db', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'],
+             True: ['Cm', 'C#m', 'Dm', 'Ebm', 'Em', 'Fm', 'F#m', 'Gm', 'G#m', 'Am', 'Bbm', 'Bm']}
+PITCH_CLASS = {name: index for names in (SHARP_NAMES, FLAT_NAMES) for index, name in enumerate(names)}
+CHORD_NAME = re.compile(r'^([A-G][#b]?)(.*?)(?:/([A-G][#b]?))?$')
+# Written where the harmonic stems fall silent for SILENCE seconds or more, and after the last chord, so the
+# accompaniment stops with the song.
+NO_CHORD = 'N.C.'
+SILENCE = 2.0
 # Triads for the bass part, which hears one stem. The ensemble hears every harmonic stem at once, so it can
 # also name sevenths, suspensions and added notes: the inner lines it does not write as notes.
 SHAPES = {'': (0, 4, 7), 'm': (0, 3, 7)}
@@ -39,10 +54,15 @@ HIHAT_FILL_SHARE = 0.12
 HIHAT_LEVEL = 0.5
 HIHAT_BAND = (6000, 16000)
 HIHAT_HOP = 128  # About 3 ms at the drum rate; the drum model only sees 10 ms steps.
-# Lower notes in the ensemble are accompaniment (arpeggios, bass doubling), not the tune.
+# The top line guides the chords; lower notes are mostly accompaniment (arpeggios, bass doubling).
 MELODY_LOWEST = 55  # G3
-# The second line, under the melody: a counter-melody or the top of the accompaniment.
-SECOND_LOWEST = 48  # C3
+# The written notes: chord tones from a guitar's low E up, at most this many at once, the strongest kept.
+LOWEST_CHORD_NOTE = 40
+MOST_AT_ONCE = 6
+SHORTEST_CHORD_NOTE = 0.06
+# A note an octave, a twelfth or two octaves above one at least as strong, sounding as it starts, is that
+# note's overtone: distorted guitars especially sound them, and the detector hears them as notes.
+OVERTONES = (12, 19, 24)
 # Several instruments together blur each note's onset, so the ensemble accepts softer notes than one stem.
 ENSEMBLE_STRENGTH = 0.35
 # Quieter than this share of the loudest stem at that moment is treated as bleed from that stem.
@@ -81,9 +101,8 @@ OFF_BEAT_CHANGE = 2.0
 WEAK_BEAT_CHANGE = 1.0
 # The melody is evidence too: the share of its notes a chord holds, against half, at this weight.
 MELODY_FIT = 0.15
-# A line note on a strong beat (first or third) outside its chord moves to the nearest chord tone, unless the
-# detector was this sure of it; any note outside both the scale and its chord moves to the nearest that fits.
-SURE_NOTE = 0.7
+# The third decides major or minor when the profile fits both: one this many times the other wins.
+THIRD_RATIO = 2.0
 # ADTOF model output, in its order, with the authors' peak thresholds.
 DRUMS = ('kick', 'snare', 'tom', 'hihat', 'cymbal')
 DRUM_THRESHOLDS = (0.22, 0.24, 0.32, 0.22, 0.30)
@@ -112,9 +131,60 @@ def song_key(chroma):
     return root, minor
 
 
-def key_bonus(chroma, amount=0.08, shapes=SHAPES):
+def note_key(events):
+    """The key from the notes heard, as (root, minor), or None without notes. Notes rather than the sound: a
+    distorted power chord's overtones sound a major third that is not played. The Krumhansl-Schmuckler profile
+    finds the key; where the third clearly says the other mode on the same root, the third wins."""
+    total = np.zeros(12)
+    for start, end, pitch, strength in events:
+        total[pitch % 12] += (end - start) * strength
+    if not total.any():
+        return None
+    _, root, minor = max((np.corrcoef(total, np.roll(profile, root))[0, 1], root, minor)
+                         for minor, profile in enumerate((MAJOR_PROFILE, MINOR_PROFILE)) for root in range(12))
+    minor_third, major_third = total[(root + 3) % 12], total[(root + 4) % 12]
+    if minor and major_third > THIRD_RATIO * minor_third:
+        minor = 0
+    elif not minor and minor_third > THIRD_RATIO * major_third:
+        minor = 1
+    return root, minor
+
+
+def spelling(root, minor):
+    """Note names for chords in this key."""
+    if (root, minor) in ((0, 0), (9, 1)):
+        return NOTES
+    return SHARP_NAMES if root in SHARP_KEYS[bool(minor)] else FLAT_NAMES
+
+
+def key_name(root, minor):
+    return KEY_NAMES[bool(minor)][root]
+
+
+def spell_chord(name, names):
+    """A chord name written with these note names (Abm/Eb as G#m/D#)."""
+    match = CHORD_NAME.match(name)
+    if not match or match[1] not in PITCH_CLASS:
+        return name
+    bass = f'/{names[PITCH_CLASS[match[3]]]}' if match[3] in PITCH_CLASS else ''
+    return names[PITCH_CLASS[match[1]]] + match[2] + bass
+
+
+def tones_of(name):
+    """The pitch classes of a chord name, its slash bass included; None for no chord."""
+    match = CHORD_NAME.match(name)
+    if not match or match[1] not in PITCH_CLASS:
+        return None
+    root = PITCH_CLASS[match[1]]
+    tones = {(root + step) % 12 for step in RICH_SHAPES.get(match[2], RICH_SHAPES[''])}
+    if match[3] in PITCH_CLASS:
+        tones.add(PITCH_CLASS[match[3]])
+    return tones
+
+
+def key_bonus(key, amount=0.08, shapes=SHAPES):
     """Favors chords of the song's key, which settles major or minor when a stem barely plays the third."""
-    root, minor = song_key(chroma)
+    root, minor = key
     family = MINOR_FAMILY if minor else MAJOR_FAMILY
     fitting = {NOTES[(root + step) % 12] + suffix for step, suffix in family}
     bonus = []
@@ -237,35 +307,55 @@ def progression_path(chroma, melody, key_root, minor, beats, bar, weight=8, stay
     return [chords[index] for index in path]
 
 
-def chord_name(root, suffix):
-    return NOTES[root] + suffix
+def chord_name(root, suffix, names=NOTES):
+    return names[root] + suffix
 
 
-def fit_line(line, events, path, key_root, minor, beats, bar):
-    """Moves doubtful notes into the harmony: off-chord notes on strong beats, and notes outside scale and chord."""
-    scale = key_scale(key_root, minor)
-    fitted = []
-    for note in line:
-        frame = min(int(note['start'] / SECONDS), len(path) - 1)
-        tones = chord_tones(*path[frame])
-        position = float(np.interp(note['start'], beats, np.arange(len(beats))))
-        strong = abs(position - round(position)) < 0.15 and (round(position) - bar) % 2 == 0
-        sure = max((event[3] for event in events if event[2] == note['pitch'] and event[0] <= note['start'] + 0.05
-                    and event[1] >= note['start']), default=0)
-        pitch_class = note['pitch'] % 12
-        allowed = None
-        if strong and pitch_class not in tones and sure < SURE_NOTE:
-            allowed = tones
-        elif pitch_class not in tones and pitch_class not in scale:
-            allowed = tones | scale
-        if allowed:
-            # The nearest fitting pitch; on a tie, the one below.
-            moved = min((note['pitch'] + step for step in range(-6, 7) if (note['pitch'] + step) % 12 in allowed),
-                        key=lambda pitch: (abs(pitch - note['pitch']), pitch))
-            note = {**note, 'pitch': moved}
-        # How surely the note was heard, for choosing the clearest of repeated passages (dropped from the result).
-        fitted.append({**note, 'sure': sure})
-    return fitted
+def without_overtones(events):
+    """Events less what are overtones of a stronger note sounding as they start."""
+    kept = []
+    for event in events:
+        start, _, pitch, strength = event
+        if not any(other[2] == pitch - interval and other[0] <= start + 0.05 and other[1] >= start + 0.05 and other[3] >= strength
+                   for interval in OVERTONES for other in events):
+            kept.append(event)
+    return kept
+
+
+def chord_notes(events, chords, beats):
+    """Every note that belongs to the chord playing as it starts, snapped to sixteenths. Notes starting on the
+    same sixteenth are one chord on the staff: they share a written length, which lasts to the next chord when
+    the gap is short (playing style, not a rest)."""
+    starts = [chord['start'] for chord in chords]
+    heard = []
+    for event in events:
+        start, end, pitch, _ = event
+        index = bisect.bisect_right(starts, start + 0.05) - 1
+        tones = tones_of(chords[index]['name']) if index >= 0 else None
+        if tones and pitch >= LOWEST_CHORD_NOTE and end - start >= SHORTEST_CHORD_NOTE and pitch % 12 in tones:
+            heard.append(event)
+    if not heard:
+        return []
+    shift = grid_shift([{'start': event[0]} for event in heard], beats)
+    stacks = {}
+    for event in heard:
+        unit = max(0, round(grid_position(event[0], beats) - shift))
+        stack = stacks.setdefault(unit, {})
+        if event[2] not in stack or event[3] > stack[event[2]][3]:
+            stack[event[2]] = event
+    units = sorted(stacks)
+    notes = []
+    for index, unit in enumerate(units):
+        stack = sorted(stacks[unit].values(), key=lambda event: -event[3])[:MOST_AT_ONCE]
+        end = max(round(grid_position(event[1], beats) - shift) for event in stack)
+        following = units[index + 1] if index + 1 < len(units) else None
+        if following is not None and (end > following or following - end <= LEGATO_UNITS):
+            end = following
+        for start, finish, pitch, strength in sorted(stack, key=lambda event: event[2]):
+            # How surely the note was heard, for choosing the clearest of repeated passages (dropped from the result).
+            notes.append({'start': round(start, 2), 'end': round(finish, 2), 'pitch': pitch, 'unit': unit,
+                          'length': max(1, end - unit), 'sure': strength})
+    return notes
 
 
 def note_events(path):
@@ -304,7 +394,8 @@ def bass_notes(path, beats):
 
 
 def chord_changes(names, audible):
-    """Audible chord spans, ignoring any too brief to be a real change or to read while scrolling."""
+    """Audible chord spans, ignoring any too brief to be a real change or to read while scrolling. A long silence
+    and the end of the last chord are written as no chord."""
     spans = []
     for frame, name in enumerate(names):
         if not audible[frame]:
@@ -314,9 +405,16 @@ def chord_changes(names, audible):
         else:
             spans.append([frame, frame + 1, name])
     changes = []
+    heard_until = None
     for start, end, name in spans:
+        if heard_until is not None and (start - heard_until) * SECONDS >= SILENCE and changes[-1]['name'] != NO_CHORD:
+            changes.append({'start': round(heard_until * SECONDS, 2), 'name': NO_CHORD})
         if (end - start) * SECONDS >= SHORTEST_CHORD and (not changes or changes[-1]['name'] != name):
             changes.append({'start': round(start * SECONDS, 2), 'name': name})
+        if changes:
+            heard_until = end
+    if heard_until is not None and (len(names) - heard_until) * SECONDS >= SILENCE and changes[-1]['name'] != NO_CHORD:
+        changes.append({'start': round(heard_until * SECONDS, 2), 'name': NO_CHORD})
     return changes
 
 
@@ -416,7 +514,7 @@ def drum_part(activity, beats, path):
     return {'chords': [], 'notes': [], 'hits': fill_hihats(hits, shift, beats, hihat_band(path))}
 
 
-def slash_chords(chords, bass_chroma, bass_level, frames):
+def slash_chords(chords, bass_chroma, bass_level, frames, names=NOTES):
     """Writes the bass note under a chord (C/E) where the bass clearly plays a note other than the root."""
     audible = bass_level[:frames] > np.percentile(bass_level[:frames], 95) * 0.03
     named = []
@@ -425,19 +523,19 @@ def slash_chords(chords, bass_chroma, bass_level, frames):
         last = int(chords[index + 1]['start'] / SECONDS) if index + 1 < len(chords) else frames
         name = chord['name']
         span = slice(first, max(first + 1, min(last, frames)))
-        if audible[span].mean() > 0.5:
+        if name != NO_CHORD and audible[span].mean() > 0.5:
             mean = bass_chroma[:, span].mean(axis=1)
             low = int(mean.argmax())
-            root = NOTES.index(name[:2] if name[1:2] in ('#', 'b') else name[:1])
+            root = PITCH_CLASS[name[:2] if name[1:2] in ('#', 'b') else name[:1]]
             if low != root and mean[low] / max(mean.sum(), 1e-9) >= SLASH_SHARE:
-                name = f'{name}/{NOTES[low]}'
+                name = f'{name}/{names[low]}'
         named.append({'start': chord['start'], 'name': name})
     return named
 
 
 def ensemble_part(stems, names, chromas, levels, frames, loudest, floor, beats, bar):
-    """The harmonic stems heard together: one key, a chord progression that follows the key and the melody,
-    a melody and a second line, each note fitted to its chord where the detection is doubtful."""
+    """The harmonic stems heard together: one key, a chord progression that follows the key and the top line,
+    and every note played that belongs to its chord."""
     import soundfile
     import tempfile
     harmony = sum(normalized(chromas[name][:, :frames]) for name in names)
@@ -451,28 +549,17 @@ def ensemble_part(stems, names, chromas, levels, frames, loudest, floor, beats, 
     with tempfile.NamedTemporaryFile(suffix='.wav') as file:
         soundfile.write(file.name, mix / max(float(np.abs(mix).max()), 1e-6) * 0.95, rate)
         events = [event for event in note_events(file.name) if audible[min(int(event[0] / SECONDS), frames - 1)]]
+    events = without_overtones([event for event in events if event[3] >= ENSEMBLE_STRENGTH])
     melody = clear_line([event for event in events if event[2] >= MELODY_LOWEST], ENSEMBLE_STRENGTH)
-    second = clear_line(under(melody, [event for event in events if event[2] >= SECOND_LOWEST]), ENSEMBLE_STRENGTH)
-    root, minor = song_key(together)
+    root, minor = note_key(events) or song_key(together)
+    spelled = spelling(root, minor)
     path = progression_path(chroma, melody_chroma(melody, frames), root, minor, beats, bar)
-    chords = chord_changes([chord_name(*chord) for chord in path], audible)
+    chords = chord_changes([chord_name(*chord, spelled) for chord in path], audible)
     if 'bass' in chromas:
-        chords = slash_chords(chords, chromas['bass'], levels['bass'], frames)
-    melody = fit_line(melody, events, path, root, minor, beats, bar)
-    second = fit_line(second, events, path, root, minor, beats, bar)
+        chords = slash_chords(chords, chromas['bass'], levels['bass'], frames, spelled)
     # Repeated passages are written the same each time, from their clearest playing.
-    notes, second, chords, found = unify(note_values(melody, beats), note_values(second, beats), chords, beats, bar)
-    return {'key': f"{NOTES[root]}{'m' if minor else ''}", 'chords': chords, 'notes': notes, 'second': second, 'repeats': found}
-
-
-def under(line, events):
-    """Events that sound below the line at their start, or where the line is silent: what the second voice may use."""
-    kept = []
-    for event in events:
-        above = [note['pitch'] for note in line if note['start'] <= event[0] < note['end']]
-        if not above or event[2] < min(above):
-            kept.append(event)
-    return kept
+    notes, _, chords, found = unify(chord_notes(events, chords, beats), [], chords, beats, bar)
+    return {'key': key_name(root, minor), 'chords': chords, 'notes': notes, 'second': [], 'repeats': found}
 
 
 def normalized(chroma):
@@ -497,20 +584,25 @@ def analyze(stems, only=None, grid=None):
     loudest = np.max([levels[name][:frames] for name in harmonic_stems], axis=0)
     floor = np.percentile(loudest, 95) * 0.03
     together = sum(chromas[name][:, :frames] for name in harmonic_stems)
-    bonus = key_bonus(together)
     result = {}
-    if 'bass' in stems and only in (None, 'bass'):
-        # A bass mostly plays roots, so the other stems supply major or minor; it follows only the bass's sound.
-        bass_chroma = normalized(chromas['bass'][:, :frames]) + normalized(together)
-        audible = levels['bass'][:frames] > np.percentile(levels['bass'][:frames], 95) * 0.03
-        result['bass'] = {'chords': chord_changes(chord_path(bass_chroma, bonus), audible), 'notes': bass_notes(stems['bass'], beats)}
+    bass = 'bass' in stems and only in (None, 'bass')
+    plucks = bass_notes(stems['bass'], beats) if bass else None
     if grid:
         bar = grid['firstBar']
     else:
-        bar = first_bar(result['bass']['notes'], drum_units(drum_times(activity), beats)[0])
+        bar = first_bar(plucks, drum_units(drum_times(activity), beats)[0])
         result['drums'] = drum_part(activity, beats, stems['drums'])
     # The ensemble's chords change on bars, so it needs the bar found from bass and drums.
     ensemble = ensemble_part(stems, harmonic_stems, chromas, levels, frames, loudest, floor, beats, bar) if only is None else None
+    if bass:
+        # A bass mostly plays roots, so the other stems supply major or minor; it follows only the bass's sound.
+        # The key the ensemble's notes found is surer than the sound's, and names the chords the same way.
+        key = (PITCH_CLASS[ensemble['key'].rstrip('m')], int(ensemble['key'].endswith('m'))) if ensemble else song_key(together)
+        bass_chroma = normalized(chromas['bass'][:, :frames]) + normalized(together)
+        audible = levels['bass'][:frames] > np.percentile(levels['bass'][:frames], 95) * 0.03
+        names = spelling(*key)
+        chords = chord_changes(chord_path(bass_chroma, key_bonus(key)), audible)
+        result['bass'] = {'chords': [{**chord, 'name': spell_chord(chord['name'], names)} for chord in chords], 'notes': plucks}
     found = {'beats': [round(beat, 3) for beat in beats], 'firstBar': bar, 'stems': result}
     if ensemble:
         found['ensemble'] = ensemble

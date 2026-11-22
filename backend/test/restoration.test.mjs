@@ -539,14 +539,14 @@ test('harmony results from the old format are ignored, so they get redone', asyn
   });
   assert.equal((await call(parentId, undefined, 'GET')).body.job.harmony, undefined);
   assert.equal((await call(`${parentId}/harmony`, {})).status, 202);
-  assert.equal(database.get('owner', (await call(parentId, undefined, 'GET')).body.job.harmony.id).version, 9);
+  assert.equal(database.get('owner', (await call(parentId, undefined, 'GET')).body.job.harmony.id).version, 10);
   assert.equal(started.length, 1);
 });
 
 function regeneration() {
   const context = setup();
   const finished = (id, fields) => context.database.put({
-    userId: 'owner', jobId: id, type: 'harmony', version: 9, parentJobId: parentId, status: 'completed', title: 'Chords',
+    userId: 'owner', jobId: id, type: 'harmony', version: 10, parentJobId: parentId, status: 'completed', title: 'Chords',
     key: `users/owner/harmony/${parentId}/${id}.json`, generatedAt: new Date(Date.now() - 60000).toISOString(), ...fields,
   });
   finished(lyricsId);
@@ -946,15 +946,42 @@ print(json.dumps({'first': h.chord_name(*path[10]), 'last': h.chord_name(*path[1
   assert.ok(path.changes.every(frame => beatFrames.some(beat => Math.abs(beat - frame) <= 1)), JSON.stringify(path.changes));
 });
 
-test('doubtful notes move into the chord on strong beats, and out-of-key notes into key or chord', { skip: !hasHarmony }, () => {
-  const fitted = harmony(`line = [{'start': 0.0, 'end': 0.4, 'pitch': 62}, {'start': 1.0, 'end': 1.4, 'pitch': 62},
-        {'start': 0.75, 'end': 0.9, 'pitch': 66}, {'start': 1.25, 'end': 1.4, 'pitch': 62}]
-events = [(0.0, 0.4, 62, 0.4), (1.0, 1.4, 62, 0.9), (0.75, 0.9, 66, 0.4), (1.25, 1.4, 62, 0.4)]
-path = [(0, '')] * 40
+test('the key comes from the notes, and a clear third settles major or minor', { skip: !hasHarmony }, () => {
+  // E, B and F# most of all, like a power-chord riff: the profile leans to E major, but G is played and G# is not.
+  const [riff, major, none] = harmony(`riff = [(0, 4, 40, 1), (0, 1.5, 47, 1), (1, 2, 42, 1), (2, 2.8, 43, 1), (3, 3.5, 45, 1), (4, 6, 40, 1), (6, 6.4, 43, 1)]
+major = [(0, 2, 59, 1), (0, 2, 63, 1), (0, 2, 66, 1), (2, 3, 64, 1), (3, 4, 68, 1), (4, 5, 71, 1)]
+print(json.dumps([h.key_name(*h.note_key(riff)), h.key_name(*h.note_key(major)), h.note_key([])]))`);
+  assert.equal(riff, 'Em');
+  assert.equal(major, 'B');
+  assert.equal(none, null);
+});
+
+test('chords are named in the key: sharps in sharp keys, flats in flat keys', { skip: !hasHarmony }, () => {
+  const names = harmony(`print(json.dumps([h.spell_chord('Abm7/Eb', h.spelling(11, 0)), h.spell_chord('C#', h.spelling(5, 0)),
+  h.spell_chord('N.C.', h.SHARP_NAMES), h.key_name(8, 1), h.key_name(3, 1), sorted(h.tones_of('E/G#')), h.tones_of('N.C.')]))`);
+  assert.deepEqual(names, ['G#m7/D#', 'Db', 'N.C.', 'G#m', 'Ebm', [4, 8, 11], null]);
+});
+
+test('overtones go; every chord tone stays, written as one chord per sixteenth', { skip: !hasHarmony }, () => {
+  const notes = harmony(`events = [(0.0, 0.9, 52, 0.9), (0.0, 0.9, 64, 0.5), (0.0, 0.9, 71, 0.4), (0.01, 0.9, 56, 0.8),
+          (0.0, 0.9, 62, 0.8), (0.5, 0.9, 59, 0.7), (1.0, 1.4, 60, 0.9), (1.0, 1.4, 57, 0.6)]
+chords = [{'start': 0, 'name': 'E'}, {'start': 1.0, 'name': 'Am'}, {'start': 2.0, 'name': 'N.C.'}]
 beats = [i * 0.5 for i in range(10)]
-print(json.dumps([note['pitch'] for note in h.fit_line(line, events, path, 0, False, beats, 0)]))`);
-  // Weak D on beat 1 goes to C; a sure D stays; F# between beats leaves the key for F; D off the beat is a passing note.
-  assert.deepEqual(fitted, [60, 62, 65, 62]);
+clean = h.without_overtones(events)
+print(json.dumps([(n['unit'], n['length'], n['pitch']) for n in h.chord_notes(clean + [(2.5, 3, 60, 0.9)], chords, beats)]))`);
+  // E3's octave and twelfth are its overtones; D is not in E; E, G# and B ring; Am's A and C; nothing after N.C.
+  assert.deepEqual(notes, [[0, 4, 52], [0, 4, 56], [4, 4, 59], [8, 3, 57], [8, 3, 60]]);
+});
+
+test('a long silence and the end of the song are no chord', { skip: !hasHarmony }, () => {
+  const changes = harmony(`frames = 200
+names = ['C'] * 50 + ['G'] * 50 + ['F'] * 100
+audible = np.ones(frames, bool)
+audible[60:90] = False
+audible[150:] = False
+print(json.dumps([(c['name'], c['start']) for c in h.chord_changes(names, audible)]))`);
+  const seconds = frame => Math.round(frame * 2048 / 22050 * 100) / 100;
+  assert.deepEqual(changes, [['C', 0], ['G', seconds(50)], ['N.C.', seconds(60)], ['G', seconds(90)], ['F', seconds(100)], ['N.C.', seconds(150)]]);
 });
 
 // Repeated passages: a four-bar phrase played three times, the second time with two notes heard wrong.
