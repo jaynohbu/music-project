@@ -82,10 +82,9 @@ const LYRICS = {
   },
 };
 
-// One part keeps the song's grid. Other parts stay as chord context, and bass and drums only for themselves.
+// One part keeps the song's grid. Other stays as chord context for the bass, and the bass for other's slash chords.
 const harmonyStems = child => !child.stem ? HARMONY_STEMS
-  : child.stem === 'drums' ? ['drums']
-    : HARMONY_STEMS.filter(name => name !== 'drums' && (name !== 'bass' || child.stem === 'bass'));
+  : child.stem === 'drums' ? ['drums'] : ['other', 'bass'];
 
 // The whole score also chooses the live accompaniment, whose genre is heard with the vocals and the title.
 const HARMONY = {

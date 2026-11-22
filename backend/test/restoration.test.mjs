@@ -531,16 +531,28 @@ test('harmony worker records safe failures and saves nothing', async () => {
   }
 });
 
-test('harmony results from the old format are ignored, so they get redone', async () => {
+test('harmony results from an older version stay shown until a new run finishes', async () => {
   const { call, database, started } = setup();
   database.put({
-    userId: 'owner', jobId: lyricsId, type: 'harmony', parentJobId: parentId, status: 'completed', title: 'Chords',
-    key: `users/owner/harmony/${parentId}/${lyricsId}.json`, generatedAt: new Date().toISOString(),
+    userId: 'owner', jobId: lyricsId, type: 'harmony', parentJobId: parentId, status: 'completed', title: 'Chords', version: 9,
+    key: `users/owner/harmony/${parentId}/${lyricsId}.json`, generatedAt: new Date(Date.now() - 60000).toISOString(),
   });
-  assert.equal((await call(parentId, undefined, 'GET')).body.job.harmony, undefined);
+  const stale = (await call(parentId, undefined, 'GET')).body.job.harmony;
+  assert.equal(stale.id, lyricsId);
+  assert.equal(stale.status, 'completed', 'Older apps show it as it is');
+  assert.equal(stale.stale, true, 'Newer ones start a new run');
+  assert.ok(stale.url.endsWith(`${lyricsId}.json`));
   assert.equal((await call(`${parentId}/harmony`, {})).status, 202);
-  assert.equal(database.get('owner', (await call(parentId, undefined, 'GET')).body.job.harmony.id).version, 10);
+  const running = (await call(parentId, undefined, 'GET')).body.job.harmony;
+  assert.equal(database.get('owner', running.id).version, 10);
+  assert.equal(running.status, 'queued');
+  assert.equal(running.stale, undefined);
+  assert.equal(running.previous.id, lyricsId, 'The old score is shown while the new one is found');
+  assert.ok(running.previous.url.endsWith(`${lyricsId}.json`));
+  assert.equal((await call(`${parentId}/harmony`, {})).status, 200, 'Asking again does not start another run');
   assert.equal(started.length, 1);
+  database.put({ ...database.get('owner', running.id), status: 'completed' });
+  assert.equal((await call(parentId, undefined, 'GET')).body.job.harmony.previous, undefined);
 });
 
 function regeneration() {
@@ -558,8 +570,7 @@ test('regenerating one stem needs a finished song result and a harmonic stem', a
   const { call, started } = setup();
   assert.equal((await call(`${parentId}/harmony`, { stem: 'bass' })).status, 409);
   const { call: callDone } = regeneration();
-  // Other is the ensemble part, so it is not redone on its own.
-  for (const stem of ['vocals', 'kazoo', 1, 'other']) assert.equal((await callDone(`${parentId}/harmony`, { stem })).status, 400, String(stem));
+  for (const stem of ['vocals', 'kazoo', 1, 'guitar']) assert.equal((await callDone(`${parentId}/harmony`, { stem })).status, 400, String(stem));
   assert.equal(started.length, 0);
 });
 
@@ -583,6 +594,8 @@ test('regenerating starts only that stem, keeps the song result, and repeats saf
   assert.equal(job.harmony.stems.bass.status, 'queued');
   assert.equal(job.harmony.stems.drums.status, 'queued');
   assert.equal(job.harmony.stems.other, undefined);
+  assert.equal((await call(`${parentId}/harmony`, { stem: 'other', cleaned: false })).status, 202, 'Harmonic is redone alone too');
+  assert.equal((await call(parentId, undefined, 'GET')).body.job.harmony.stems.other.status, 'queued');
 });
 
 test('a failed regeneration reports its error and keeps the last good result of that stem', async () => {
@@ -618,7 +631,7 @@ test('regenerating from the cleaned version uses the newest finished cleanup of 
 });
 
 test('the worker for one stem reads its source and the song grid, and skips what it does not need', async () => {
-  for (const [stem, stemsRead] of [['other', ['other']], ['bass', ['other', 'bass']], ['drums', ['drums']]]) {
+  for (const [stem, stemsRead] of [['other', ['other', 'bass']], ['bass', ['other', 'bass']], ['drums', ['drums']]]) {
     let args;
     const { worker, input, database, storage, child } = harmonyCase(async (_python, given) => {
       args = given;

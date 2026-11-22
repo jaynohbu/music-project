@@ -417,12 +417,13 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
       : tasks.findingLyrics ? { label: t('tasks.findingLyrics') } : { label: t('tasks.lyrics'), onPress: tasks.findLyrics }
     : !parts ? tasks.findingChords ? { label: t('tasks.findingNotes') }
       : { label: t(name === 'drums' ? 'tasks.drumScore' : 'tasks.chordsMelody'), onPress: tasks.findChords, hint: t('tasks.findHint') }
+      : tasks.updatingChords ? { label: t('tasks.updatingNotes') }
       : regenerating ? { label: t('tasks.regenerating') }
         : !REGENERATED_STEMS.includes(name) ? null
           : { label: regenerateLabel(name), onPress: () => tasks.regenerate(name, cleaned),
             hint: t('tasks.regenerateFor', { action: regenerateLabel(name), stem: label }) };
   const failure = vocals ? tasks.lyricsFailure : tasks.chordsFailure ?? tasks.partFailure(name);
-  const note = vocals ? !tasks.lyrics && tasks.findingLyrics && t('tasks.lyricsNote') : (parts ? regenerating : tasks.findingChords) && t('tasks.chordsNote');
+  const note = vocals ? !tasks.lyrics && tasks.findingLyrics && t('tasks.lyricsNote') : (parts ? regenerating || tasks.updatingChords : tasks.findingChords) && t('tasks.chordsNote');
   return <View>
     {(action || printable) && <View style={styles.taskRow}>
       {action && <Pressable onPress={action.onPress} disabled={!action.onPress || disabled} accessibilityRole="button"

@@ -227,6 +227,7 @@ const es: Strings = {
   'tasks.findingLyrics': 'Buscando letra…',
   'tasks.autoChords': 'Buscando los acordes y la melodía en segundo plano. Tarda unos minutos; las partituras aparecerán aquí.',
   'tasks.findingNotes': 'Buscando notas…',
+  'tasks.updatingNotes': 'Actualizando notas…',
   'tasks.drumScore': 'Partitura de batería',
   'tasks.chordsMelody': 'Acordes y melodía',
   'tasks.ensembleNote': 'Tonalidad {key} · Guitarras, teclados y demás instrumentos escuchados juntos.',

@@ -227,6 +227,7 @@ const id: Strings = {
   'tasks.findingLyrics': 'Mencari lirik...',
   'tasks.autoChords': 'Sedang mencari akor dan melodi lagu ini di latar belakang. Butuh beberapa menit; partitur muncul di sini setelah selesai.',
   'tasks.findingNotes': 'Mencari not...',
+  'tasks.updatingNotes': 'Memperbarui not...',
   'tasks.drumScore': 'Notasi drum',
   'tasks.chordsMelody': 'Akor & melodi',
   'tasks.ensembleNote': 'Kunci {key} · Gitar, keyboard, dan instrumen lain didengar bersama.',

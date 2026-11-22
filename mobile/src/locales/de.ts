@@ -227,6 +227,7 @@ const de: Strings = {
   'tasks.findingLyrics': 'Songtext wird gesucht…',
   'tasks.autoChords': 'Akkorde und Melodie dieses Songs werden im Hintergrund ermittelt. Das dauert einige Minuten; die Noten erscheinen dann hier.',
   'tasks.findingNotes': 'Noten werden gesucht…',
+  'tasks.updatingNotes': 'Noten werden aktualisiert…',
   'tasks.drumScore': 'Schlagzeug-Noten',
   'tasks.chordsMelody': 'Akkorde & Melodie',
   'tasks.ensembleNote': 'Tonart {key} · Gitarren, Tasten und übrige Instrumente zusammen gehört.',

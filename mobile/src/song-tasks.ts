@@ -39,6 +39,8 @@ export function useSongTasks(initial: Song | null) {
   const alive = useRef(true);
   const loading = useRef({ lyrics: false, chords: false });
   const loadedParts = useRef(new Map<string, string>());
+  // The result whose scores are shown: the finished one, or the previous one while a new run goes.
+  const [loadedChords, setLoadedChords] = useState<string>();
   const jobId = initial?.jobId;
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
@@ -59,8 +61,9 @@ export function useSongTasks(initial: Song | null) {
     return () => clearInterval(timer);
   }, [busy, refresh]);
 
-  // The first time a split song is opened, its chords and melody are found in the background.
-  const needsChords = !!jobId && song?.status === 'completed' && !song.harmony;
+  // The first time a split song is opened, its chords and melody are found in the background; a score from an
+  // older analysis version is redone the same way, and shown meanwhile.
+  const needsChords = !!jobId && song?.status === 'completed' && (!song.harmony || !!song.harmony.stale);
   useEffect(() => {
     if (!needsChords || !jobId || autoRequested.has(jobId)) return;
     autoRequested.add(jobId);
@@ -79,20 +82,25 @@ export function useSongTasks(initial: Song | null) {
       .finally(() => { loading.current.lyrics = false; });
   }, [lyricsUrl, lyrics, lyricsLoadError]);
 
-  const chordsUrl = song?.harmony?.url;
+  const shown = song?.harmony?.status === 'completed' ? song.harmony : song?.harmony?.previous;
+  const chordsUrl = shown?.url, chordsId = shown?.id;
   useEffect(() => {
-    if (!chordsUrl || parts || loading.current.chords || chordsLoadError) return;
+    if (!chordsUrl || chordsId === loadedChords || loading.current.chords || chordsLoadError) return;
     loading.current.chords = true;
     fetchResult<HarmonyGrid & { stems: Record<string, HarmonyPart>; ensemble?: HarmonyPart }>(chordsUrl, 'Chords')
       .then(({ stems, ensemble, beats, firstBar }) => {
         if (!alive.current) return;
+        // A newer result replaces the shown one, regenerated parts included.
+        loadedParts.current.clear();
+        setPartLoadErrors({});
+        setLoadedChords(chordsId);
         setGrid({ beats, firstBar });
         // The ensemble part is other's score.
         setParts(ensemble ? { ...stems, ...Object.fromEntries(ENSEMBLE_STEMS.map(name => [name, ensemble])) } : stems);
       })
       .catch(failure => { if (alive.current) setChordsLoadError(t('tasks.loadChordsFailed', { error: errorText(failure) })); })
       .finally(() => { loading.current.chords = false; });
-  }, [chordsUrl, parts, chordsLoadError]);
+  }, [chordsUrl, chordsId, loadedChords, chordsLoadError]);
 
   // A regenerated stem replaces just that stem's part, once per result.
   const regenerated = song?.harmony?.stems;
@@ -109,10 +117,12 @@ export function useSongTasks(initial: Song | null) {
           if (alive.current) setPartLoadErrors(errors => ({ ...errors, [name]: t('tasks.loadPartFailed', { error: errorText(failure) }) }));
         });
     }
-  }, [hasParts, regenerated, partLoadErrors]);
+  }, [hasParts, loadedChords, regenerated, partLoadErrors]);
 
   const findingLyrics = startingLyrics || (!!song?.lyrics && song.lyrics.status !== 'failed' && !lyricsLoadError);
-  const findingChords = startingChords || (!!song?.harmony && song.harmony.status !== 'failed' && !chordsLoadError);
+  const findingChords = startingChords || (!!song?.harmony && !song.harmony.stale && song.harmony.status !== 'failed' && !chordsLoadError);
+  // A new score is being found while the previous one is shown.
+  const updatingChords = !!parts && findingChords && song?.harmony?.status !== 'completed';
   const regenerating = (name: string) => startingParts.includes(name) || running(song?.harmony?.stems?.[name]?.status);
   // The same rules as the website: a stem is cleaning from the tap until its restoration fails.
   const cleaning = (name: string) => startingClean.includes(name) ||
@@ -126,7 +136,7 @@ export function useSongTasks(initial: Song | null) {
   };
 
   return {
-    song, lyrics, grid, parts, error, findingLyrics, findingChords, regenerating, cleaning,
+    song, lyrics, grid, parts, error, findingLyrics, findingChords, updatingChords, regenerating, cleaning,
     cleanFailure: (name: string) => cleaning(name) ? undefined
       : song?.restorations?.find(item => item.stem === name && item.status === 'failed')?.error,
     clean(name: StemName) {

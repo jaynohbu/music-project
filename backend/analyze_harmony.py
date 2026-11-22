@@ -593,7 +593,10 @@ def analyze(stems, only=None, grid=None):
         bar = first_bar(plucks, drum_units(drum_times(activity), beats)[0])
         result['drums'] = drum_part(activity, beats, stems['drums'])
     # The ensemble's chords change on bars, so it needs the bar found from bass and drums.
-    ensemble = ensemble_part(stems, harmonic_stems, chromas, levels, frames, loudest, floor, beats, bar) if only is None else None
+    ensemble = ensemble_part(stems, harmonic_stems, chromas, levels, frames, loudest, floor, beats, bar) if only in (None, 'other') else None
+    if only == 'other':
+        # Redone alone, the ensemble is other's part on the song's grid.
+        result['other'] = ensemble
     if bass:
         # A bass mostly plays roots, so the other stems supply major or minor; it follows only the bass's sound.
         # The key the ensemble's notes found is surer than the sound's, and names the chords the same way.
@@ -604,7 +607,7 @@ def analyze(stems, only=None, grid=None):
         chords = chord_changes(chord_path(bass_chroma, key_bonus(key)), audible)
         result['bass'] = {'chords': [{**chord, 'name': spell_chord(chord['name'], names)} for chord in chords], 'notes': plucks}
     found = {'beats': [round(beat, 3) for beat in beats], 'firstBar': bar, 'stems': result}
-    if ensemble:
+    if ensemble and only is None:
         found['ensemble'] = ensemble
     return found
 

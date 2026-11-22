@@ -141,6 +141,8 @@ The user found the Harmonic score's melody and key not caught well, and the acco
 - **Key:** from the notes heard (duration × strength per pitch class) with the Krumhansl-Schmuckler profiles; where the third on the same root clearly says the other mode (twice as much), it wins. The spectrum's key remains the fallback. Enter Sandman: G 8.3% against G# 1.1% gives Em. The bass's chords now use this key, and every chord is spelled in the key (sharps in G, D, A, E, B, F#, Em, Bm, F#m, C#m, G#m; flats in F, Bb, Eb, Ab, Db, Dm, Gm, Cm, Fm, Bbm, Ebm; C and Am keep the mixed names).
 - **Ends:** a silence of the harmonic stems of 2 s or more, and the end of the last chord, are written as no chord (`N.C.`). Comping strikes nothing there, so the rhythm parts stop with the song; before, the last chord had no end and was struck to the end of the file.
 - **Melody + chords parts** now play the score as written (every chord tone heard, at its own start and length), without comping under it.
+- **Scores stay while they are redone:** a version change used to hide every song's scores until it was analysed again (the user saw them vanish). Now the last finished result of any version is returned as the result marked `stale` (older apps show it; newer app and website start a new run), and while a run goes it comes as `previous`, shown with "Updating notes…" until the new one replaces it (regenerated parts and added accompaniment parts follow).
+- **Harmonic regenerates alone:** `stem: 'other'` runs the ensemble on the song's grid with the bass for slash chords (`--only other`), written as the other part; same once-per-source rule as bass and drums.
 
 ### Live accompaniment (2026-11-22, website first; harmony version 9)
 
@@ -172,7 +174,7 @@ The user found the per-stem scores of guitar, piano and other torn apart and har
 - **Chords:** triads plus 7, maj7, m7, sus2, sus4, add9, dim, aug, and slash chords where the bass plays another chord tone (C/E). Richer chords must beat a triad by a margin, so plain chords stay plain. Inner voices are expressed by these chord names, not written as notes.
 - **Lines:** the melody is the highest clear voice from G3 up; the second line is the highest voice under it from C3 up (a counter-melody or the top of the accompaniment). Notes need strength 0.35 (stems alone use 0.5). Stairway: melody coverage 64% → 79%, second line 71%.
 - **Drums:** pattern letters (A, B…) are no longer written; they looked like chord names. Missing hi-hats inside a steady pattern are filled when the hi-hat band (6–16 kHz, read every 3 ms) shows a hit within **12% of the slot's note length**, at least half as strong as the hi-hats around it (a snare on the same sixteenth must reach a full hi-hat's level). Stairway: 580 detected, 39 filled. The user first said 10%, then 5%; 12% was recommended because players drift 10–20 ms, and a comparison at 8/12/16% can be shown on request.
-- **Regeneration:** only bass and drums can be redone alone; the ensemble is redone with the whole song.
+- **Regeneration:** only bass and drums can be redone alone; the ensemble is redone with the whole song. (Since version 10 Harmonic can be redone alone too.)
 - **Automatic:** opening a completed song with no current result (app or website) asks for it once in the background and shows a status line. A failed run is left for the button. Older results (versions 3 and 4) are ignored, so songs are re-analysed on first open.
 - A local run on Stairway takes about 78 s on this Mac.
 

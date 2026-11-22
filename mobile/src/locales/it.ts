@@ -227,6 +227,7 @@ const it: Strings = {
   'tasks.findingLyrics': 'Ricerca del testo...',
   'tasks.autoChords': 'Ricerca di accordi e melodia in background. Richiede qualche minuto; gli spartiti appariranno qui.',
   'tasks.findingNotes': 'Ricerca delle note...',
+  'tasks.updatingNotes': 'Aggiornamento delle note...',
   'tasks.drumScore': 'Partitura di batteria',
   'tasks.chordsMelody': 'Accordi e melodia',
   'tasks.ensembleNote': 'Tonalità {key} · Chitarre, tastiere e altri strumenti ascoltati insieme.',

@@ -29,14 +29,15 @@ function checkEditedLyrics(lines, duration) {
   }
 }
 
-// Other is the ensemble part, read with the whole song, so only bass and drums are redone on their own.
-const REGENERATED_STEMS = ['bass', 'drums'];
-const NOT_REGENERABLE = 'Choose bass or drums to regenerate.';
+// Each part can be redone on its own on the song's grid; other (Harmonic) hears the bass for its slash chords.
+const REGENERATED_STEMS = ['other', 'bass', 'drums'];
+const NOT_REGENERABLE = 'Choose Harmonic, bass or drums to regenerate.';
 
-async function visibleRecords(type, parent, database) {
+// Every version's records by default; `current` keeps the analysis's present version only.
+async function visibleRecords(type, parent, database, current = true) {
   const now = Date.now();
   return (await childRecords(parent, type, database))
-    .filter(item => item.version === ANALYSES[type].version)
+    .filter(item => !current || item.version === ANALYSES[type].version)
     .map(item => visibleJob(item, now)).filter(item => !failedHistoryExpired(item, now))
     .sort((a, b) => b.generatedAt.localeCompare(a.generatedAt));
 }
@@ -59,12 +60,19 @@ async function regeneratedParts(records, signer, storage) {
   return Object.keys(parts).length ? { stems: parts } : {};
 }
 
-// A song has one result of each type, plus any regenerated parts.
+// A song has one result of each type, plus any regenerated parts. Until a run of the present version has
+// finished, the last finished result of any version is still shown: as `previous` while one runs, or, when
+// none has run yet, as the result itself marked `stale` (older apps show it; newer ones start a new run).
 export async function currentAnalysis(type, parent, { database, signer, storage }) {
   const records = await visibleRecords(type, parent, database);
   const item = newestWorking(records.filter(record => !record.stem));
-  if (!item) return undefined;
-  return { ...(await publicAnalysis(item, signer, storage)), ...(await regeneratedParts(records, signer, storage)) };
+  const finished = item?.status === 'completed' ? undefined : (await visibleRecords(type, parent, database, false))
+    .find(record => !record.stem && record.status === 'completed' && record.key);
+  if (!item) return finished && { ...(await publicAnalysis(finished, signer, storage)), stale: true };
+  return {
+    ...(await publicAnalysis(item, signer, storage)), ...(await regeneratedParts(records, signer, storage)),
+    ...(finished ? { previous: await publicAnalysis(finished, signer, storage) } : {}),
+  };
 }
 
 async function publicAnalysis(item, signer, storage) {
@@ -147,6 +155,7 @@ export function createAnalysisRoutes({ database, storage, orchestrator, signer }
         return reply(200, { [type]: (await regeneratedParts(records, signer, storage)).stems[stem] });
       }
     } else if (whole && whole.status !== 'failed') {
+      // Present-version runs only: a stale result is redone.
       return reply(200, { [type]: await currentAnalysis(type, parent, { database, signer, storage }) });
     }
     const now = Date.now();

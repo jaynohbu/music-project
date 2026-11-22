@@ -388,6 +388,8 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
       }
       @if (job()?.status === 'completed' && findingChords() && !harmonyParts()) {
         <p role="status" class="task-status">Finding this song's chords and melody in the background. It takes a few minutes; the scores appear here when ready.</p>
+      } @else if (job()?.status === 'completed' && updatingChords()) {
+        <p role="status" class="task-status">Updating this song's scores in the background. The previous scores stay here until the new ones are ready.</p>
       }
       @if (job()?.status === 'completed') {
         @if (sceneEntry) {
@@ -452,7 +454,7 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                         aria-label="Find chords and melody for other and bass, and the drum score">{{ track.name === 'drums' ? 'Drum score' : 'Chords & melody' }}</button>
                     }
                   }
-                  @if (isRegenerable(track.name) && harmonyParts()) {
+                  @if (isRegenerable(track.name) && harmonyParts() && !updatingChords()) {
                     @if (regenerating(track.name)) {
                       <button type="button" class="secondary" disabled>Regenerating...</button>
                     } @else {
@@ -848,6 +850,8 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   private readonly startingParts = signal<string[]>([]);
   private readonly partLoadErrors = signal<Record<string, string>>({});
   private readonly loadedParts = new Map<string, string>();
+  // The result whose scores are shown: the finished one, or the previous one while a new run goes.
+  private loadedChords?: string;
 
   readonly lyricsNote = 'Converting voice to text takes time. The timing may not match well at first but improves when reloaded. You can edit the text later.';
   readonly chordsNote = 'Converting to chords and melody takes time, and the result is not the same as the original.';
@@ -1315,7 +1319,13 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
 
   findingChords(): boolean {
     const harmony = this.job()?.harmony;
-    return this.startingChords() || (!!harmony && harmony.status !== 'failed' && !this.chordsLoadError());
+    return this.startingChords() || (!!harmony && !harmony.stale && harmony.status !== 'failed' && !this.chordsLoadError());
+  }
+
+  // A new score is being found while the previous one is shown.
+  updatingChords(): boolean {
+    const harmony = this.job()?.harmony;
+    return !!this.harmonyParts() && (this.startingChords() || (!!harmony && !harmony.stale && harmony.status !== 'completed' && harmony.status !== 'failed'));
   }
 
   chordsFailure(): string | undefined {
@@ -1344,8 +1354,10 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   }
 
   private async loadChords(job: Job, generation: number): Promise<void> {
-    const url = job.harmony?.url;
-    if (!url || this.harmonyParts() || this.chordsLoading || this.chordsLoadError()) return;
+    const harmony = job.harmony;
+    const shown = harmony?.status === 'completed' ? harmony : harmony?.previous;
+    const url = shown?.url;
+    if (!url || this.loadedChords === shown.id || this.chordsLoading || this.chordsLoadError()) return;
     this.chordsLoading = true;
     try {
       const response = await fetch(url);
@@ -1354,11 +1366,17 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
         stems: Record<string, HarmonyPart>; ensemble?: HarmonyPart; accompaniment?: AccompanimentChoices;
       };
       if (!this.destroyed && generation === this.generation) {
+        // A newer result replaces the shown one, regenerated parts included.
+        this.loadedChords = shown.id;
+        this.loadedParts.clear();
+        this.partLoadErrors.set({});
         this.harmonyGrid.set({ beats, firstBar });
         this.accompanimentChoices.set(accompaniment);
         // The ensemble part is other's score.
         this.harmonyParts.set(ensemble ? { ...stems, ...Object.fromEntries(ENSEMBLE_STEMS.map(name => [name, ensemble])) } : stems);
         void this.loadParts(generation);
+        // Parts already added play the new score.
+        for (const part of this.accompaniments()) void this.prepareAccompaniment(part.id);
       }
     } catch (error) {
       if (!this.destroyed && generation === this.generation) {
@@ -1420,6 +1438,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
         const { stems } = await response.json() as { stems: Record<string, HarmonyPart> };
         if (!this.destroyed && generation === this.generation) {
           this.harmonyParts.update(current => current && { ...current, [name]: stems[name] });
+          if (name === 'other') for (const part of this.accompaniments()) void this.prepareAccompaniment(part.id);
         }
       } catch (error) {
         this.loadedParts.delete(name);
@@ -1713,6 +1732,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     this.startingParts.set([]);
     this.partLoadErrors.set({});
     this.loadedParts.clear();
+    this.loadedChords = undefined;
     this.polling = false;
   }
 
@@ -1731,7 +1751,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
       this.error.set('');
       // The first time a split song is opened, its chords and melody are found in the background, once per
       // song while the page is open. A failed run is not retried by itself; the button does that.
-      if (job.status === 'completed' && !job.harmony && !autoRequested.has(job.jobId)) {
+      if (job.status === 'completed' && (!job.harmony || job.harmony.stale) && !autoRequested.has(job.jobId)) {
         autoRequested.add(job.jobId);
         setTimeout(() => void this.findChords());
       }

@@ -328,7 +328,9 @@ export interface Lyrics {
   error?: string;
 }
 export interface RegeneratedPart extends Lyrics { resultId?: string }
-export interface Harmony extends Lyrics { stems?: Record<string, RegeneratedPart | undefined> }
+// `stale`: from an older analysis version, shown until a new run finishes. `previous`: the last finished result,
+// shown while this one runs.
+export interface Harmony extends Lyrics { stems?: Record<string, RegeneratedPart | undefined>; stale?: boolean; previous?: Lyrics }
 export interface LyricWord { start: number; end: number; text: string }
 export interface LyricLine { start: number; end: number; words: LyricWord[] }
 export type DrumName = 'kick' | 'snare' | 'tom' | 'hihat' | 'cymbal';
@@ -347,7 +349,7 @@ export interface HarmonyGrid { beats: number[]; firstBar: number }
 export const HARMONY_STEMS: readonly string[] = ['other', 'bass', 'drums'];
 export const ENSEMBLE_STEMS: readonly string[] = ['other'];
 // The ensemble is found with the whole song; only bass and drums can be redone on their own.
-export const REGENERATED_STEMS: readonly string[] = ['bass', 'drums'];
+export const REGENERATED_STEMS: readonly string[] = ['other', 'bass', 'drums'];
 export interface StemUploadRequest {
   job: Job;
   upload: { url: string; fields: Record<string, string> };

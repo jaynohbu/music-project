@@ -226,6 +226,7 @@ const en = {
   'tasks.findingLyrics': 'Finding lyrics...',
   'tasks.autoChords': 'Finding this song\'s chords and melody in the background. It takes a few minutes; the scores appear here when ready.',
   'tasks.findingNotes': 'Finding notes...',
+  'tasks.updatingNotes': 'Updating notes...',
   'tasks.drumScore': 'Drum score',
   'tasks.chordsMelody': 'Chords & melody',
   'tasks.ensembleNote': 'Key {key} · Guitars, keys and the other instruments, heard together.',

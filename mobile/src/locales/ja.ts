@@ -227,6 +227,7 @@ const ja: Strings = {
   'tasks.findingLyrics': '歌詞を検出中...',
   'tasks.autoChords': 'この曲のコードとメロディーをバックグラウンドで解析しています。数分かかり、終わると譜面がここに表示されます。',
   'tasks.findingNotes': '音符を検出中...',
+  'tasks.updatingNotes': '楽譜を更新中...',
   'tasks.drumScore': 'ドラム譜',
   'tasks.chordsMelody': 'コードとメロディー',
   'tasks.ensembleNote': 'キー {key} · ギター、キーボード、その他の楽器をまとめて聴き取った譜面です。',
