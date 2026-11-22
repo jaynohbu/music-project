@@ -48,13 +48,21 @@ function checkEnsemble(ensemble, duration) {
     (ensemble.second === undefined || checkNotes(ensemble.second, duration)));
 }
 
+// Optional: the genre and, per family, styles and sounds ranked closest first.
+function checkAccompaniment(value) {
+  if (value === undefined) return true;
+  const ranked = part => part && Array.isArray(part.styles) && part.styles.every(name => typeof name === 'string')
+    && Array.isArray(part.sounds) && part.sounds.every(Number.isInteger);
+  return typeof value === 'object' && typeof value.genre === 'string' && ranked(value.guitar) && ranked(value.keys);
+}
+
 export function checkHarmony(value, duration) {
   const parts = value?.stems && Object.values(value.stems);
   const beats = value?.beats;
   if (!Array.isArray(beats) || beats.length < 2 || !beats.every((beat, index) => Number.isFinite(beat) && (!index || beat > beats[index - 1])) ||
       ![0, 1, 2, 3].includes(value.firstBar) ||
       !parts?.length || !parts.every(part => checkChords(part.chords, duration) && checkNotes(part.notes, duration) && checkDrums(part)) ||
-      !checkEnsemble(value.ensemble, duration)) {
+      !checkEnsemble(value.ensemble, duration) || !checkAccompaniment(value.accompaniment)) {
     throw new Error('Invalid harmony.');
   }
   return value;
@@ -79,11 +87,12 @@ const harmonyStems = child => !child.stem ? HARMONY_STEMS
   : child.stem === 'drums' ? ['drums']
     : HARMONY_STEMS.filter(name => name !== 'drums' && (name !== 'bass' || child.stem === 'bass'));
 
+// The whole score also chooses the live accompaniment, whose genre is heard with the vocals and the title.
 const HARMONY = {
-  type: 'harmony', code: 'HARMONY', stems: harmonyStems, check: checkHarmony,
-  command: (files, output, child) => ['analyze_harmony.py', output,
+  type: 'harmony', code: 'HARMONY', stems: child => child.stem ? harmonyStems(child) : [...HARMONY_STEMS, 'vocals'], check: checkHarmony,
+  command: (files, output, child, parent) => ['analyze_harmony.py', output,
     ...harmonyStems(child).flatMap(name => ['--stem', `${name}=${files[name]}`]),
-    ...(child.stem ? ['--only', child.stem, '--grid', files.base] : [])],
+    ...(child.stem ? ['--only', child.stem, '--grid', files.base] : ['--vocals', files.vocals, '--title', parent.title ?? ''])],
   messages: {
     download: 'Unable to read the stems. Please try again.',
     analyze: 'Chord analysis failed. Please try again.',
@@ -145,7 +154,7 @@ function createAnalysisWorker(analysis, {
       if (child.baseKey) await download('base', child.baseKey, 'json');
       stage = 'analyze';
       const output = path.join(directory, 'result.json');
-      const [script, ...args] = analysis.command(files, output, child);
+      const [script, ...args] = analysis.command(files, output, child, parent);
       await run(pythonPath, [fileURLToPath(new URL(`./${script}`, import.meta.url)), ...args],
         { timeout: Math.max(1000, stemDeadline(child) - Date.now() - 60000), maxBuffer: 16 * 1024 * 1024 });
       stage = 'validate';

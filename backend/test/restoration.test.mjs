@@ -503,9 +503,13 @@ test('harmony worker reads its stems, passes them by name, and writes only its k
   const saved = database.get('owner', lyricsId);
   assert.equal(saved.status, 'completed', saved.error);
   assert.ok(args[0].endsWith('analyze_harmony.py'));
-  assert.deepEqual(args.slice(2).filter(item => item !== '--stem').map(item => item.split('=')[0]), ['other', 'bass', 'drums']);
+  const stems = args.slice(2, args.indexOf('--vocals'));
+  assert.deepEqual(stems.filter(item => item !== '--stem').map(item => item.split('=')[0]), ['other', 'bass', 'drums']);
+  // The vocals and title go only to the accompaniment's genre, not to the score.
+  assert.ok(args[args.indexOf('--vocals') + 1].endsWith('vocals.wav'));
+  assert.equal(args[args.indexOf('--title') + 1], 'Song');
   assert.deepEqual(storage.calls.map(call => [call.kind, call.key]), [
-    ...['other', 'bass', 'drums'].map(name => ['GetObjectCommand', stemKey(name)]), ['PutObjectCommand', child.key],
+    ...['other', 'bass', 'drums', 'vocals'].map(name => ['GetObjectCommand', stemKey(name)]), ['PutObjectCommand', child.key],
   ]);
 });
 
@@ -535,14 +539,14 @@ test('harmony results from the old format are ignored, so they get redone', asyn
   });
   assert.equal((await call(parentId, undefined, 'GET')).body.job.harmony, undefined);
   assert.equal((await call(`${parentId}/harmony`, {})).status, 202);
-  assert.equal(database.get('owner', (await call(parentId, undefined, 'GET')).body.job.harmony.id).version, 7);
+  assert.equal(database.get('owner', (await call(parentId, undefined, 'GET')).body.job.harmony.id).version, 9);
   assert.equal(started.length, 1);
 });
 
 function regeneration() {
   const context = setup();
   const finished = (id, fields) => context.database.put({
-    userId: 'owner', jobId: id, type: 'harmony', version: 7, parentJobId: parentId, status: 'completed', title: 'Chords',
+    userId: 'owner', jobId: id, type: 'harmony', version: 9, parentJobId: parentId, status: 'completed', title: 'Chords',
     key: `users/owner/harmony/${parentId}/${id}.json`, generatedAt: new Date(Date.now() - 60000).toISOString(), ...fields,
   });
   finished(lyricsId);
@@ -728,6 +732,10 @@ test('bars start from the backbeat, with low notes telling beat 1 from beat 3', 
 
 test('harmony values must be real notes inside the song', () => {
   assert.equal(checkHarmony(goodHarmony, 2), goodHarmony);
+  // The accompaniment's choices are optional, but when present they are ranked names and sounds.
+  const choices = { genre: 'rock', genres: [['rock', 0.5]], guitar: { styles: ['Rock128'], sounds: [29, 30] }, keys: { styles: [], sounds: [0] } };
+  assert.ok(checkHarmony({ ...goodHarmony, accompaniment: choices }, 2));
+  assert.throws(() => checkHarmony({ ...goodHarmony, accompaniment: { ...choices, keys: { styles: [1], sounds: [] } } }, 2), /Invalid harmony/);
   const withGuitar = part => ({ beats: [0, 1], firstBar: 0, stems: { guitar: { chords: [], notes: [], ...part } } });
   const good = { start: 0, end: 1, pitch: 60, unit: 0, length: 4 };
   assert.ok(checkHarmony(withGuitar({ notes: [good] }), 2));

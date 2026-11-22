@@ -72,6 +72,8 @@ export interface SceneSettings {
   live?: SceneLive;
   // Key change in semitones, -6 to +6; scenes saved before it have none.
   transpose?: number;
+  // Parts the website plays live from the Harmonic score; the app keeps them as they are.
+  accompaniment?: { kind: string; style: string; sound: number; volume: number; muted: boolean }[];
 }
 export interface SceneEntry { id: string; jobId: string; title?: string; settings?: SceneSettings }
 export interface Scene { id: string; name: string; revision: number; entries: SceneEntry[]; createdAt: string }

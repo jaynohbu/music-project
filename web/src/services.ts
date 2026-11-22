@@ -258,8 +258,14 @@ export interface SceneSettings {
   tracks: Record<string, SceneTrackSettings>;
   // The app's live-input mix for this entry. The website has no live input and passes it through unchanged.
   live?: Record<string, number | boolean>;
-  // The app's key change in semitones; the website plays at the original key and passes it through.
+  // The key change in semitones.
   transpose?: number;
+  // Parts played live from the Harmonic score, with their style, sound and mix.
+  accompaniment?: SceneAccompaniment[];
+}
+export interface SceneAccompaniment {
+  kind: 'guitar-rhythm' | 'keys-rhythm' | 'guitar-melody' | 'keys-melody';
+  style: string; sound: number; volume: number; muted: boolean;
 }
 export interface SceneEntry {
   id: string;

@@ -33,6 +33,10 @@ const LIVE_KEY = 'live';
 // The app's key change in semitones; part of the entry's mix like the faders.
 const TRANSPOSE_KEY = 'transpose';
 const MAX_TRANSPOSE = 6;
+// Parts played live from the Harmonic score (the website's accompaniment): which part, style, sound and mix.
+const ACCOMPANIMENT_KEY = 'accompaniment';
+export const ACCOMPANIMENT_KINDS = ['guitar-rhythm', 'keys-rhythm', 'guitar-melody', 'keys-melody'];
+const MAX_ACCOMPANIMENT = 4;
 
 export class SceneInputError extends Error {
   constructor(message, statusCode = 400) { super(message); this.name = 'SceneInputError'; this.statusCode = statusCode; }
@@ -77,7 +81,7 @@ function track(value, at, flags = TRACK_FLAGS) {
 
 export function sceneSettings(value, duration, path = 'settings') {
   if (!isObject(value)) fail(`${path} must be an object.`);
-  const { [LIVE_KEY]: live, [TRANSPOSE_KEY]: transpose, ...rest } = value;
+  const { [LIVE_KEY]: live, [TRANSPOSE_KEY]: transpose, [ACCOMPANIMENT_KEY]: accompaniment, ...rest } = value;
   exactKeys(rest, SETTINGS_KEYS, path);
   const limit = Number.isFinite(duration) && duration > 0 ? duration : STEM_MAX_DURATION;
   number(value.masterVolume, `${path}.masterVolume`, 0, 100);
@@ -96,7 +100,24 @@ export function sceneSettings(value, duration, path = 'settings') {
     if (!Number.isInteger(transpose)) fail(`${path}.${TRANSPOSE_KEY} must be a whole number of semitones.`);
     result[TRANSPOSE_KEY] = number(transpose, `${path}.${TRANSPOSE_KEY}`, -MAX_TRANSPOSE, MAX_TRANSPOSE);
   }
+  if (accompaniment !== undefined) result[ACCOMPANIMENT_KEY] = accompanimentParts(accompaniment, `${path}.${ACCOMPANIMENT_KEY}`);
   return result;
+}
+
+function accompanimentParts(value, path) {
+  if (!Array.isArray(value) || value.length > MAX_ACCOMPANIMENT) fail(`${path} must be a list of up to ${MAX_ACCOMPANIMENT} parts.`);
+  return value.map((part, index) => {
+    const at = `${path}[${index}]`;
+    if (!isObject(part)) fail(`${at} must be an object.`);
+    exactKeys(part, ['kind', 'style', 'sound', 'volume', 'muted'], at);
+    if (!ACCOMPANIMENT_KINDS.includes(part.kind)) fail(`${at}.kind is not a known part.`);
+    if (typeof part.style !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(part.style)) fail(`${at}.style must be a style name.`);
+    if (!Number.isInteger(part.sound)) fail(`${at}.sound must be a sound number.`);
+    number(part.sound, `${at}.sound`, 0, 127);
+    number(part.volume, `${at}.volume`, 0, 100);
+    if (typeof part.muted !== 'boolean') fail(`${at}.muted must be true or false.`);
+    return { kind: part.kind, style: part.style, sound: part.sound, volume: part.volume, muted: part.muted };
+  });
 }
 
 // Shape-only validation; song ownership and duration checks happen against the table.

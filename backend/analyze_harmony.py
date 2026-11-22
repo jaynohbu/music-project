@@ -7,6 +7,7 @@ Output is approximate."""
 import argparse
 import json
 import os
+import sys
 
 import librosa
 import numpy as np
@@ -522,11 +523,22 @@ if __name__ == '__main__':
     parser.add_argument('--stem', action='append', required=True, metavar='NAME=FILE')
     parser.add_argument('--only')
     parser.add_argument('--grid')
+    parser.add_argument('--vocals')
+    parser.add_argument('--title', default='')
     arguments = parser.parse_args()
     grid = None
     if arguments.grid:
         with open(arguments.grid, encoding='utf-8') as file:
             grid = json.load(file)
-    found = analyze(dict(item.split('=', 1) for item in arguments.stem), arguments.only, grid)
+    stems = dict(item.split('=', 1) for item in arguments.stem)
+    found = analyze(stems, arguments.only, grid)
+    if arguments.only is None and 'other' in stems:
+        # The accompaniment's choices are a bonus: the score stands without them.
+        try:
+            from accompaniment import choose
+            heard = {**stems, **({'vocals': arguments.vocals} if arguments.vocals else {})}
+            found['accompaniment'] = choose(heard, found['beats'], found['firstBar'], arguments.title)
+        except Exception as error:  # noqa: BLE001
+            print('Accompaniment choice failed:', error, file=sys.stderr)
     with open(arguments.output, 'w', encoding='utf-8') as file:
         json.dump(found, file)

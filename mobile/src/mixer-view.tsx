@@ -62,10 +62,13 @@ function MountedMixer({ jobId, title, entry, onSettings, onEnded, onReady, onSon
         stemPaths(jobId, files.cleaned), found.duration);
       if (cancelled) { await player.close(); return; }
       if (initial.current) restore(player, initial.current);
-      let last = JSON.stringify(snapshot(player));
+      // The website's accompaniment parts are not played here, but saving from the app must not drop them.
+      const kept = initial.current?.accompaniment;
+      const settingsOf = (mixer: Mixer) => ({ ...snapshot(mixer), ...(kept ? { accompaniment: kept } : {}) });
+      let last = JSON.stringify(settingsOf(player));
       const current = player;
       unsubscribe = player.subscribe(() => {
-        const settings = snapshot(current), json = JSON.stringify(settings);
+        const settings = settingsOf(current), json = JSON.stringify(settings);
         if (json !== last) { last = json; callbacks.current.onSettings?.(settings); }
       });
       unend = player.onEnded(() => callbacks.current.onEnded?.());

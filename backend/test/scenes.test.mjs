@@ -363,6 +363,29 @@ test('an entry may carry a key change of up to six semitones', async () => {
   }
 });
 
+test('a scene entry keeps its live accompaniment parts, which must be well formed', async () => {
+  const { database, scenes, storage } = setup();
+  seedSong(database, storage, A, SONG);
+  const scene = await makeScene(scenes);
+  let revision = 1;
+  const save = async value => {
+    const result = await call(scenes, A, 'PATCH', `/api/scenes/${scene.id}`,
+      { revision, entries: [{ id: uuid(303), jobId: SONG, settings: value }] });
+    if (result.status === 200) revision = result.body.scene.revision;
+    return result;
+  };
+  const part = { kind: 'guitar-rhythm', style: 'Rock128Plus', sound: 29, volume: 80, muted: false };
+  const saved = await save(settings({ accompaniment: [part, { ...part, kind: 'keys-melody', sound: 0, muted: true }] }));
+  assert.equal(saved.status, 200);
+  assert.deepEqual(saved.body.scene.entries[0].settings.accompaniment[0], part);
+  for (const bad of [{ ...part, kind: 'drums' }, { ...part, style: 'a b' }, { ...part, sound: 1.5 }, { ...part, volume: 101 }, { ...part, extra: 1 }]) {
+    const result = await save(settings({ accompaniment: [bad] }));
+    assert.equal(result.status, 400, JSON.stringify(bad));
+    assert.match(result.body.message, /settings\.accompaniment/);
+  }
+  assert.equal((await save(settings({ accompaniment: Array(5).fill(part) }))).status, 400, 'At most four parts');
+});
+
 test('entries must reference the caller\'s own completed songs', async () => {
   const { database, scenes, storage } = setup();
   seedSong(database, storage, A, SONG);
