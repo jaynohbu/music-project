@@ -1,7 +1,6 @@
 // Live accompaniment: parts played from the song's score instead of a recording. The rhythm parts strike every
-// tone of each chord on a comping rhythm: by default the one the Harmonic stem plays (each chord of its score, when
-// the stem struck it), or a style's; the melody + rhythm parts play exactly that comping with the Harmonic score's
-// notes on it (every note with the stem's rhythm, the top note of each chord with a style's). No chord (N.C.) is silence. Styles and sounds come from public/accompaniment/styles.json (tools/accompaniment), and the
+// tone of each chord on a style's comping rhythm, steady over the chord progression; the melody + rhythm parts play
+// exactly that comping with the Harmonic score's melody (its top line) on it. No chord (N.C.) is silence. Styles and sounds come from public/accompaniment/styles.json (tools/accompaniment), and the
 // analysis ranks them for the song (backend/accompaniment.py). Pure functions only, so they can be unit-tested.
 import type { HarmonyGrid, HarmonyNote, HarmonyPart } from './services';
 
@@ -29,9 +28,6 @@ export interface NoteEvent { time: number; duration: number; pitch: number; velo
 // In melody + rhythm parts the melody plays at this velocity; a melody note starting within ALIGN seconds of a
 // stroke sounds with it.
 const MELODY_VELOCITY = 108, ALIGN = 0.07;
-// The style that plays the Harmonic stem's own rhythm, offered first.
-export const SONG_STYLE = 'As the Harmonic stem plays';
-const SONG_VELOCITY = 96;
 
 const PITCH_CLASS: Record<string, number> = {
   C: 0, 'C#': 1, Db: 1, D: 2, 'D#': 3, Eb: 3, E: 4, F: 5, 'F#': 6, Gb: 6, G: 7, 'G#': 8, Ab: 8, A: 9, 'A#': 10, Bb: 10, B: 11, Cb: 11, Fb: 4, 'E#': 5, 'B#': 0,
@@ -158,22 +154,10 @@ function chordsOf(notes: HarmonyNote[]): HarmonyNote[][] {
   return groups;
 }
 
-// The Harmonic stem's own rhythm: each chord of its score, from when it was struck for as long as it rang, up to
-// the next.
-function songStrikes(notes: HarmonyNote[]): Strike[] {
-  const groups = chordsOf(notes);
-  return groups.map((group, index) => {
-    const time = Math.min(...group.map(note => note.start));
-    const next = groups[index + 1] ? Math.min(...groups[index + 1].map(note => note.start)) : Infinity;
-    return { time, end: Math.min(next, Math.max(...group.map(note => note.end))), velocity: SONG_VELOCITY };
-  });
-}
-
-// The strokes (a style's, or the stem's own without one), each voiced with every tone of the chord playing at
-// that moment.
-export function comping(part: HarmonyPart, grid: HarmonyGrid, pattern: Stroke[][] | null, family: Family): NoteEvent[] {
+// The style's strokes, each voiced with every tone of the chord playing at that moment.
+export function comping(part: HarmonyPart, grid: HarmonyGrid, pattern: Stroke[][], family: Family): NoteEvent[] {
   const chords = [...part.chords].sort((a, b) => a.start - b.start);
-  const strikes = pattern ? styleStrikes(grid, pattern) : songStrikes(part.notes);
+  const strikes = styleStrikes(grid, pattern);
   // A rest (no chord) also stops what is ringing.
   const rests = chords.filter(chord => !chordTones(chord.name)).map(chord => chord.start);
   // Each chord's register, read once from the score's notes while it lasts.
@@ -221,22 +205,6 @@ export function melodyLine(notes: HarmonyNote[]): HarmonyNote[] {
   return joined;
 }
 
-// Every note of the score, a pitch struck again right after its end held instead.
-export function scoreNotes(notes: HarmonyNote[]): HarmonyNote[] {
-  const held: HarmonyNote[] = [];
-  const last = new Map<number, number>();
-  for (const note of [...notes].sort((a, b) => a.start - b.start)) {
-    const at = last.get(note.pitch);
-    if (at !== undefined && note.start <= held[at].end + JOIN_GAP) {
-      held[at] = { ...held[at], end: Math.max(held[at].end, note.end), length: note.unit + note.length - held[at].unit };
-    } else {
-      last.set(note.pitch, held.length);
-      held.push(note);
-    }
-  }
-  return held;
-}
-
 const line = (notes: HarmonyNote[], velocity: number): NoteEvent[] => notes.map(note => ({
   time: note.start, duration: Math.max(0.08, note.end - note.start), pitch: note.pitch, velocity,
 }));
@@ -254,11 +222,10 @@ export function withMelody(comped: NoteEvent[], notes: HarmonyNote[]): NoteEvent
 }
 
 // Every note of a part, in song seconds, moved by the key change.
-// Without a pattern the part plays the stem's own rhythm, and its melody + rhythm every note of the score.
-export function accompanimentEvents(kind: AccompanimentKind, part: HarmonyPart, grid: HarmonyGrid, pattern: Stroke[][] | null, semitones = 0): NoteEvent[] {
+export function accompanimentEvents(kind: AccompanimentKind, part: HarmonyPart, grid: HarmonyGrid, pattern: Stroke[][], semitones = 0): NoteEvent[] {
   const family = familyOf(kind);
   const comped = comping(part, grid, pattern, family);
-  const events = kind.endsWith('rhythm') ? comped : withMelody(comped, pattern ? melodyLine(part.notes) : scoreNotes(part.notes));
+  const events = kind.endsWith('rhythm') ? comped : withMelody(comped, melodyLine(part.notes));
   return events.map(event => ({ ...event, pitch: event.pitch + semitones })).sort((a, b) => a.time - b.time);
 }
 
@@ -277,5 +244,5 @@ export function offered(library: StyleLibrary, choices: AccompanimentChoices | u
   const sounds = (ranked?.sounds.length ? ranked.sounds : group[family]).filter(sound => library.sounds[String(sound)]);
   // Every other sound of the family stays reachable after the group's.
   const rest = Object.entries(library.sounds).filter(([id, sound]) => sound.family === family && !sounds.includes(Number(id))).map(([id]) => Number(id));
-  return { styles: [SONG_STYLE, ...styles], sounds: [...sounds, ...rest] };
+  return { styles, sounds: [...sounds, ...rest] };
 }

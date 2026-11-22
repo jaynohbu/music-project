@@ -56,16 +56,17 @@ HIHAT_BAND = (6000, 16000)
 HIHAT_HOP = 128  # About 3 ms at the drum rate; the drum model only sees 10 ms steps.
 # The top line guides the chords; lower notes are mostly accompaniment (arpeggios, bass doubling).
 MELODY_LOWEST = 55  # G3
-# The written notes: chord tones from a guitar's low E up, at most this many at once, the strongest kept.
+# The written notes: chord tones from a guitar's low E up.
 LOWEST_CHORD_NOTE = 40
-MOST_AT_ONCE = 6
 # A chord's strongest note must reach this share of the median of the chords within NEIGHBOURHOOD seconds,
-# and LEAST_ATTACK; its notes weaker than IN_CHORD_SHARE of that strongest are dropped.
+# and LEAST_ATTACK; its notes weaker than IN_CHORD_SHARE of that strongest are dropped before its top is taken.
 NEIGHBOURHOOD = 4.0
 ATTACK_SHARE = 0.85
 LEAST_ATTACK = 0.38
 IN_CHORD_SHARE = 0.7
 JOIN_GAP = 0.12
+# Semitones under the melody line around it from which a top note is left out.
+BELOW_LINE = 12
 CHORD_SPREAD = 0.07
 # The stems this far below their loud level around that moment are resting: no chord is written, so the
 # accompaniment rests too.
@@ -335,11 +336,13 @@ def without_overtones(events):
 
 
 def chord_notes(events, chords, beats):
-    """The notes that matter among those belonging to the chord playing as they start, snapped to sixteenths.
-    Notes starting on the same sixteenth are one chord on the staff. A chord is kept when its strongest note is
-    a real attack: at least ATTACK_SHARE of the chords around it (so quiet verses keep theirs) and LEAST_ATTACK;
-    inside it, notes much weaker than its strongest are dropped. Its written length is how long its notes
-    sound, up to the next chord, which it reaches when the gap is a sixteenth or less."""
+    """The melody line of the notes belonging to the chord playing as they start, snapped to sixteenths: notes
+    starting on the same sixteenth (or spread as a strum) are one chord, and only its top note is written, the
+    lower ones being the comping's. A chord is kept when its strongest note is a real attack: at least
+    ATTACK_SHARE of the chords around it (so quiet verses keep theirs) and LEAST_ATTACK; a chord whose top note
+    is under the melody note still ringing is left out. The written length is how long the note sounds,
+    up to the next, which it reaches when the gap is a sixteenth or less; the same note again where it ends is
+    held."""
     starts = [chord['start'] for chord in chords]
     heard = []
     for event in events:
@@ -373,17 +376,36 @@ def chord_notes(events, chords, beats):
         high = bisect.bisect_right(times, times[index] + NEIGHBOURHOOD / 2)
         if peaks[index] >= max(LEAST_ATTACK, ATTACK_SHARE * float(np.median(peaks[low:high]))):
             kept.append((unit, [event for event in stacks[unit].values() if event[3] >= IN_CHORD_SHARE * peaks[index]]))
+    tops = []
+    for unit, stack in kept:
+        top = max(stack, key=lambda event: event[2])
+        # A lower note struck while the melody note above still rings is the comping's, not the melody.
+        if tops and top[2] < tops[-1][1][2] and tops[-1][1][1] > top[0] + 0.05:
+            continue
+        tops.append((unit, top))
+    # A top an octave or more under the line around it (median within NEIGHBOURHOOD seconds) is a low note
+    # struck alone, under the melody.
+    times = [top[0] for _, top in tops]
+    line = []
+    for unit, top in tops:
+        low = bisect.bisect_left(times, top[0] - NEIGHBOURHOOD / 2)
+        high = bisect.bisect_right(times, top[0] + NEIGHBOURHOOD / 2)
+        if top[2] > float(np.median([other[2] for _, other in tops[low:high]])) - BELOW_LINE:
+            line.append((unit, top))
+    tops = line
     notes = []
-    for index, (unit, stack) in enumerate(kept):
-        stack = sorted(stack, key=lambda event: -event[3])[:MOST_AT_ONCE]
-        end = max(round(grid_position(event[1], beats) - shift) for event in stack)
-        following = kept[index + 1][0] if index + 1 < len(kept) else None
+    for index, (unit, (start, finish, pitch, strength)) in enumerate(tops):
+        end = round(grid_position(finish, beats) - shift)
+        following = tops[index + 1][0] if index + 1 < len(tops) else None
         if following is not None and (end > following or following - end <= 1):
             end = following
-        for start, finish, pitch, strength in sorted(stack, key=lambda event: event[2]):
-            # How surely the note was heard, for choosing the clearest of repeated passages (dropped from the result).
-            notes.append({'start': round(start, 2), 'end': round(finish, 2), 'pitch': pitch, 'unit': unit,
-                          'length': max(1, end - unit), 'sure': strength})
+        last = notes[-1] if notes else None
+        if last and last['pitch'] == pitch and last['unit'] + last['length'] >= unit:
+            last.update(end=round(max(last['end'], finish), 2), length=max(1, end - last['unit']), sure=max(last['sure'], strength))
+            continue
+        # How surely the note was heard, for choosing the clearest of repeated passages (dropped from the result).
+        notes.append({'start': round(start, 2), 'end': round(finish, 2), 'pitch': pitch, 'unit': unit,
+                      'length': max(1, end - unit), 'sure': strength})
     return notes
 
 

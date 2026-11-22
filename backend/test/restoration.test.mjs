@@ -544,7 +544,7 @@ test('harmony results from an older version stay shown until a new run finishes'
   assert.ok(stale.url.endsWith(`${lyricsId}.json`));
   assert.equal((await call(`${parentId}/harmony`, {})).status, 202);
   const running = (await call(parentId, undefined, 'GET')).body.job.harmony;
-  assert.equal(database.get('owner', running.id).version, 13);
+  assert.equal(database.get('owner', running.id).version, 14);
   assert.equal(running.status, 'queued');
   assert.equal(running.stale, undefined);
   assert.equal(running.previous.id, lyricsId, 'The old score is shown while the new one is found');
@@ -558,7 +558,7 @@ test('harmony results from an older version stay shown until a new run finishes'
 function regeneration() {
   const context = setup();
   const finished = (id, fields) => context.database.put({
-    userId: 'owner', jobId: id, type: 'harmony', version: 13, parentJobId: parentId, status: 'completed', title: 'Chords',
+    userId: 'owner', jobId: id, type: 'harmony', version: 14, parentJobId: parentId, status: 'completed', title: 'Chords',
     key: `users/owner/harmony/${parentId}/${id}.json`, generatedAt: new Date(Date.now() - 60000).toISOString(), ...fields,
   });
   finished(lyricsId);
@@ -975,7 +975,7 @@ test('chords are named in the key: sharps in sharp keys, flats in flat keys', { 
   assert.deepEqual(names, ['G#m7/D#', 'Db', 'N.C.', 'G#m', 'Ebm', [4, 8, 11], null]);
 });
 
-test('overtones go; real attacks stay as one chord per sixteenth, weak ones and weak inner notes go', { skip: !hasHarmony }, () => {
+test('overtones go; real attacks stay, one top note per sixteenth, weak ones go', { skip: !hasHarmony }, () => {
   const notes = harmony(`events = [(0.0, 0.9, 52, 0.9), (0.0, 0.9, 64, 0.5), (0.0, 0.9, 71, 0.4), (0.01, 0.9, 56, 0.8),
           (0.0, 0.9, 59, 0.5), (0.0, 0.9, 62, 0.8), (0.5, 0.9, 59, 0.7), (0.75, 0.85, 56, 0.39),
           (1.0, 1.3, 60, 0.9), (1.0, 1.3, 57, 0.7), (2.5, 3, 60, 0.9)]
@@ -984,8 +984,8 @@ beats = [i * 0.5 for i in range(10)]
 print(json.dumps([(n['unit'], n['length'], n['pitch']) for n in h.chord_notes(h.without_overtones(events), chords, beats)]))`);
   // E3's octave and twelfth are overtones; D is not in E; B struck again while it rings is one held B, as strong
   // as its stronger attack; the soft G# on the second half of beat 2 is no real attack; Am's notes last as long
-  // as they sound; nothing after N.C.
-  assert.deepEqual(notes, [[0, 8, 52], [0, 8, 56], [0, 8, 59], [8, 2, 57], [8, 2, 60]]);
+  // as they sound; nothing after N.C. Of each chord only the top note is written.
+  assert.deepEqual(notes, [[0, 8, 59], [8, 2, 60]]);
 });
 
 test('the same pitch again right after a note is that note held', { skip: !hasHarmony }, () => {
@@ -993,12 +993,22 @@ test('the same pitch again right after a note is that note held', { skip: !hasHa
   assert.deepEqual(joined, [[0, 0.75, 64, 0.8], [0.3, 0.6, 60, 0.6], [1.2, 1.4, 64, 0.5]]);
 });
 
-test('upper and lower notes starting close together are written as one chord', { skip: !hasHarmony }, () => {
-  const notes = harmony(`events = [(0.44, 0.9, 52, 0.8), (0.5, 0.9, 59, 0.8), (0.52, 0.9, 64, 0.8), (1.5, 1.9, 64, 0.8)]
+test('upper and lower notes starting close together are one chord: its top note is written, held where it goes on', { skip: !hasHarmony }, () => {
+  const notes = harmony(`events = [(0.44, 0.9, 52, 0.8), (0.5, 0.9, 59, 0.8), (0.52, 0.9, 64, 0.8), (1.5, 1.9, 64, 0.8),
+          (2.0, 2.5, 59, 0.8), (2.0, 2.5, 67, 0.8), (2.5, 2.9, 67, 0.8), (2.5, 2.9, 60, 0.8)]
 beats = [i * 0.5 for i in range(10)]
-print(json.dumps([(n['unit'], n['pitch']) for n in h.chord_notes(events, [{'start': 0, 'name': 'E'}], beats)]))`);
+print(json.dumps([(n['unit'], n['pitch'], n['length']) for n in h.chord_notes(events, [{'start': 0, 'name': 'E'}, {'start': 2.0, 'name': 'C'}], beats)]))`);
   // The low E comes a sixteenth early (0.44 s is nearer the sixteenth before beat 1); the strum is still one chord.
-  assert.deepEqual(notes, [[3, 52], [3, 59], [3, 64], [12, 64]]);
+  // The G at 2 s goes on at 2.5 s over a new lower note: one held G, the C under it left out.
+  assert.deepEqual(notes, [[3, 64, 4], [12, 64, 4], [16, 67, 7]]);
+});
+
+test('a low note struck alone an octave or more under the melody line is left out', { skip: !hasHarmony }, () => {
+  const notes = harmony(`events = [(i * 0.5, i * 0.5 + 0.4, 64 if i % 2 else 67, 0.8) for i in range(8)] + [(4.25, 4.4, 52, 0.8), (4.75, 4.9, 57, 0.8)]
+beats = [i * 0.5 for i in range(12)]
+print(json.dumps([n['pitch'] for n in h.chord_notes(events, [{'start': 0, 'name': 'C'}], beats)]))`);
+  // E3 is an octave under the E4/G4 line; A3 is not a chord tone of C.
+  assert.deepEqual(notes, [67, 64, 67, 64, 67, 64, 67, 64]);
 });
 
 test('a stop is quiet against its own loud level around it; a soft intro is not', { skip: !hasHarmony }, () => {
