@@ -47,3 +47,13 @@ test('MusicXML: a pickup, the chord tied over the bar line, chord names, the key
   assert.equal(x.keyFifths('F#m'), 3);
   assert.equal(x.keyFifths('Eb'), -3);
 });
+
+test('MIDI notes start and end as played, at their velocity; events carry bar, beat, times, velocity and confidence', () => {
+  const played = { chords: [{ start: 0.5, name: 'C' }], notes: [note(8, 4, 60, { start: 1.03, end: 1.31, velocity: 33, confidence: 0.5 }), note(28, 4, 64, { voted: true })] };
+  const midi = x.harmonyMidi(played, grid);
+  const on = [...midi].findIndex((byte, i) => byte === 0x90 && midi[i + 1] === 60);
+  assert.equal(midi[on + 2], 33, 'Its velocity');
+  const found = x.harmonyEvents(played, grid);
+  assert.deepEqual(found.events[0], { barId: 0, pitchMidi: 60, onsetSec: 1.03, offsetSec: 1.31, durationSec: 0.28, onsetBeat: 1.06, velocity: 33, confidence: 0.5 });
+  assert.deepEqual([found.events[1].barId, found.events[1].onsetBeat, found.events[1].voted, found.events[1].velocity], [1, 2, true, 101]);
+});

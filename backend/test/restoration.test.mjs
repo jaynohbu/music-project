@@ -544,7 +544,7 @@ test('harmony results from an older version stay shown until a new run finishes'
   assert.ok(stale.url.endsWith(`${lyricsId}.json`));
   assert.equal((await call(`${parentId}/harmony`, {})).status, 202);
   const running = (await call(parentId, undefined, 'GET')).body.job.harmony;
-  assert.equal(database.get('owner', running.id).version, 15);
+  assert.equal(database.get('owner', running.id).version, 16);
   assert.equal(running.status, 'queued');
   assert.equal(running.stale, undefined);
   assert.equal(running.previous.id, lyricsId, 'The old score is shown while the new one is found');
@@ -558,7 +558,7 @@ test('harmony results from an older version stay shown until a new run finishes'
 function regeneration() {
   const context = setup();
   const finished = (id, fields) => context.database.put({
-    userId: 'owner', jobId: id, type: 'harmony', version: 15, parentJobId: parentId, status: 'completed', title: 'Chords',
+    userId: 'owner', jobId: id, type: 'harmony', version: 16, parentJobId: parentId, status: 'completed', title: 'Chords',
     key: `users/owner/harmony/${parentId}/${id}.json`, generatedAt: new Date(Date.now() - 60000).toISOString(), ...fields,
   });
   finished(lyricsId);
@@ -1012,6 +1012,23 @@ print(json.dumps({'notes': [(n['unit'], n['pitch'], n['length'], n['sure']) for 
   assert.deepEqual(found.heard.at(-1), [28, 64], 'A faint note is heard, for the vote, but not written');
 });
 
+test('a note ends where its sound falls away, not with its ringing tail; louder notes get higher velocities', { skip: !hasHarmony }, () => {
+  const found = harmony(`times = np.arange(2000) * 256 / 22050
+note = np.zeros((2000, 88))
+note[1000:1020, 60 - 21] = 0.9
+note[1020:1060, 60 - 21] = 0.2
+note[1100:1160, 64 - 21] = 0.8
+audio = np.zeros(int(times[-1] * 22050) + 2048)
+audio[1000 * 256:1060 * 256] = 0.05 * np.sin(np.arange(60 * 256) * 0.1)
+audio[1100 * 256:1700 * 256] = 0.5 * np.sin(np.arange(600 * 256) * 0.1)  # The song's loud level around.
+shape = h.note_shape({'note': note}, times, audio, 22050)
+at = lambda frame: round(float(times[frame]), 2)
+print(json.dumps([shape((at(1000), at(1060), 60, 0.6)), shape((at(1100), at(1160), 64, 0.8)), at(1020), at(1160)]))`);
+  assert.equal(found[0][0], found[2], 'The C ends as it falls to its ringing tail');
+  assert.equal(found[1][0], found[3], 'The E sustains to its end');
+  assert.ok(found[1][1] > found[0][1] + 40, 'The loud E is played harder than the soft C');
+});
+
 test('a stop is quiet against its own loud level around it; a soft intro is not', { skip: !hasHarmony }, () => {
   const quiet = harmony(`level = np.concatenate([np.full(200, 0.05), np.full(200, 1.0), np.full(10, 0.02), np.full(200, 1.0)])
 q = h.quiet_frames(level)
@@ -1070,11 +1087,28 @@ print(json.dumps({'reps': reps, 'first': sorted((x['unit'], x['pitch']) for x in
   assert.deepEqual(found.changes, { added: 1, removed: [{ unit: 26, pitch: 50, length: 2 }] });
 });
 
-test('passages less than 70% alike, or too sparse, are left alone', { skip: !hasHarmony }, () => {
+test('passages less than 70% alike, or too sparse, are left alone; a phrase moved to another key is a repeat', { skip: !hasHarmony }, () => {
   const found = repeatsPython(`
 other = [{'unit': 128 + i * 4, 'length': 2, 'pitch': 50 + (i * 7) % 23, 'start': 0, 'end': 0} for i in range(16)]
 sparse = [{'unit': 256 + i * 16, 'length': 2, 'pitch': 60, 'start': 0, 'end': 0} for i in range(8)]
 n, c, reps, changes = r.voted(passage(0) + other + sparse, [], heard_there, [], beats, 0)
 print(json.dumps(reps))`);
-  assert.deepEqual(found, []);
+  // Each bar of the phrase is the one before a semitone up, so its last two bars are its first two moved up two.
+  assert.deepEqual(found, [{ family: 0, bars: 2, members: [0, 2], shifts: [0, 2] }]);
+});
+
+test('a playing moved to another key is voted with the others moved back; time warping lines up a pushed chord', { skip: !hasHarmony }, () => {
+  const found = repeatsPython(`
+riff = [(0, 52), (0, 59), (4, 52), (6, 55), (8, 57), (12, 59)]
+def played(bar, move=0, missing=(), push=0):
+    return [{'unit': bar * 16 + b * 16 + unit + (push if unit == 8 else 0), 'length': 2, 'pitch': pitch + move,
+             'start': 0, 'end': 0, 'sure': 0.8, 'velocity': 90} for b in range(2) for unit, pitch in riff if (b, unit) not in missing]
+heard_here = lambda pitch, seconds: 0.5
+notes = played(0) + played(4) + played(8, move=5, missing={(1, 6)}) + played(12, push=2)
+n, c, reps, changes = r.voted(notes, notes, heard_here, [], beats, 0)
+lined = r.warped({0: {4, 11}, 4: {4}, 6: {7}, 8: {9}}, {0: {4, 11}, 4: {4}, 7: {7}, 10: {9}})
+print(json.dumps({'reps': reps, 'voted': [(x['unit'], x['pitch'], x['velocity']) for x in n if x.get('voted')], 'lined': sorted(lined.items())}))`);
+  assert.deepEqual(found.reps, [{ family: 0, bars: 2, members: [0, 4, 8, 12], shifts: [0, 0, 5, 0] }]);
+  assert.deepEqual(found.voted, [[8 * 16 + 16 + 6, 60, 90]], 'The G missed in the moved playing comes back as its C, at the others\' velocity');
+  assert.deepEqual(found.lined, [[0, 0], [4, 4], [7, 6], [10, 8]], 'Late onsets meet their counterparts');
 });

@@ -116,3 +116,13 @@ test('the song choices are offered first, then the rest of the family', () => {
   }
 });
 
+
+test('transcribed notes play every score note as the stem played it, at its velocity, with no style', () => {
+  const part = { chords: [{ start: 0, name: 'C' }], notes: [{ start: 0.52, end: 0.81, pitch: 60, unit: 4, length: 4, velocity: 70 },
+    { start: 0.5, end: 1.4, pitch: 64, unit: 4, length: 4, confidence: 1 }, { start: 1.03, end: 1.05, pitch: 67, unit: 8, length: 1 }] };
+  const played = a.accompanimentEvents('guitar-notes', part, { beats: [0, 0.5, 1, 1.5], firstBar: 0 }, [], -2);
+  assert.deepEqual(played.map(event => [event.time, event.pitch, Math.round(event.duration * 100) / 100, event.velocity]),
+    [[0.5, 62, 0.9, 127], [0.52, 58, 0.29, 70], [1.03, 65, 0.05, 101]], 'Own start and end (at least 50 ms), velocity, moved by the key');
+  assert.equal(a.styled('keys-notes'), false);
+  assert.equal(a.styled('keys-rhythm'), true);
+});

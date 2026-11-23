@@ -12,13 +12,19 @@ is dropped when it was heard weakly and there are at least three playings to tel
 variation and stays. Chords are voted beat by beat the same way, and each playing keeps its own rests.
 
 Detection hears a repeat a little differently each time, so passages are found on what sounds rather than
-note by note: for each eighth of a bar, the pitch classes of the notes sounding there.
+note by note: for each eighth of a bar, the pitch classes of the notes sounding there. A passage may come back
+moved to another key (a riff on the fourth); such a playing must be more alike (SIMILAR_MOVED) and at least two
+bars, and it is compared with the others moved back.
+
+Before the vote, each pair of playings is lined up onset by onset with dynamic time warping, so a chord pushed
+ahead or held back a little in one playing still meets its counterpart in another.
 """
 import numpy as np
 
 NO_CHORD = 'N.C.'
 
 SIMILAR = 0.7
+SIMILAR_MOVED = 0.85
 BAR = 16  # Sixteenths in a bar.
 SLOTS = 8  # Eighths in a bar, the grid passages are compared on.
 LEAST_ONSETS = 2  # Notes that must start in each bar of a passage, on average, for it to be compared.
@@ -58,12 +64,29 @@ class Heard:
         return self.count
 
 
-def similarity(heard, first, second, length):
-    """How alike two passages sound: shared sounding pitch classes over all (Dice), eighth by eighth."""
+def similarity(heard, first, second, length, shift=0):
+    """How alike two passages sound: shared sounding pitch classes over all (Dice), eighth by eighth; with shift,
+    the second moved down that many semitones first."""
     one = heard.grid[first * SLOTS:(first + length) * SLOTS]
     two = heard.grid[second * SLOTS:(second + length) * SLOTS]
+    if shift:
+        two = np.roll(two, -shift, axis=1)
     total = one.sum() + two.sum()
     return 2 * float((one & two).sum()) / total if total else 0.0
+
+
+def alike(heard, first, second, length, shift):
+    return similarity(heard, first, second, length, shift) >= (SIMILAR_MOVED if shift else SIMILAR) and (length >= 2 or not shift)
+
+
+def moved(heard, first, second, length, seed=False):
+    """How far the second passage is moved from the first: 0 when alike as it is, else the move that makes it
+    most alike, or None. A single-bar seed may only be moved when the passage is long enough to grow."""
+    if similarity(heard, first, second, length) >= SIMILAR:
+        return 0
+    scores = [(similarity(heard, first, second, length, shift), shift) for shift in range(1, 12)]
+    score, shift = max(scores)
+    return shift if score >= SIMILAR_MOVED and (length >= 2 or seed) else None
 
 
 def busy(heard, start, length):
@@ -74,14 +97,18 @@ def busy(heard, start, length):
 
 
 def alignments(bars):
-    """Seeds of one bar, extended both ways while the passages stay alike and apart: (first, second, length, score)."""
+    """Seeds of one bar, extended both ways while the passages stay alike and apart: (first, second, length,
+    score, shift)."""
     count = len(bars)
     found = {}
     for first in range(count):
         if not busy(bars, first, 1):
             continue
         for second in range(first + 1, count):
-            if not busy(bars, second, 1) or similarity(bars, first, second, 1) < SIMILAR:
+            if not busy(bars, second, 1):
+                continue
+            shift = moved(bars, first, second, 1, seed=True)
+            if shift is None:
                 continue
             start_one, start_two, length = first, second, 1
             # Forward, then backward, as BLAST does with its drop-off: a weaker bar may be crossed, and the
@@ -90,7 +117,7 @@ def alignments(bars):
             for step in range(2, LONGEST + 1):
                 if start_two + step > count or start_one + step > start_two:
                     break
-                if similarity(bars, start_one, start_two, step) >= SIMILAR:
+                if alike(bars, start_one, start_two, step, shift):
                     reach = step
                 elif step - reach >= DROP_OFF:
                     break
@@ -100,7 +127,7 @@ def alignments(bars):
                 # Extending back moves the later passage back too; the two must not overlap.
                 if start_one - step < 0 or start_one + length > start_two - step:
                     break
-                if similarity(bars, start_one - step, start_two - step, length + step) >= SIMILAR:
+                if alike(bars, start_one - step, start_two - step, length + step, shift):
                     back = step
                 elif step - back >= DROP_OFF:
                     break
@@ -110,31 +137,39 @@ def alignments(bars):
                 start_one, start_two, length = start_one + 1, start_two + 1, length - 1
             while length > 1 and not (bars.onsets[start_one + length - 1] and bars.onsets[start_two + length - 1]):
                 length -= 1
-            if busy(bars, start_one, length) and busy(bars, start_two, length):
-                key = (start_one, start_two, length)
-                found[key] = similarity(bars, *key)
-    return [(*key, score) for key, score in found.items()]
+            if busy(bars, start_one, length) and busy(bars, start_two, length) and alike(bars, start_one, start_two, length, shift):
+                key = (start_one, start_two, length, shift)
+                found[key] = similarity(bars, start_one, start_two, length, shift)
+    return [(*key[:3], score, key[3]) for key, score in found.items()]
 
 
 def families(bars):
-    """Families of alike passages, longest first; a bar belongs to one family at most."""
+    """Families of alike passages, longest first, then those heard as they are before moved ones: (length,
+    members, shifts), each member's move from the first. A bar belongs to one family at most."""
     covered = set()
     groups = []
-    for first, second, length, _ in sorted(alignments(bars), key=lambda item: (-item[2], -item[3])):
+    for first, second, length, _, _ in sorted(alignments(bars), key=lambda item: (-item[2], bool(item[4]), -item[3])):
         span = lambda start: set(range(start, start + length))
         if span(first) & covered or span(second) & covered:
             continue
         # Every other place the passage comes back, not overlapping one another or an earlier family.
-        members = [first]
+        # The most alike first, unmoved before moved, so a near miss a bar off does not take a playing's place.
+        found = []
         for start in range(len(bars) - length + 1):
-            if start == first or span(start) & covered or any(abs(start - member) < length for member in members):
+            if start == first or span(start) & covered or not busy(bars, start, length):
                 continue
-            if busy(bars, start, length) and similarity(bars, first, start, length) >= SIMILAR:
+            shift = moved(bars, first, start, length)
+            if shift is not None:
+                found.append((bool(shift), -similarity(bars, first, start, length, shift), start, shift))
+        members, shifts = [first], [0]
+        for _, _, start, shift in sorted(found):
+            if all(abs(start - member) >= length for member in members):
                 members.append(start)
+                shifts.append(shift)
         if len(members) < 2:
             continue
-        members.sort()
-        groups.append((length, members))
+        order = sorted(range(len(members)), key=lambda index: members[index])
+        groups.append((length, [members[index] for index in order], [shifts[index] for index in order]))
         for member in members:
             covered |= span(member)
     return groups
@@ -193,6 +228,48 @@ KEEP_ALONE = 0.6
 # How much of a pitch the model must hear where a note is missing for the vote to add it.
 EVIDENCE = 0.25
 NEAR = 1  # Sixteenths a note may be off in another playing and still be the same note.
+# Time warping: onsets more than WARP sixteenths apart never match; an onset left unmatched costs SKIP, so two
+# onsets are matched when their pitch classes share enough and they are close.
+WARP = 2
+SKIP = 0.6
+
+
+def warped(one, two):
+    """Lines up two playings' onsets (dicts of position in the passage -> pitch classes) by dynamic time warping,
+    each onset matched once at most, in order. Returns where each of two's onsets falls in one."""
+    first, second = sorted(one), sorted(two)
+    if not first or not second:
+        return {}
+    def cost(a, b):
+        apart = abs(first[a] - second[b])
+        if apart > WARP:
+            return None
+        shared = len(one[first[a]] & two[second[b]]) / max(len(one[first[a]] | two[second[b]]), 1)
+        return 0.25 * apart / WARP + (1 - shared)
+    rows, columns = len(first) + 1, len(second) + 1
+    total = np.full((rows, columns), np.inf)
+    step = np.zeros((rows, columns), int)
+    total[0, :] = SKIP * np.arange(columns)
+    total[:, 0] = SKIP * np.arange(rows)
+    step[0, 1:], step[1:, 0] = 2, 1
+    for a in range(1, rows):
+        for b in range(1, columns):
+            options = [(total[a - 1, b] + SKIP, 1), (total[a, b - 1] + SKIP, 2)]
+            matched = cost(a - 1, b - 1)
+            if matched is not None:
+                options.append((total[a - 1, b - 1] + matched, 0))
+            total[a, b], step[a, b] = min(options)
+    found = {}
+    a, b = rows - 1, columns - 1
+    while a and b:
+        if step[a, b] == 0:
+            found[second[b - 1]] = first[a - 1]
+            a, b = a - 1, b - 1
+        elif step[a, b] == 1:
+            a -= 1
+        else:
+            b -= 1
+    return found
 
 
 def voted(notes, candidates, evidence, chords, beats, first_bar):
@@ -204,40 +281,65 @@ def voted(notes, candidates, evidence, chords, beats, first_bar):
     heard = Heard(notes, origin, count)
     repeats, added, removed = [], [], []
     notes = list(notes)
-    for family, (length, members) in enumerate(families(heard)):
-        repeats.append({'family': family, 'bars': length, 'members': members})
+    for family, (length, members, shifts) in enumerate(families(heard)):
+        repeats.append({'family': family, 'bars': length, 'members': members, 'shifts': shifts})
         span = length * BAR
+        moves = dict(zip(members, shifts))
         def playing(line, member):
             low = origin + member * BAR
             return {(note['unit'] - low, note['pitch']): note for note in line if low <= note['unit'] < low + span}
         written = {member: playing(notes, member) for member in members}
         faint = {member: playing(candidates, member) for member in members}
+        def onsets(member):
+            found = {}
+            for offset, pitch in written[member]:
+                found.setdefault(offset, set()).add((pitch - moves[member]) % 12)
+            return found
         has = lambda line, offset, pitch: any((offset + step, pitch) in line for step in range(-NEAR, NEAR + 1))
-        keys = sorted({key for member in members for key in written[member]})
         for member in members:
             others = [other for other in members if other != member]
             low = origin + member * BAR
+            # Every other playing as this one would play it: lined up onset by onset, moved to its key.
+            mine = onsets(member)
+            seen, near = {}, {}
+            for other in others:
+                lined = warped(mine, onsets(other))
+                # The nearer way: moved up eleven semitones is moved down one.
+                move = (moves[member] - moves[other] + 6) % 12 - 6
+                at = lambda line: {(lined.get(offset, offset), pitch + move): note for (offset, pitch), note in line.items()}
+                seen[other], near[other] = at(written[other]), at(faint[other])
+            keys = sorted(set(written[member]) | {key for other in others for key in seen[other]})
             for offset, pitch in keys:
-                votes = sum(has(written[other], offset, pitch) for other in others)
+                if not 0 <= offset < span:
+                    continue
+                votes = sum(has(seen[other], offset, pitch) for other in others)
                 if (offset, pitch) in written[member]:
                     note = written[member][(offset, pitch)]
                     if len(members) >= 3 and note.get('sure', 1) < KEEP_ALONE and not votes \
-                            and not any(has(faint[other], offset, pitch) for other in others):
+                            and not any(has(near[other], offset, pitch) for other in others):
                         notes.remove(note)
                         removed.append(note)
+                        del written[member][(offset, pitch)]
                 elif not has(written[member], offset, pitch) and 2 * votes > len(others):
                     seconds = unit_seconds(low + offset, beats)
                     sure = evidence(pitch, seconds)
                     if sure < EVIDENCE:
                         continue
-                    lengths = sorted(written[other][key]['length'] for other in others for key in written[other]
-                                     if key[1] == pitch and abs(key[0] - offset) <= NEAR)
+                    like = [seen[other][key] for other in others for key in seen[other] if key[1] == pitch and abs(key[0] - offset) <= NEAR]
+                    lengths = sorted(note['length'] for note in like)
                     size = min(lengths[len(lengths) // 2], span - offset)
                     note = {'start': round(seconds, 2), 'end': round(unit_seconds(low + offset + size, beats), 2), 'pitch': pitch,
                             'unit': low + offset, 'length': size, 'sure': round(sure, 2), 'voted': True}
+                    velocities = sorted(other['velocity'] for other in like if 'velocity' in other)
+                    if velocities:
+                        note['velocity'] = velocities[len(velocities) // 2]
                     notes.append(note)
                     written[member][(offset, pitch)] = note
                     added.append(note)
-        chords = voted_chords(chords, beats, origin, length, members)
+        # Chords are voted among the playings in one key.
+        for shift in sorted(set(shifts)):
+            same = [member for member in members if moves[member] == shift]
+            if len(same) >= 2:
+                chords = voted_chords(chords, beats, origin, length, same)
     notes.sort(key=lambda note: (note['unit'], note['pitch']))
     return notes, chords, repeats, {'added': len(added), 'removed': [{key: note[key] for key in ('unit', 'pitch', 'length')} for note in removed]}

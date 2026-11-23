@@ -264,7 +264,7 @@ export interface SceneSettings {
   accompaniment?: SceneAccompaniment[];
 }
 export interface SceneAccompaniment {
-  kind: 'guitar-rhythm' | 'keys-rhythm' | 'guitar-melody' | 'keys-melody';
+  kind: 'guitar-rhythm' | 'keys-rhythm' | 'guitar-melody' | 'keys-melody' | 'guitar-notes' | 'keys-notes';
   style: string; sound: number; volume: number; muted: boolean;
 }
 export interface SceneEntry {
@@ -344,11 +344,15 @@ export interface HarmonyPart {
   // The ensemble's line under the melody (a counter-melody or the top of the accompaniment).
   second?: HarmonyNote[];
   // Set on the ensemble part: its repeated passages (bar numbers from the first bar) and what their vote changed.
-  repeats?: { family: number; bars: number; members: number[] }[];
+  // shifts: how many semitones each playing is moved from the first (a riff played on the fourth).
+  repeats?: { family: number; bars: number; members: number[]; shifts?: number[] }[];
   corrections?: { added: number; removed: { unit: number; pitch: number; length: number }[] };
 }
-// confidence: how surely the note was heard, 0 to 1; voted: added by the vote among repeated passages.
-export interface HarmonyNote { start: number; end: number; pitch: number; unit: number; length: number; confidence?: number; voted?: boolean }
+// start and end: as played, in song seconds (unit and length: as written on the grid); confidence: how surely the
+// note was heard, 0 to 1; velocity: how loud it was played, 1 to 127; voted: added by the vote among repeated passages.
+export interface HarmonyNote {
+  start: number; end: number; pitch: number; unit: number; length: number; confidence?: number; velocity?: number; voted?: boolean;
+}
 export interface HarmonyGrid { beats: number[]; firstBar: number }
 export const HARMONY_STEMS: readonly string[] = ['other', 'bass', 'drums'];
 export const ENSEMBLE_STEMS: readonly string[] = ['other'];

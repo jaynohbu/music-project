@@ -1,12 +1,16 @@
 // Live accompaniment: parts played from the song's score instead of a recording. The rhythm parts strike every
 // tone of each chord on a style's comping rhythm, steady over the chord progression; the melody + rhythm parts play
-// exactly that comping with the Harmonic score's melody (its top line) on it. No chord (N.C.) is silence. Styles and sounds come from public/accompaniment/styles.json (tools/accompaniment), and the
+// exactly that comping with the Harmonic score's melody (its top line) on it; the transcribed-notes parts play every
+// note of the Harmonic score as the stem played it (its own start, end and velocity), in the chosen sound, as a
+// SoundFont renders a MIDI file. No chord (N.C.) is silence. Styles and sounds come from public/accompaniment/styles.json (tools/accompaniment), and the
 // analysis ranks them for the song (backend/accompaniment.py). Pure functions only, so they can be unit-tested.
 import type { HarmonyGrid, HarmonyNote, HarmonyPart } from './services';
 
-export type AccompanimentKind = 'guitar-rhythm' | 'keys-rhythm' | 'guitar-melody' | 'keys-melody';
+export type AccompanimentKind = 'guitar-rhythm' | 'keys-rhythm' | 'guitar-melody' | 'keys-melody' | 'guitar-notes' | 'keys-notes';
 export type Family = 'guitar' | 'keys';
-export const ACCOMPANIMENT_KINDS: readonly AccompanimentKind[] = ['guitar-rhythm', 'keys-rhythm', 'guitar-melody', 'keys-melody'];
+export const ACCOMPANIMENT_KINDS: readonly AccompanimentKind[] = ['guitar-rhythm', 'keys-rhythm', 'guitar-melody', 'keys-melody', 'guitar-notes', 'keys-notes'];
+// Transcribed-notes parts play no style.
+export const styled = (kind: AccompanimentKind): boolean => !kind.endsWith('notes');
 export const familyOf = (kind: AccompanimentKind): Family => kind.startsWith('guitar') ? 'guitar' : 'keys';
 
 // [beat in the bar, length in beats, velocity] per stroke; eight bars per style, repeated.
@@ -221,11 +225,20 @@ export function withMelody(comped: NoteEvent[], notes: HarmonyNote[]): NoteEvent
   return [...comped.filter(event => !doubled(event)), ...melody];
 }
 
+// Every note of the score as the stem played it: its own start, end and velocity (from how surely it was heard
+// when the analysis gave none).
+export function playedNotes(notes: HarmonyNote[]): NoteEvent[] {
+  return notes.map(note => ({
+    time: note.start, duration: Math.max(0.05, note.end - note.start), pitch: note.pitch,
+    velocity: note.velocity ?? Math.round(40 + 87 * (note.confidence ?? 0.7)),
+  }));
+}
+
 // Every note of a part, in song seconds, moved by the key change.
 export function accompanimentEvents(kind: AccompanimentKind, part: HarmonyPart, grid: HarmonyGrid, pattern: Stroke[][], semitones = 0): NoteEvent[] {
-  const family = familyOf(kind);
-  const comped = comping(part, grid, pattern, family);
-  const events = kind.endsWith('rhythm') ? comped : withMelody(comped, melodyLine(part.notes));
+  const events = !styled(kind) ? playedNotes(part.notes)
+    : kind.endsWith('rhythm') ? comping(part, grid, pattern, familyOf(kind))
+    : withMelody(comping(part, grid, pattern, familyOf(kind)), melodyLine(part.notes));
   return events.map(event => ({ ...event, pitch: event.pitch + semitones })).sort((a, b) => a.time - b.time);
 }
 

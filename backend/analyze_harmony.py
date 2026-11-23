@@ -76,6 +76,12 @@ WEAK_ATTACK = 0.1
 # Notes this faint are not written but count as heard, for the vote among repeated passages.
 CANDIDATE = 0.2
 CHORD_SPREAD = 0.07
+# A note ends where the model hears its pitch fall under DECAY_SHARE of how it started and stay there for
+# RING_GAP: a ringing tail or reverb is not the note held. Its velocity is how loud the stem is as it starts
+# against its loud level around (VELOCITY_DB below it is the softest), with how strongly its pitch starts.
+DECAY_SHARE = 0.3  # Measured: 0.5 cut piano notes short as they decay; 0.3 only cuts a clear tail.
+RING_GAP = 0.12
+VELOCITY_DB = 30
 # The stems this far below their loud level around that moment are resting: no chord is written, so the
 # accompaniment rests too.
 QUIET_DB = 20
@@ -343,7 +349,7 @@ def without_overtones(events):
     return kept
 
 
-def chord_notes(events, chords, beats, attack=None, faint=()):
+def chord_notes(events, chords, beats, attack=None, faint=(), shape=None):
     """The notes that matter, snapped to sixteenths, as events: notes starting on the same sixteenth (or spread
     as a strum) are one chord, a set of pitches on the staff. Notes belong to the chord playing as they start,
     or are heard clearly enough to stand outside it. A chord is kept when its strongest note is a real attack:
@@ -351,8 +357,9 @@ def chord_notes(events, chords, beats, attack=None, faint=()):
     notes much weaker than its strongest are dropped. Its written length is how long its notes sound, up to the
     next chord, which it reaches when the gap is a sixteenth or less. Each note's sure is its confidence: how
     strongly it was heard and how clearly it was struck.
-    attack: (start, pitch) -> 0 to 1; faint: events too weak to write. Returns the notes and every note heard,
-    the faint ones included, for the vote among repeated passages."""
+    attack: (start, pitch) -> 0 to 1; faint: events too weak to write; shape(event) -> (end, velocity): where
+    the note really ends and how loud it was played, each note then carrying its velocity. Returns the notes and
+    every note heard, the faint ones included, for the vote among repeated passages."""
     attack = attack or {}
     starts = [chord['start'] for chord in chords]
     struck = lambda event: attack.get((event[0], event[2]), 1.0)
@@ -366,6 +373,13 @@ def chord_notes(events, chords, beats, attack=None, faint=()):
     if not heard:
         return [], []
     heard = joined_repeats(heard, attack)
+    velocity = {}
+    if shape:
+        shaped = []
+        for event in heard:
+            end, velocity[(event[0], event[2])] = shape(event)
+            shaped.append((event[0], end, event[2], event[3]))
+        heard = shaped
     shift = grid_shift([{'start': event[0]} for event in heard], beats)
     def stacked(line):
         stacks = {}
@@ -382,8 +396,11 @@ def chord_notes(events, chords, beats, attack=None, faint=()):
                 stack[event[2]] = event
         return stacks
     sure = lambda event: round(min(1.0, 0.6 * event[3] + 0.4 * struck(event)), 2)
-    note = lambda event, unit, length: {'start': round(event[0], 2), 'end': round(event[1], 2), 'pitch': event[2],
-                                        'unit': unit, 'length': length, 'sure': sure(event)}
+    def note(event, unit, length):
+        found = {'start': round(event[0], 2), 'end': round(event[1], 2), 'pitch': event[2], 'unit': unit, 'length': length, 'sure': sure(event)}
+        if (event[0], event[2]) in velocity:
+            found['velocity'] = velocity[(event[0], event[2])]
+        return found
     stacks = stacked(heard)
     units = sorted(stacks)
     peaks = [max(event[3] for event in stacks[unit].values()) for unit in units]
@@ -456,6 +473,37 @@ def heard_pitch(output, times):
             return 0.0
         return float(note[low:high, column].max())
     return evidence
+
+
+def note_shape(output, times, audio, rate, hop=256):
+    """shape(event) -> (end, velocity): each note's own end and loudness (1 to 127), as chord_notes takes it."""
+    from scipy.ndimage import percentile_filter
+    note = output['note']
+    level = librosa.feature.rms(y=audio, frame_length=4 * hop, hop_length=hop)[0]
+    local = percentile_filter(level, 95, size=max(3, int(LOCAL_SECONDS * rate / hop)), mode='nearest')
+    gap = max(1, int(round(RING_GAP / max(float(times[1] - times[0]), 1e-3)))) if len(times) > 1 else 1
+    def shape(event):
+        start, end, pitch, _ = event
+        column = min(max(pitch - FIRST_MODEL_PITCH, 0), note.shape[1] - 1)
+        first, last = int(np.searchsorted(times, start)), int(np.searchsorted(times, end))
+        heard = note[first:last + 1, column]
+        if not len(heard):
+            return end, 64
+        opening = float(heard[:gap].max())
+        # The first stretch of RING_GAP under DECAY_SHARE of the opening ends the note; never later than the model's end.
+        below = np.concatenate([heard < DECAY_SHARE * opening, [False]])
+        run = 0
+        for index, quiet in enumerate(below):
+            run = run + 1 if quiet else 0
+            if run == gap:
+                end = min(end, max(start + SHORTEST_CHORD_NOTE, float(times[min(first + index - gap + 1, len(times) - 1)])))
+                break
+        at = int(start * rate / hop)
+        loud = float(level[at:at + max(2, int(0.06 * rate / hop))].max()) if at < len(level) else 0.0
+        db = 20 * np.log10(max(loud / max(float(local[min(at, len(local) - 1)]), 1e-9), 1e-6))
+        share = 0.75 * float(np.clip(1 + db / VELOCITY_DB, 0, 1)) + 0.25 * min(opening, 1.0)
+        return round(float(end), 2), int(round(1 + 126 * share))
+    return shape
 
 
 def quiet_frames(level):
@@ -675,10 +723,12 @@ def ensemble_part(stems, names, chromas, levels, frames, loudest, floor, beats, 
     chords = chord_changes([chord_name(*chord, spelled) for chord in path], playing)
     if 'bass' in chromas:
         chords = slash_chords(chords, chromas['bass'], levels['bass'], frames, spelled)
-    notes, candidates = chord_notes(events, chords, beats, attacks(events + faint, output, times, flux, flux_rate), faint)
+    notes, candidates = chord_notes(events, chords, beats, attacks(events + faint, output, times, flux, flux_rate), faint,
+                                    note_shape(output, times, mix, rate))
     # Repeated passages correct one another by vote, each keeping what its own sound clearly says.
     notes, chords, found, changes = voted(notes, candidates, heard_pitch(output, times), chords, beats, bar)
-    # Each note's confidence (0 to 1) goes out with it; voted marks one the vote added.
+    # Each note's confidence (0 to 1) and velocity (1 to 127) go out with it, its start and end as played (not
+    # snapped to the grid); voted marks one the vote added.
     notes = [{**{key: value for key, value in note.items() if key != 'sure'}, 'confidence': note['sure']} for note in notes]
     return {'key': key_name(root, minor), 'chords': chords, 'notes': notes, 'second': [], 'repeats': found, 'corrections': changes}
 

@@ -1,6 +1,8 @@
 // The Harmonic score as files to take elsewhere: a MIDI file that plays in time with the song from its first beat
-// (its tempo follows the song's beats) and MusicXML for notation programs. Notes on one sixteenth are a chord; chord names go with
-// them (MIDI marker events, MusicXML harmony). Pure functions only, so they can be unit-tested.
+// (its tempo follows the song's beats), every note as the stem played it (its own start, end and velocity, as a
+// SoundFont would render it); MusicXML for notation programs, on the written grid, where notes on one sixteenth are a
+// chord; and the notes as JSON events. Chord names go with them (MIDI marker events, MusicXML harmony). Pure functions
+// only, so they can be unit-tested.
 import type { HarmonyGrid, HarmonyNote, HarmonyPart } from './services';
 
 const TICKS = 480;            // Per quarter note.
@@ -23,8 +25,17 @@ function chordUnit(beats: number[], seconds: number): number {
   return Math.round((index + (seconds - beats[index]) / span) * 2) * 2;
 }
 
+// Song seconds as a (fractional) beat of the grid, extrapolating past its ends.
+function beatAt(beats: number[], seconds: number): number {
+  let index = 0;
+  while (index < beats.length - 2 && beats[index + 1] <= seconds) index++;
+  return index + (seconds - beats[index]) / (beats[index + 1] - beats[index] || 0.5);
+}
+
+const velocityOf = (note: HarmonyNote) => Math.max(1, Math.min(127, note.velocity ?? Math.round(40 + 87 * (note.confidence ?? 0.7))));
+
 // A format 0 MIDI file: a tempo change on every beat, so it stays with the song, the chord names as markers, and
-// every note at its written place and length.
+// every note when the stem played it, as loud.
 export function harmonyMidi(part: HarmonyPart, grid: HarmonyGrid): Uint8Array<ArrayBuffer> {
   const events: { tick: number; order: number; data: number[] }[] = [];
   for (let beat = 0; beat < grid.beats.length - 1; beat++) {
@@ -40,9 +51,9 @@ export function harmonyMidi(part: HarmonyPart, grid: HarmonyGrid): Uint8Array<Ar
     events.push({ tick: chordUnit(grid.beats, chord.start) * SIXTEENTH, order: 1, data: [0xff, 0x06, ...variable(name.length), ...name] });
   }
   for (const note of part.notes) {
-    const velocity = Math.max(30, Math.min(127, Math.round(40 + 87 * (note.confidence ?? 0.7))));
-    events.push({ tick: note.unit * SIXTEENTH, order: 3, data: [0x90, note.pitch, velocity] });
-    events.push({ tick: (note.unit + note.length) * SIXTEENTH, order: 2, data: [0x80, note.pitch, 0] });
+    const on = Math.max(0, Math.round(beatAt(grid.beats, note.start) * TICKS));
+    events.push({ tick: on, order: 3, data: [0x90, note.pitch, velocityOf(note)] });
+    events.push({ tick: Math.max(on + 1, Math.round(beatAt(grid.beats, note.end) * TICKS)), order: 2, data: [0x80, note.pitch, 0] });
   }
   events.sort((a, b) => a.tick - b.tick || a.order - b.order);
   const track: number[] = [];
@@ -190,4 +201,24 @@ export function harmonyMusicXml(part: HarmonyPart, grid: HarmonyGrid, title: str
     + `<score-partwise version="4.0"><work><work-title>${escape(title)}</work-title></work>`
     + '<part-list><score-part id="P1"><part-name>Harmonic</part-name></score-part></part-list>'
     + `<part id="P1">${measures.join('')}</part></score-partwise>\n`;
+}
+
+// One event per note, as the transcription design has them: its bar (from the song's first bar; a pickup is bar -1),
+// pitch, start and end as played, its beat in the bar (as played, not snapped), velocity and confidence; voted when
+// the vote among repeated passages added it. With the chords and the repeated passages.
+export interface PlayedEvent {
+  barId: number; pitchMidi: number; onsetSec: number; offsetSec: number; durationSec: number; onsetBeat: number;
+  velocity: number; confidence: number | null; voted?: boolean;
+}
+export function harmonyEvents(part: HarmonyPart, grid: HarmonyGrid): { events: PlayedEvent[]; chords: HarmonyPart['chords']; repeats: HarmonyPart['repeats'] } {
+  const round = (value: number) => Math.round(value * 1000) / 1000;
+  const events = [...part.notes].sort((a, b) => a.start - b.start || a.pitch - b.pitch).map(note => {
+    const beat = beatAt(grid.beats, note.start) - grid.firstBar;
+    const barId = Math.floor((note.unit - grid.firstBar * 4) / BAR);
+    return {
+      barId, pitchMidi: note.pitch, onsetSec: round(note.start), offsetSec: round(note.end), durationSec: round(note.end - note.start),
+      onsetBeat: round(beat - barId * 4), velocity: velocityOf(note), confidence: note.confidence ?? null, ...(note.voted ? { voted: true } : {}),
+    };
+  });
+  return { events, chords: part.chords, repeats: part.repeats ?? [] };
 }

@@ -9,8 +9,11 @@ added (bleed), and noise. Then three ways of transcribing are compared:
   B  with the repeat vote,
   C  with the repeat vote and the chords.
 Measured: note onset F1 (same pitch, onset within 50 ms), onset + offset F1 (offset within 20% of the note or
-50 ms), event pitch-set precision and recall (notes sounding together), chord accuracy per beat (root and major or minor), how many
-played bars the repeat families cover, and seconds taken.
+50 ms), event pitch-set precision, recall and F1 (notes sounding together), chord accuracy per beat (root and
+major or minor), how many played bars the repeat families cover, how many repeated strikes of one pitch are kept
+(each a note of its own), how well the found velocities follow the played levels (rank correlation), how alike
+the notes found sound when rendered again with the same sound (log-mel cosine against the stem, design addendum),
+and seconds taken. --whole-notes turns off the per-note end and velocity, to compare.
 
 Run inside the worker image (it has Basic Pitch):
   docker run --rm --entrypoint /opt/stems/bin/python -v $PWD/backend:/src -v $PWD/tools/transcription:/tool \
@@ -42,6 +45,7 @@ LEAD_IN = 1  # Silent bars first, as a song's count-in.
 SOFT_SHARE, SOFT_LEVEL = 0.15, 0.22
 BLEED_PER_BAR, BLEED_LEVEL = 0.6, 0.2
 NOISE_DB = -38
+VARIANTS = ('A', 'B', 'C')
 
 
 def voiced(tones, count, rng, low=52, high=76):
@@ -74,13 +78,16 @@ def song(rng):
     return notes, chords, bleed
 
 
-def render(notes, bleed, sound, rng, seconds):
+def render(notes, bleed, sound, rng, seconds, levels=None, noise=True):
+    """The stem: notes at levels (random, some soft, when not given), the bleed, and noise; returns the audio and
+    the level each note was played at."""
     library = json.load(open('/sounds/styles.json'))['samples']
     sample, sample_rate = soundfile.read(f'/sounds/sounds/{sound}.flac', dtype='float32')
     sample = sample.mean(axis=1) if sample.ndim > 1 else sample
     audio = np.zeros(int(seconds * RATE) + RATE)
-    for (start, end, pitch), level in [(note, SOFT_LEVEL if rng.random() < SOFT_SHARE else 0.8 + 0.2 * rng.random()) for note in notes] + \
-                                      [(note, BLEED_LEVEL) for note in bleed]:
+    if levels is None:
+        levels = [SOFT_LEVEL if rng.random() < SOFT_SHARE else 0.8 + 0.2 * rng.random() for _ in notes]
+    for (start, end, pitch), level in list(zip(notes, levels)) + [(note, BLEED_LEVEL) for note in bleed]:
         index = int(np.argmin([abs(p - pitch) for p in library['pitches']]))
         rate = 2 ** ((pitch - library['pitches'][index]) / 12)
         offset = int(index * library['slot'] * sample_rate)
@@ -93,7 +100,7 @@ def render(notes, bleed, sound, rng, seconds):
         at = int(start * RATE)
         audio[at:at + len(tone)] += level * tone[:len(audio) - at]
     audio /= max(float(np.abs(audio).max()), 1e-6)
-    return audio + rng.normal(0, 10 ** (NOISE_DB / 20), len(audio))
+    return (audio + rng.normal(0, 10 ** (NOISE_DB / 20), len(audio)) if noise else audio), levels
 
 
 def matched(truth, found, offsets=False):
@@ -113,7 +120,7 @@ def matched(truth, found, offsets=False):
 
 
 def pitch_sets(truth, found):
-    """Precision and recall of the pitches sounding together at each true onset."""
+    """Precision, recall and F1 of the pitches sounding together at each true onset."""
     onsets = sorted({start for start, _, _ in truth})
     right = wrong = missed = 0
     for onset in onsets:
@@ -122,7 +129,50 @@ def pitch_sets(truth, found):
         right += len(real & heard)
         wrong += len(heard - real)
         missed += len(real - heard)
-    return round(right / max(right + wrong, 1), 3), round(right / max(right + missed, 1), 3)
+    precision, recall = right / max(right + wrong, 1), right / max(right + missed, 1)
+    return round(precision, 3), round(recall, 3), round(2 * precision * recall / max(precision + recall, 1e-9), 3)
+
+
+def pairs(truth, found):
+    """(truth index, found index) for each true note found: same pitch, onset within 50 ms."""
+    used, out = set(), []
+    for index, (start, _, pitch) in enumerate(truth):
+        for other, (other_start, _, other_pitch) in enumerate(found):
+            if other not in used and other_pitch == pitch and abs(other_start - start) <= 0.05:
+                used.add(other)
+                out.append((index, other))
+                break
+    return out
+
+
+def restrikes_kept(truth, found):
+    """Of the notes struck again right after the same pitch (within 150 ms of its end), the share found as notes
+    of their own."""
+    last, again = {}, []
+    for index, (start, end, pitch) in sorted(enumerate(truth), key=lambda item: item[1][0]):
+        if pitch in last and start - last[pitch] <= 0.15:
+            again.append(index)
+        last[pitch] = end
+    hit = {index for index, _ in pairs(truth, found)}
+    return round(sum(index in hit for index in again) / max(len(again), 1), 3)
+
+
+def rank_correlation(one, two):
+    if len(one) < 3:
+        return None
+    rank = lambda values: np.argsort(np.argsort(values))
+    return round(float(np.corrcoef(rank(one), rank(two))[0, 1]), 3)
+
+
+def sounds_alike(audio, again):
+    """Mean cosine of the two log-mel spectrograms, frame by frame where the stem sounds."""
+    import librosa
+    length = min(len(audio), len(again))
+    mel = lambda signal: np.log1p(100 * librosa.feature.melspectrogram(y=signal[:length], sr=RATE, n_mels=96))
+    one, two = mel(audio), mel(again)
+    loud = one.sum(axis=0) > 0.1 * float(np.percentile(one.sum(axis=0), 95))
+    cosine = (one * two).sum(axis=0) / np.maximum(np.linalg.norm(one, axis=0) * np.linalg.norm(two, axis=0), 1e-9)
+    return round(float(cosine[loud].mean()), 3)
 
 
 def chord_accuracy(truth, chords):
@@ -139,9 +189,11 @@ def chord_accuracy(truth, chords):
     return round(sum(same(at(start), name) for start, name in truth) / max(len(truth), 1), 3)
 
 
-def transcribe(path, beats, variant):
+def transcribe(path, beats, variant, whole_notes=False):
     """The ensemble's notes and chords with parts of the method switched off."""
-    original_tones, original_voted = h.tones_of, h.voted
+    original_tones, original_voted, original_shape = h.tones_of, h.voted, h.note_shape
+    if whole_notes:
+        h.note_shape = lambda *_: (lambda event: (event[1], 64))
     if variant in ('A', 'B'):
         h.tones_of = lambda name: None if name == h.NO_CHORD else set(range(12))
     if variant == 'A':
@@ -151,7 +203,7 @@ def transcribe(path, beats, variant):
         found = h.analyze({'other': path}, 'other', {'beats': beats, 'firstBar': LEAD_IN})['stems']['other']
         return found, round(time.time() - started, 1)
     finally:
-        h.tones_of, h.voted = original_tones, original_voted
+        h.tones_of, h.voted, h.note_shape = original_tones, original_voted, original_shape
 
 
 def main():
@@ -160,25 +212,33 @@ def main():
     parser.add_argument('--seed', type=int, default=1)
     parser.add_argument('--sound', type=int, default=0)
     parser.add_argument('--playings', type=int, default=PLAYINGS)
+    parser.add_argument('--whole-notes', action='store_true')
     arguments = parser.parse_args()
     PLAYINGS = arguments.playings
     rng = np.random.default_rng(arguments.seed)
     truth, chords, bleed = song(rng)
     bars = LEAD_IN + PLAYINGS * len(PROGRESSION) + 1
     beats = [round(beat * BEAT, 3) for beat in range(bars * 4 + 1)]
-    audio = render(truth, bleed, arguments.sound, rng, bars * 4 * BEAT)
+    audio, levels = render(truth, bleed, arguments.sound, rng, bars * 4 * BEAT)
     played_bars = set(range(LEAD_IN, LEAD_IN + PLAYINGS * len(PROGRESSION)))
     results = {}
     with tempfile.NamedTemporaryFile(suffix='.wav') as file:
         soundfile.write(file.name, audio, RATE)
-        for variant in ('A', 'B', 'C'):
-            found, seconds = transcribe(file.name, beats, variant)
+        for variant in VARIANTS:
+            found, seconds = transcribe(file.name, beats, variant, arguments.whole_notes)
             notes = [(note['start'], note['end'], note['pitch']) for note in found['notes']]
+            matched_pairs = pairs(truth, notes)
+            velocities = [found['notes'][other].get('velocity', 64) for _, other in matched_pairs]
+            again, _ = render(notes, [], arguments.sound, rng, bars * 4 * BEAT,
+                              [note.get('velocity', 64) / 127 for note in found['notes']], noise=False)
             covered = {member + step for family in found.get('repeats', []) for member in family['members'] for step in range(family['bars'])}
-            precision, recall = pitch_sets(truth, notes)
+            precision, recall, f1 = pitch_sets(truth, notes)
             results[variant] = {
                 'onset F1': matched(truth, notes), 'onset+offset F1': matched(truth, notes, offsets=True),
-                'pitch-set precision': precision, 'pitch-set recall': recall,
+                'pitch-set precision': precision, 'pitch-set recall': recall, 'multi-pitch F1': f1,
+                'restrikes kept': restrikes_kept(truth, notes),
+                'velocity rank correlation': rank_correlation([levels[index] for index, _ in matched_pairs], velocities),
+                'resynthesis alike': sounds_alike(audio, again),
                 'chord accuracy': chord_accuracy(chords, found['chords']),
                 'bars in repeats': round(len(covered & {bar - LEAD_IN for bar in played_bars}) / len(played_bars), 3),
                 'added by vote': found.get('corrections', {}).get('added', 0),

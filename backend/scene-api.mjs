@@ -35,7 +35,7 @@ const TRANSPOSE_KEY = 'transpose';
 const MAX_TRANSPOSE = 6;
 // Parts played live from the Harmonic score (the website's accompaniment): which part, style, sound and mix.
 const ACCOMPANIMENT_KEY = 'accompaniment';
-export const ACCOMPANIMENT_KINDS = ['guitar-rhythm', 'keys-rhythm', 'guitar-melody', 'keys-melody'];
+export const ACCOMPANIMENT_KINDS = ['guitar-rhythm', 'keys-rhythm', 'guitar-melody', 'keys-melody', 'guitar-notes', 'keys-notes'];
 const MAX_ACCOMPANIMENT = 4;
 
 export class SceneInputError extends Error {

@@ -6,11 +6,11 @@ import { ActivityService, ENSEMBLE_STEMS, HARMONY_STEMS, HarmonyGrid, REGENERATE
 import { ConfirmationService } from './confirmation';
 import { captureSceneSettings, restoredSceneInterval } from './scene-settings';
 import { HarmonyStrip, transposeKey, transposePart } from './harmony-strip';
-import { harmonyMidi, harmonyMusicXml } from './score-export';
+import { harmonyEvents, harmonyMidi, harmonyMusicXml } from './score-export';
 import { shiftBuffer } from './pitch-shift';
 import { scoreSheet, sheetFileName } from './score-sheet';
 import {
-  ACCOMPANIMENT_KINDS, type AccompanimentChoices, type AccompanimentKind, type StyleLibrary, accompanimentEvents, familyOf, offered,
+  ACCOMPANIMENT_KINDS, type AccompanimentChoices, type AccompanimentKind, type StyleLibrary, accompanimentEvents, familyOf, offered, styled,
 } from './accompaniment';
 import { AccompanimentVoice, type PlayClock, loadLibrary, loadSound } from './accompaniment-player';
 import { LyricsStrip } from './lyrics-strip';
@@ -473,6 +473,8 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                         [attr.aria-label]="'Save the ' + track.label + ' score as MIDI'">MIDI</button>
                       <button type="button" class="secondary" (click)="saveScoreFile(track, 'musicxml')"
                         [attr.aria-label]="'Save the ' + track.label + ' score as MusicXML'">MusicXML</button>
+                      <button type="button" class="secondary" (click)="saveScoreFile(track, 'events')"
+                        [attr.aria-label]="'Save the ' + track.label + ' notes as played, as JSON events'">Events</button>
                     }
                   }
                   @if (track.hasCleaned) {
@@ -753,13 +755,15 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
             @for (part of accompaniments(); track part.id) {
               <div class="accompaniment-part" role="group" [attr.aria-label]="kindLabel(part.kind)">
                 <strong>{{ kindLabel(part.kind) }}</strong>
-                <label>Style
-                  <select [value]="part.style" (change)="changeAccompaniment(part.id, { style: $any($event.target).value })">
-                    @for (style of offeredFor(part.kind).styles; track style; let first = $first) {
-                      <option [value]="style" [selected]="style === part.style">{{ style }}{{ first ? ' (closest)' : '' }}</option>
-                    }
-                  </select>
-                </label>
+                @if (isStyled(part.kind)) {
+                  <label>Style
+                    <select [value]="part.style" (change)="changeAccompaniment(part.id, { style: $any($event.target).value })">
+                      @for (style of offeredFor(part.kind).styles; track style; let first = $first) {
+                        <option [value]="style" [selected]="style === part.style">{{ style }}{{ first ? ' (closest)' : '' }}</option>
+                      }
+                    </select>
+                  </label>
+                }
                 <label>Sound
                   <select (change)="changeAccompaniment(part.id, { sound: +$any($event.target).value })">
                     @for (sound of offeredFor(part.kind).sounds; track sound; let first = $first) {
@@ -1147,8 +1151,10 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
 
   kindLabel(kind: AccompanimentKind): string {
     return { 'guitar-rhythm': 'Electric rhythm', 'keys-rhythm': 'Keyboard rhythm', 'guitar-melody': 'Electric melody + rhythm',
-      'keys-melody': 'Keyboard melody + rhythm' }[kind];
+      'keys-melody': 'Keyboard melody + rhythm', 'guitar-notes': 'Electric, transcribed notes', 'keys-notes': 'Keyboard, transcribed notes' }[kind];
   }
+
+  isStyled(kind: AccompanimentKind): boolean { return styled(kind); }
 
   soundName(sound: number): string { return this.accompanimentLibrary()?.sounds[String(sound)]?.name ?? `Sound ${sound}`; }
 
@@ -1323,17 +1329,17 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     document.body.appendChild(frame);
   }
 
-  // The score as MIDI or MusicXML, in the key it is heard in.
-  saveScoreFile(track: { name: string; label: string }, kind: 'midi' | 'musicxml'): void {
+  // The score as MIDI, MusicXML or JSON events, in the key it is heard in.
+  saveScoreFile(track: { name: string; label: string }, kind: 'midi' | 'musicxml' | 'events'): void {
     const part = this.heardParts()?.[track.name], grid = this.harmonyGrid();
     if (!part || !grid) return;
     const title = `${this.sceneTitle || this.job()?.title || 'Score'} - ${track.label}`;
-    const blob = kind === 'midi'
-      ? new Blob([harmonyMidi(part, grid)], { type: 'audio/midi' })
+    const blob = kind === 'midi' ? new Blob([harmonyMidi(part, grid)], { type: 'audio/midi' })
+      : kind === 'events' ? new Blob([JSON.stringify(harmonyEvents(part, grid), null, 1)], { type: 'application/json' })
       : new Blob([harmonyMusicXml({ ...part, key: part.key ?? this.heardKey() }, grid, title)], { type: 'application/vnd.recordare.musicxml+xml' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `${title}.${kind === 'midi' ? 'mid' : 'musicxml'}`;
+    link.download = `${title}.${{ midi: 'mid', musicxml: 'musicxml', events: 'events.json' }[kind]}`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
   }
@@ -1342,8 +1348,10 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   repeatSummary(part: HarmonyPart): string {
     const families = part.repeats?.length ?? 0, added = part.corrections?.added ?? 0, removed = part.corrections?.removed.length ?? 0;
     if (!families) return '';
-    return `${families} repeated passage${families === 1 ? '' : 's'} checked against each other: ${added} note${added === 1 ? '' : 's'} filled in`
-      + ` (drawn lighter), ${removed} dropped.`;
+    const moved = part.repeats!.reduce((count, family) => count + (family.shifts ?? []).filter(Boolean).length, 0);
+    return `${families} repeated passage${families === 1 ? '' : 's'} checked against each other`
+      + (moved ? ` (${moved} playing${moved === 1 ? '' : 's'} in another key)` : '')
+      + `: ${added} note${added === 1 ? '' : 's'} filled in (drawn lighter), ${removed} dropped.`;
   }
 
   hasMusic(part?: HarmonyPart): boolean { return !!part && (part.chords.length > 0 || part.notes.length > 0 || !!part.hits?.length); }
