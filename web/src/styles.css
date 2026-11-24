@@ -516,3 +516,5 @@ footer { text-align: center; color: #64748b; padding: 20px var(--page-gutter); f
 .spectrum-overview, .spectrum-canvas { display: block; width: 100%; border-radius: 6px; background: #0d1117; }
 .spectrum-overview { cursor: pointer; touch-action: none; }
 .spectrum-label { font-size: .95rem; margin: 16px 0 6px; }
+.spectrum-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; }
+.spectrum-heading label { display: flex; align-items: center; gap: 8px; font-size: .9rem; }

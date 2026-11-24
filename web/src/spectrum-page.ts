@@ -1,11 +1,12 @@
-// A page for looking closely at the Harmonic (other) stem: its waveform over the whole song, and its waveform and
-// spectrogram flowing as it plays, on one time scale with the moment playing at the middle. The song's beats (from its
+// A page for looking closely at the Harmonic (other) stem: its waveform over the whole song, and its waveform,
+// spectrogram and the energy that stands out in it (spectrogram.ts meaningful) flowing as it plays, on one time
+// scale with the moment playing at the middle. The song's beats (from its
 // chord analysis, when there is one) are drawn on both, bar lines brighter.
 import { ChangeDetectionStrategy, Component, ElementRef, OnDestroy, OnInit, inject, signal, viewChild } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { StemsService, errorMessage, type HarmonyGrid, type Job } from './services';
 import {
-  HOP, LOWEST_PITCH, RANGE_DB, ROWS, ROWS_PER_SEMITONE, type Spectrogram, heatColors, monoSignal, spectrogramOf,
+  HOP, LOWEST_PITCH, RANGE_DB, ROWS, ROWS_PER_SEMITONE, type Spectrogram, heatColors, meaningful, monoSignal, spectrogramOf,
 } from './spectrogram';
 
 const STEM = 'other';
@@ -59,6 +60,18 @@ function blockPeaks(signal: Float32Array, block: number) {
       <canvas #wave class="spectrum-canvas" [style.height.px]="waveHeight" role="img" aria-label="Harmonic stem waveform around the moment playing"></canvas>
       <h2 class="spectrum-label">Spectrogram</h2>
       <canvas #spectrum class="spectrum-canvas" [style.height.px]="spectrumHeight" role="img" aria-label="Harmonic stem spectrogram around the moment playing"></canvas>
+      <div class="spectrum-heading">
+        <h2 class="spectrum-label">Meaningful energy</h2>
+        <label>Above the noise floor {{ aboveFloor() }} dB
+          <input type="range" min="3" max="30" step="1" [value]="aboveFloor()" (input)="setAboveFloor(+$any($event.target).value)" [disabled]="!ready()">
+        </label>
+        <label>Within {{ withinLoudest() }} dB of the loudest
+          <input type="range" min="10" max="50" step="1" [value]="withinLoudest()" (input)="setWithinLoudest(+$any($event.target).value)" [disabled]="!ready()">
+        </label>
+      </div>
+      <p class="hint">Only peaks along the pitch axis that stand above that pitch's usual level, are not far below the loudest
+        sound at that moment, and last at least about 90 ms. Brighter is further above the floor.</p>
+      <canvas #energy class="spectrum-canvas" [style.height.px]="spectrumHeight" role="img" aria-label="The energy that stands out in the Harmonic stem around the moment playing"></canvas>
     </section>
   `,
 })
@@ -79,9 +92,14 @@ export class SpectrumPage implements OnInit, OnDestroy {
   readonly duration = signal(0);
   readonly pixelsPerSecond = signal(160);
   readonly grid = signal<HarmonyGrid | null>(null);
+  readonly aboveFloor = signal(12);
+  readonly withinLoudest = signal(30);
   private readonly overview = viewChild.required<ElementRef<HTMLCanvasElement>>('overview');
   private readonly wave = viewChild.required<ElementRef<HTMLCanvasElement>>('wave');
   private readonly spectrum = viewChild.required<ElementRef<HTMLCanvasElement>>('spectrum');
+  private readonly energy = viewChild.required<ElementRef<HTMLCanvasElement>>('energy');
+  private kept?: Uint8Array;
+  private keptTimer?: ReturnType<typeof setTimeout>;
   private context?: AudioContext;
   private buffer?: AudioBuffer;
   private source?: AudioBufferSourceNode;
@@ -107,6 +125,7 @@ export class SpectrumPage implements OnInit, OnDestroy {
     this.destroyed = true;
     window.removeEventListener('resize', this.resize);
     cancelAnimationFrame(this.frame);
+    clearTimeout(this.keptTimer);
     this.stopSource();
     void this.context?.close();
   }
@@ -136,6 +155,7 @@ export class SpectrumPage implements OnInit, OnDestroy {
         if (!this.destroyed) this.status.set(`Drawing the spectrogram… ${(share * 100).toFixed(0)}%`);
       });
       if (this.destroyed) return;
+      this.kept = meaningful(this.spectrogram, this.aboveFloor(), this.withinLoudest());
       this.status.set('');
       this.draw();
     } catch (error) {
@@ -206,6 +226,7 @@ export class SpectrumPage implements OnInit, OnDestroy {
 
   private tick(): void {
     cancelAnimationFrame(this.frame);
+    clearTimeout(this.keptTimer);
     const step = () => {
       if (!this.playing() || this.destroyed) return;
       this.position.set(this.now());
@@ -228,6 +249,26 @@ export class SpectrumPage implements OnInit, OnDestroy {
     const canvas = event.currentTarget as HTMLCanvasElement;
     const rect = canvas.getBoundingClientRect();
     this.seekTo((event.clientX - rect.left) / rect.width * this.duration());
+  }
+
+  setAboveFloor(value: number): void {
+    this.aboveFloor.set(value);
+    this.refindEnergy();
+  }
+
+  setWithinLoudest(value: number): void {
+    this.withinLoudest.set(value);
+    this.refindEnergy();
+  }
+
+  // Found again once the slider rests a moment.
+  private refindEnergy(): void {
+    clearTimeout(this.keptTimer);
+    this.keptTimer = setTimeout(() => {
+      if (!this.spectrogram || this.destroyed) return;
+      this.kept = meaningful(this.spectrogram, this.aboveFloor(), this.withinLoudest());
+      this.draw();
+    }, 120);
   }
 
   setZoom(value: number): void {
@@ -259,7 +300,14 @@ export class SpectrumPage implements OnInit, OnDestroy {
     const time = this.position();
     this.drawOverview(time);
     this.drawWave(time);
-    this.drawSpectrum(time);
+    this.drawSpectrum(this.spectrum().nativeElement, time, (frame, row) => {
+      const level = this.spectrogram!.levels[frame * ROWS + row];
+      return Math.round((level + RANGE_DB) / RANGE_DB * 255);
+    });
+    this.drawSpectrum(this.energy().nativeElement, time, (frame, row) => {
+      const above = this.kept?.[frame * ROWS + row] ?? 0;
+      return above ? Math.min(255, 80 + above * 6) : 0;
+    });
   }
 
   // Seconds at each pixel column of a flowing view, the moment playing at the middle.
@@ -333,9 +381,8 @@ export class SpectrumPage implements OnInit, OnDestroy {
   }
 
   // Each column is read from the frame playing at its moment: one image column per CSS pixel and one row per
-  // spectrogram row, scaled to the canvas; low notes at the bottom.
-  private drawSpectrum(time: number): void {
-    const canvas = this.spectrum().nativeElement;
+  // spectrogram row, scaled to the canvas; low notes at the bottom. step(frame, row): the colour, 0 to 255.
+  private drawSpectrum(canvas: HTMLCanvasElement, time: number, step: (frame: number, row: number) => number): void {
     const prepared = this.prepare(canvas, SPECTRUM_HEIGHT);
     if (!prepared) return;
     const { context, width } = prepared;
@@ -355,9 +402,8 @@ export class SpectrumPage implements OnInit, OnDestroy {
         const inside = frame >= 0 && frame < spectrogram.frames;
         for (let row = 0; row < ROWS; row++) {
           const pixel = ((ROWS - 1 - row) * width + x) * 4;
-          const level = inside ? spectrogram.levels[frame * ROWS + row] : -RANGE_DB;
-          const step = Math.round((level + RANGE_DB) / RANGE_DB * 255) * 3;
-          pixels[pixel] = COLORS[step]; pixels[pixel + 1] = COLORS[step + 1]; pixels[pixel + 2] = COLORS[step + 2]; pixels[pixel + 3] = 255;
+          const color = (inside ? step(frame, row) : 0) * 3;
+          pixels[pixel] = COLORS[color]; pixels[pixel + 1] = COLORS[color + 1]; pixels[pixel + 2] = COLORS[color + 2]; pixels[pixel + 3] = 255;
         }
       }
       this.scratch!.getContext('2d')!.putImageData(this.image, 0, 0);

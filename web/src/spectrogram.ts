@@ -168,3 +168,53 @@ export function timeAtPosition(beats: number[], position: number): number {
   const index = Math.floor(beat);
   return beats[index] + (beat - index) * (beats[index + 1] - beats[index]);
 }
+
+// What stands out in a spectrogram: for each frame, the rows that are
+//   a peak along the pitch axis (at least as loud as the rows within two thirds of a semitone),
+//   above their own noise floor by aboveFloor dB (the row's FLOOR_PERCENTILE level over the song: a note held
+//   for long, or struck again and again, does not raise it),
+//   within withinLoudest dB of the frame's loudest row, and
+//   lasting at least LEAST_FRAMES frames (about 90 ms) on the same row or the next one.
+// Returns, per frame and row, how far above its floor the level is (1 to 255, a dB each), 0 where nothing is.
+export const FLOOR_PERCENTILE = 0.3;
+export const LEAST_FRAMES = 4;  // The windows smear a 20 ms click over three frames.
+export function meaningful(spectrogram: Spectrogram, aboveFloor = 12, withinLoudest = 30): Uint8Array {
+  const { frames, levels } = spectrogram;
+  const floors = new Float32Array(ROWS);
+  const column = new Float32Array(frames);
+  for (let row = 0; row < ROWS; row++) {
+    for (let frame = 0; frame < frames; frame++) column[frame] = levels[frame * ROWS + row];
+    column.sort();
+    floors[row] = column[Math.floor(FLOOR_PERCENTILE * (frames - 1))];
+  }
+  const kept = new Uint8Array(frames * ROWS);
+  for (let frame = 0; frame < frames; frame++) {
+    const base = frame * ROWS;
+    let loudest = -Infinity;
+    for (let row = 0; row < ROWS; row++) loudest = Math.max(loudest, levels[base + row]);
+    for (let row = 0; row < ROWS; row++) {
+      const level = levels[base + row], above = level - floors[row];
+      if (above < aboveFloor || level < loudest - withinLoudest) continue;
+      let peak = true;
+      for (let near = Math.max(0, row - 2); near <= Math.min(ROWS - 1, row + 2) && peak; near++) {
+        if (near !== row && levels[base + near] > level) peak = false;
+      }
+      if (peak) kept[base + row] = Math.min(255, Math.max(1, Math.round(above)));
+    }
+  }
+  // Short blips go: a kept cell needs LEAST_FRAMES frames in a row kept on its row or the next one.
+  const lasting = new Uint8Array(frames * ROWS);
+  const on = (frame: number, row: number) => row >= 0 && row < ROWS && kept[frame * ROWS + row] > 0;
+  const here = (frame: number, row: number) => on(frame, row) || on(frame, row - 1) || on(frame, row + 1);
+  for (let row = 0; row < ROWS; row++) {
+    let start = 0;
+    for (let frame = 0; frame <= frames; frame++) {
+      if (frame < frames && here(frame, row)) continue;
+      if (frame - start >= LEAST_FRAMES) {
+        for (let at = start; at < frame; at++) lasting[at * ROWS + row] = kept[at * ROWS + row];
+      }
+      start = frame + 1;
+    }
+  }
+  return lasting;
+}

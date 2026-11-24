@@ -39,3 +39,25 @@ test('grid positions turn back into song seconds', () => {
   assert.equal(s.timeAtPosition(beats, -4), 0.5);
   assert.equal(s.heatColors().length, 768);
 });
+
+test('meaningful energy keeps a held tone over noise and drops the noise and a short blip', async () => {
+  const rate = 22050, channel = new Float32Array(rate * 4);
+  let seed = 7;
+  const noise = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5) * 0.02;
+  for (let i = 0; i < channel.length; i++) {
+    const tone = i > rate && i < 3 * rate ? 0.3 * Math.sin(2 * Math.PI * 440 * i / rate) : 0;
+    // A 20 ms blip at C6.
+    const blip = i > 3.5 * rate && i < 3.52 * rate ? 0.3 * Math.sin(2 * Math.PI * 1046.5 * i / rate) : 0;
+    channel[i] = tone + blip + noise();
+  }
+  const found = await s.spectrogramOf(channel, rate);
+  const kept = s.meaningful(found);
+  const rowsAt = time => {
+    const frame = Math.round(time * rate / s.HOP), rows = [];
+    for (let row = 0; row < s.ROWS; row++) if (kept[frame * s.ROWS + row]) rows.push(s.rowPitch(row));
+    return rows;
+  };
+  assert.deepEqual(rowsAt(2), [69], 'Only the A4 while it sounds');
+  assert.deepEqual(rowsAt(0.5), [], 'Noise alone is nothing');
+  assert.deepEqual(rowsAt(3.51), [], 'The blip is too short');
+});
