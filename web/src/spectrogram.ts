@@ -248,9 +248,9 @@ function fft(real: Float32Array, imaginary: Float32Array, inverse: boolean): voi
 }
 
 // The signal with only what kept (meaningful's result) marks: each frame (HOP apart, the spectrogram's frames) is
-// transformed with a MASK_WINDOW window, every bin within half a semitone of a kept row (and the bins either side,
-// the window's main lobe) is kept, the rest silenced, and the frames are added back together. A kept cell also
-// keeps its frame's neighbours, so notes do not flutter at their edges.
+// transformed with a MASK_WINDOW window, the bins of each kept row (its third of a semitone, and at least the bin
+// nearest its pitch and the ones either side, the window's main lobe) are kept, the rest silenced, and the frames
+// are added back together.
 export const MASK_WINDOW = 2048;
 export async function maskedSignal(signal: Float32Array, rate: number, kept: Uint8Array, frames: number,
   progress?: (share: number) => void, yieldEvery = 200): Promise<Float32Array<ArrayBuffer>> {
@@ -261,30 +261,24 @@ export async function maskedSignal(signal: Float32Array, rate: number, kept: Uin
   const lows = new Int32Array(ROWS), highs = new Int32Array(ROWS);
   for (let row = 0; row < ROWS; row++) {
     const pitch = rowPitch(row), center = Math.round(hz(pitch) / binHz);
-    lows[row] = Math.max(1, Math.min(center - 1, Math.floor(hz(pitch - 0.5) / binHz)));
-    highs[row] = Math.min(size / 2 - 1, Math.max(center + 1, Math.ceil(hz(pitch + 0.5) / binHz)));
+    const half = 0.5 / ROWS_PER_SEMITONE;
+    lows[row] = Math.max(1, Math.min(center - 1, Math.floor(hz(pitch - half) / binHz)));
+    highs[row] = Math.min(size / 2 - 1, Math.max(center + 1, Math.ceil(hz(pitch + half) / binHz)));
   }
   const output = new Float32Array(signal.length), weight = new Float32Array(signal.length);
   const real = new Float32Array(size), imaginary = new Float32Array(size), mask = new Uint8Array(size / 2);
-  const any = (frame: number) => {
-    if (frame < 0 || frame >= frames) return false;
-    for (let row = 0; row < ROWS; row++) if (kept[frame * ROWS + row]) return true;
-    return false;
-  };
   for (let frame = 0; frame < frames; frame++) {
     const start = frame * HOP - size / 2;
     for (let i = 0; i < size; i++) {
       const at = start + i;
       if (at >= 0 && at < weight.length) weight[at] += window[i] * window[i];
     }
-    if (any(frame) || any(frame - 1) || any(frame + 1)) {
-      mask.fill(0);
-      for (const near of [frame - 1, frame, frame + 1]) {
-        if (near < 0 || near >= frames) continue;
-        for (let row = 0; row < ROWS; row++) {
-          if (kept[near * ROWS + row]) mask.fill(1, lows[row], highs[row] + 1);
-        }
-      }
+    mask.fill(0);
+    let any = false;
+    for (let row = 0; row < ROWS; row++) {
+      if (kept[frame * ROWS + row]) { mask.fill(1, lows[row], highs[row] + 1); any = true; }
+    }
+    if (any) {
       for (let i = 0; i < size; i++) {
         const at = start + i;
         real[i] = at >= 0 && at < signal.length ? signal[at] * window[i] : 0;

@@ -1,7 +1,7 @@
 // A page for looking closely at the Harmonic (other) stem: its waveform over the whole song, and its waveform,
 // spectrogram and the energy that stands out in it (spectrogram.ts meaningful) flowing as it plays, on one time
-// scale with the moment playing at the middle. It plays either the stem as it is or only what the meaningful view
-// keeps (the stem's own sound in those cells, the rest silenced: spectrogram.ts maskedSignal). The song's beats (from its
+// scale with the moment playing at the middle. It plays the stem as it is, only what the meaningful view keeps (the
+// stem's own sound in those cells, the rest silenced: spectrogram.ts maskedSignal), or only what it leaves out. The song's beats (from its
 // chord analysis, when there is one) are drawn on both, bar lines brighter.
 import { ChangeDetectionStrategy, Component, ElementRef, OnDestroy, OnInit, inject, signal, viewChild } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
@@ -57,7 +57,11 @@ function blockPeaks(signal: Float32Array, block: number) {
           <label><input type="radio" name="listen" value="all" [checked]="listen() === 'all'" (change)="setListen('all')"
             [disabled]="!ready()"> Everything (full spectrum)</label>
           <label><input type="radio" name="listen" value="meaningful" [checked]="listen() === 'meaningful'"
-            (change)="setListen('meaningful')" [disabled]="!maskedReady()"> Meaningful energy only{{ masking() ? ' (preparing…)' : '' }}</label>
+            (change)="setListen('meaningful')" [disabled]="!maskedReady()"> Meaningful energy only</label>
+          <label><input type="radio" name="listen" value="rest" [checked]="listen() === 'rest'"
+            (change)="setListen('rest')" [disabled]="!maskedReady()"> Only what it leaves out</label>
+          @if (masking()) { <span class="hint" role="status">Preparing the sound…</span> }
+          @else if (maskedReady()) { <span class="hint">Meaningful energy keeps {{ keptShare() }}% of the stem's energy.</span> }
         </div>
         @if (grid()) { <span class="hint">Beats from the chord analysis; bar lines brighter.</span> }
       </div>
@@ -78,7 +82,7 @@ function blockPeaks(signal: Float32Array, block: number) {
       </div>
       <p class="hint">Only peaks along the pitch axis that stand above that pitch's usual level, are not far below the loudest
         sound at that moment, and last at least about 90 ms. Brighter is further above the floor.</p>
-      <canvas #energy class="spectrum-canvas" [class.listening]="listen() === 'meaningful'" [style.height.px]="spectrumHeight" role="img" aria-label="The energy that stands out in the Harmonic stem around the moment playing"></canvas>
+      <canvas #energy class="spectrum-canvas" [class.listening]="listen() !== 'all'" [style.height.px]="spectrumHeight" role="img" aria-label="The energy that stands out in the Harmonic stem around the moment playing"></canvas>
     </section>
   `,
 })
@@ -99,7 +103,8 @@ export class SpectrumPage implements OnInit, OnDestroy {
   readonly duration = signal(0);
   readonly pixelsPerSecond = signal(160);
   readonly grid = signal<HarmonyGrid | null>(null);
-  readonly listen = signal<'all' | 'meaningful'>('all');
+  readonly listen = signal<'all' | 'meaningful' | 'rest'>('all');
+  readonly keptShare = signal(0);
   readonly masking = signal(false);
   readonly maskedReady = signal(false);
   readonly aboveFloor = signal(12);
@@ -111,6 +116,7 @@ export class SpectrumPage implements OnInit, OnDestroy {
   private kept?: Uint8Array;
   private mono?: Float32Array;
   private masked?: AudioBuffer;
+  private rest?: AudioBuffer;
   private maskToken = 0;
   private keptTimer?: ReturnType<typeof setTimeout>;
   private context?: AudioContext;
@@ -204,7 +210,7 @@ export class SpectrumPage implements OnInit, OnDestroy {
     void this.context.resume();
     if (this.position() >= this.buffer.duration - 0.01) this.position.set(0);
     const source = this.context.createBufferSource();
-    source.buffer = this.listen() === 'meaningful' && this.masked ? this.masked : this.buffer;
+    source.buffer = (this.listen() === 'meaningful' ? this.masked : this.listen() === 'rest' ? this.rest : undefined) ?? this.buffer;
     source.connect(this.context.destination);
     this.startedAt = this.context.currentTime + 0.02;
     this.startOffset = this.position();
@@ -294,15 +300,24 @@ export class SpectrumPage implements OnInit, OnDestroy {
     this.masking.set(true);
     const signal = await maskedSignal(this.mono, this.rate, this.kept, this.spectrogram.frames);
     if (token !== this.maskToken || this.destroyed || !this.context) return;
-    const buffer = this.context.createBuffer(1, signal.length, this.rate);
-    buffer.copyToChannel(signal, 0);
-    this.masked = buffer;
+    const mono = this.mono, rest = new Float32Array(signal.length);
+    let kept = 0, total = 0;
+    for (let index = 0; index < signal.length; index++) {
+      rest[index] = mono[index] - signal[index];
+      kept += signal[index] * signal[index];
+      total += mono[index] * mono[index];
+    }
+    this.masked = this.context.createBuffer(1, signal.length, this.rate);
+    this.masked.copyToChannel(signal, 0);
+    this.rest = this.context.createBuffer(1, rest.length, this.rate);
+    this.rest.copyToChannel(rest, 0);
+    this.keptShare.set(Math.round(100 * kept / Math.max(total, 1e-12)));
     this.masking.set(false);
     this.maskedReady.set(true);
-    if (this.playing() && this.listen() === 'meaningful') this.seekTo(this.now());
+    if (this.playing() && this.listen() !== 'all') this.seekTo(this.now());
   }
 
-  setListen(kind: 'all' | 'meaningful'): void {
+  setListen(kind: 'all' | 'meaningful' | 'rest'): void {
     if (kind === this.listen()) return;
     this.listen.set(kind);
     // Carries on from the same moment in the other sound.
