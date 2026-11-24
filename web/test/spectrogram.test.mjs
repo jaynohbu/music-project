@@ -61,3 +61,24 @@ test('meaningful energy keeps a held tone over noise and drops the noise and a s
   assert.deepEqual(rowsAt(0.5), [], 'Noise alone is nothing');
   assert.deepEqual(rowsAt(3.51), [], 'The blip is too short');
 });
+
+test('masking keeps only the kept notes: A4 stays, C6 goes; with everything kept the signal comes back', async () => {
+  const rate = 22050, channel = new Float32Array(rate);
+  for (let i = 0; i < channel.length; i++) channel[i] = 0.3 * Math.sin(2 * Math.PI * 440 * i / rate) + 0.3 * Math.sin(2 * Math.PI * 1046.5 * i / rate);
+  const frames = Math.ceil(channel.length / s.HOP);
+  const kept = new Uint8Array(frames * s.ROWS);
+  const a4 = (69 - s.LOWEST_PITCH) * s.ROWS_PER_SEMITONE;
+  for (let frame = 0; frame < frames; frame++) kept[frame * s.ROWS + a4] = 10;
+  const only = await s.maskedSignal(channel, rate, kept, frames);
+  // Correlation with each tone over the middle half second.
+  const against = (signal, freq) => {
+    let sum = 0;
+    for (let i = Math.floor(rate / 4); i < 3 * rate / 4; i++) sum += signal[i] * Math.sin(2 * Math.PI * freq * i / rate);
+    return Math.abs(sum / (rate / 2));
+  };
+  assert.ok(against(only, 440) > 0.13 && against(only, 1046.5) < 0.005, `${against(only, 440)} ${against(only, 1046.5)}`);
+  const all = await s.maskedSignal(channel, rate, new Uint8Array(frames * s.ROWS).fill(1), frames);
+  let error = 0;
+  for (let i = Math.floor(rate / 4); i < 3 * rate / 4; i++) error = Math.max(error, Math.abs(all[i] - channel[i]));
+  assert.ok(error < 1e-3, `Rebuilt within ${error}`);
+});

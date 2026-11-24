@@ -218,3 +218,97 @@ export function meaningful(spectrogram: Spectrogram, aboveFloor = 12, withinLoud
   }
   return lasting;
 }
+
+// In-place complex FFT (radix 2); inverse divides by the size.
+function fft(real: Float32Array, imaginary: Float32Array, inverse: boolean): void {
+  const size = real.length;
+  for (let i = 1, j = 0; i < size; i++) {
+    let bit = size >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      [real[i], real[j]] = [real[j], real[i]];
+      [imaginary[i], imaginary[j]] = [imaginary[j], imaginary[i]];
+    }
+  }
+  const sign = inverse ? 1 : -1;
+  for (let span = 2; span <= size; span <<= 1) {
+    const half = span >> 1, angle = sign * 2 * Math.PI / span;
+    for (let k = 0; k < half; k++) {
+      const c = Math.cos(angle * k), s = Math.sin(angle * k);
+      for (let block = 0; block < size; block += span) {
+        const a = block + k, b = a + half;
+        const tr = real[b] * c - imaginary[b] * s, ti = real[b] * s + imaginary[b] * c;
+        real[b] = real[a] - tr; imaginary[b] = imaginary[a] - ti;
+        real[a] += tr; imaginary[a] += ti;
+      }
+    }
+  }
+  if (inverse) for (let i = 0; i < size; i++) { real[i] /= size; imaginary[i] /= size; }
+}
+
+// The signal with only what kept (meaningful's result) marks: each frame (HOP apart, the spectrogram's frames) is
+// transformed with a MASK_WINDOW window, every bin within half a semitone of a kept row (and the bins either side,
+// the window's main lobe) is kept, the rest silenced, and the frames are added back together. A kept cell also
+// keeps its frame's neighbours, so notes do not flutter at their edges.
+export const MASK_WINDOW = 2048;
+export async function maskedSignal(signal: Float32Array, rate: number, kept: Uint8Array, frames: number,
+  progress?: (share: number) => void, yieldEvery = 200): Promise<Float32Array<ArrayBuffer>> {
+  const size = MASK_WINDOW, binHz = rate / size;
+  const window = new Float32Array(size);
+  for (let i = 0; i < size; i++) window[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / size);
+  // Each row's bins.
+  const lows = new Int32Array(ROWS), highs = new Int32Array(ROWS);
+  for (let row = 0; row < ROWS; row++) {
+    const pitch = rowPitch(row), center = Math.round(hz(pitch) / binHz);
+    lows[row] = Math.max(1, Math.min(center - 1, Math.floor(hz(pitch - 0.5) / binHz)));
+    highs[row] = Math.min(size / 2 - 1, Math.max(center + 1, Math.ceil(hz(pitch + 0.5) / binHz)));
+  }
+  const output = new Float32Array(signal.length), weight = new Float32Array(signal.length);
+  const real = new Float32Array(size), imaginary = new Float32Array(size), mask = new Uint8Array(size / 2);
+  const any = (frame: number) => {
+    if (frame < 0 || frame >= frames) return false;
+    for (let row = 0; row < ROWS; row++) if (kept[frame * ROWS + row]) return true;
+    return false;
+  };
+  for (let frame = 0; frame < frames; frame++) {
+    const start = frame * HOP - size / 2;
+    for (let i = 0; i < size; i++) {
+      const at = start + i;
+      if (at >= 0 && at < weight.length) weight[at] += window[i] * window[i];
+    }
+    if (any(frame) || any(frame - 1) || any(frame + 1)) {
+      mask.fill(0);
+      for (const near of [frame - 1, frame, frame + 1]) {
+        if (near < 0 || near >= frames) continue;
+        for (let row = 0; row < ROWS; row++) {
+          if (kept[near * ROWS + row]) mask.fill(1, lows[row], highs[row] + 1);
+        }
+      }
+      for (let i = 0; i < size; i++) {
+        const at = start + i;
+        real[i] = at >= 0 && at < signal.length ? signal[at] * window[i] : 0;
+        imaginary[i] = 0;
+      }
+      fft(real, imaginary, false);
+      for (let bin = 0; bin <= size / 2; bin++) {
+        const keep = bin < size / 2 && mask[bin] ? 1 : 0;
+        real[bin] *= keep; imaginary[bin] *= keep;
+        // The mirrored half, so the result stays real.
+        if (bin > 0 && bin < size / 2) { real[size - bin] = real[bin]; imaginary[size - bin] = -imaginary[bin]; }
+      }
+      fft(real, imaginary, true);
+      for (let i = 0; i < size; i++) {
+        const at = start + i;
+        if (at >= 0 && at < output.length) output[at] += real[i] * window[i];
+      }
+    }
+    if (frame % yieldEvery === yieldEvery - 1) {
+      progress?.(frame / frames);
+      await new Promise(resolve => setTimeout(resolve));
+    }
+  }
+  for (let i = 0; i < output.length; i++) output[i] = weight[i] > 1e-3 ? output[i] / weight[i] : 0;
+  progress?.(1);
+  return output;
+}
