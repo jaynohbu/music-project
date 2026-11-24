@@ -53,15 +53,13 @@ function blockPeaks(signal: Float32Array, block: number) {
             @for (zoom of zooms; track zoom) { <option [value]="zoom" [selected]="zoom === pixelsPerSecond()">{{ zoom }} px/s</option> }
           </select>
         </label>
-        <div class="spectrum-listen" role="radiogroup" aria-label="What to hear">
-          <label><input type="radio" name="listen" value="all" [checked]="listen() === 'all'" (change)="setListen('all')"
-            [disabled]="!ready()"> Everything (full spectrum)</label>
-          <label><input type="radio" name="listen" value="meaningful" [checked]="listen() === 'meaningful'"
-            (change)="setListen('meaningful')" [disabled]="!maskedReady()"> Meaningful energy only</label>
-          <label><input type="radio" name="listen" value="rest" [checked]="listen() === 'rest'"
-            (change)="setListen('rest')" [disabled]="!maskedReady()"> Only what it leaves out</label>
-          @if (masking()) { <span class="hint" role="status">Preparing the sound…</span> }
-          @else if (maskedReady()) { <span class="hint">Meaningful energy keeps {{ keptShare() }}% of the stem's energy.</span> }
+        <div class="spectrum-listen" role="group" aria-label="What to hear">
+          @for (choice of listenChoices; track choice.kind) {
+            <button type="button" [class.secondary]="listen() !== choice.kind" [attr.aria-pressed]="listen() === choice.kind"
+              (click)="hear(choice.kind)" [disabled]="!ready()">{{ choice.label }}</button>
+          }
+          @if (masking()) { <span class="hint" role="status">Preparing the filtered sound… the full sound plays until it is ready.</span> }
+          @else if (maskedReady()) { <span class="hint">Filtered keeps {{ keptShare() }}% of the stem's energy.</span> }
         </div>
         @if (grid()) { <span class="hint">Beats from the chord analysis; bar lines brighter.</span> }
       </div>
@@ -69,10 +67,16 @@ function blockPeaks(signal: Float32Array, block: number) {
         role="slider" aria-label="Song position" [attr.aria-valuenow]="position()" aria-valuemin="0" [attr.aria-valuemax]="duration()"></canvas>
       <h2 class="spectrum-label">Waveform</h2>
       <canvas #wave class="spectrum-canvas" [style.height.px]="waveHeight" role="img" aria-label="Harmonic stem waveform around the moment playing"></canvas>
-      <h2 class="spectrum-label">Spectrogram</h2>
+      <div class="spectrum-heading">
+        <h2 class="spectrum-label">Spectrogram</h2>
+        <button type="button" [class.secondary]="listen() !== 'all'" [attr.aria-pressed]="listen() === 'all'"
+          (click)="hear('all')" [disabled]="!ready()">Listen to the full spectrum</button>
+      </div>
       <canvas #spectrum class="spectrum-canvas" [class.listening]="listen() === 'all'" [style.height.px]="spectrumHeight" role="img" aria-label="Harmonic stem spectrogram around the moment playing"></canvas>
       <div class="spectrum-heading">
         <h2 class="spectrum-label">Meaningful energy</h2>
+        <button type="button" [class.secondary]="listen() !== 'meaningful'" [attr.aria-pressed]="listen() === 'meaningful'"
+          (click)="hear('meaningful')" [disabled]="!ready()">Listen to the filtered spectrum</button>
         <label>Above the noise floor {{ aboveFloor() }} dB
           <input type="range" min="3" max="30" step="1" [value]="aboveFloor()" (input)="setAboveFloor(+$any($event.target).value)" [disabled]="!ready()">
         </label>
@@ -317,11 +321,17 @@ export class SpectrumPage implements OnInit, OnDestroy {
     if (this.playing() && this.listen() !== 'all') this.seekTo(this.now());
   }
 
-  setListen(kind: 'all' | 'meaningful' | 'rest'): void {
-    if (kind === this.listen()) return;
+  readonly listenChoices: { kind: 'all' | 'meaningful' | 'rest'; label: string }[] = [
+    { kind: 'all', label: 'Full spectrum' }, { kind: 'meaningful', label: 'Filtered' }, { kind: 'rest', label: 'Left out' },
+  ];
+
+  // Switches what is heard at the same moment, and plays if stopped. Until the filtered sound is ready the full one
+  // plays; it switches by itself when ready.
+  hear(kind: 'all' | 'meaningful' | 'rest'): void {
+    const changed = kind !== this.listen();
     this.listen.set(kind);
-    // Carries on from the same moment in the other sound.
-    if (this.playing()) this.seekTo(this.now());
+    if (!this.playing()) this.play();
+    else if (changed) this.seekTo(this.now());
   }
 
   setZoom(value: number): void {
