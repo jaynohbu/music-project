@@ -6,7 +6,6 @@ import { ActivityService, ENSEMBLE_STEMS, HARMONY_STEMS, HarmonyGrid, REGENERATE
 import { ConfirmationService } from './confirmation';
 import { captureSceneSettings, restoredSceneInterval } from './scene-settings';
 import { HarmonyStrip, transposeKey, transposePart } from './harmony-strip';
-import { SpectrogramStrip } from './spectrogram-strip';
 import { harmonyEvents, harmonyMidi, harmonyMusicXml } from './score-export';
 import { shiftBuffer } from './pitch-shift';
 import { scoreSheet, sheetFileName } from './score-sheet';
@@ -370,7 +369,7 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
 @Component({
   selector: 'app-stem-mixer',
   standalone: true,
-  imports: [RouterLink, FormsModule, LyricsStrip, LyricsEditor, HarmonyStrip, SpectrogramStrip],
+  imports: [RouterLink, FormsModule, LyricsStrip, LyricsEditor, HarmonyStrip],
   template: `
     <section class="card mixer-page">
       <div class="section-heading">
@@ -438,9 +437,10 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                 <h2>{{ track.label }}</h2>
                 @if (track.status === 'loading') { <span class="hint">Loading audio...</span> }
                 <div class="stem-actions">
-                  <button type="button" class="secondary" [attr.aria-pressed]="spectrogramShown(track.name)"
-                    (click)="toggleSpectrogram(track.name)" [disabled]="track.status !== 'ready'"
-                    [attr.aria-label]="(spectrogramShown(track.name) ? 'Hide' : 'Show') + ' the ' + track.label + ' spectrogram'">Spectrogram</button>
+                  @if (track.name === 'other' && job()?.status === 'completed') {
+                    <a class="button-link secondary" [routerLink]="['/spectrum', job()!.jobId]"
+                      [attr.aria-label]="'See the ' + track.label + ' waveform and spectrogram on their own page'">Waveform & spectrum</a>
+                  }
                   @if (track.name === 'vocals' && !lyricLines()) {
                     @if (findingLyrics()) {
                       <button type="button" class="secondary" disabled>Finding lyrics...</button>
@@ -527,9 +527,6 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                 } @else if (parts[track.name]) {
                   <p class="hint">No clear chords or notes were found in this stem.</p>
                 }
-              }
-              @if (spectrogramShown(track.name) && stemBuffer(track.name); as buffer) {
-                <app-spectrogram-strip [buffer]="buffer" [time]="position()" [grid]="harmonyGrid() ?? null" [label]="track.label"></app-spectrogram-strip>
               }
               @if (track.name === 'vocals' && lyricLines(); as lines) {
                 @if (lines.length) {
@@ -1155,19 +1152,6 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   }
 
   isHarmonic(name: string): boolean { return HARMONY_STEMS.includes(name); }
-
-  // Stems whose spectrogram flows under them; the Harmonic (other) stem's from the start.
-  readonly spectrograms = signal(new Set(['other']));
-  spectrogramShown(name: string): boolean { return this.spectrograms().has(name); }
-  toggleSpectrogram(name: string): void {
-    this.spectrograms.update(shown => {
-      const next = new Set(shown);
-      if (!next.delete(name)) next.add(name);
-      return next;
-    });
-  }
-  // The stem as recorded (not moved by the key change).
-  stemBuffer(name: string): AudioBuffer | undefined { return this.runtimes.get(name)?.buffer; }
 
   kindLabel(kind: AccompanimentKind): string {
     return { 'guitar-rhythm': 'Electric rhythm', 'keys-rhythm': 'Keyboard rhythm', 'guitar-melody': 'Electric melody + rhythm',

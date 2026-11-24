@@ -511,6 +511,8 @@ footer { text-align: center; color: #64748b; padding: 20px var(--page-gutter); f
 :root[data-theme] .mixing-console.mixing-console .version-switch button { border: 0; background: var(--m-key); color: var(--m-key-ink); }
 :root[data-theme] .mixing-console.mixing-console .version-switch button.active { background: var(--m-console-accent); background-image: var(--m-accent-image); color: var(--m-on-console-accent); }
 
-.spectrogram-strip { position: relative; margin-top: 10px; border-radius: 6px; overflow: hidden; background: #000004; }
-.spectrogram-strip canvas { display: block; width: 100%; }
-.spectrogram-note { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); color: #fff; font-size: .85rem; background: rgba(0, 0, 0, .55); padding: 2px 8px; border-radius: 4px; }
+.spectrum-transport { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 12px 0; }
+.spectrum-time { font-variant-numeric: tabular-nums; min-width: 9ch; }
+.spectrum-overview, .spectrum-canvas { display: block; width: 100%; border-radius: 6px; background: #0d1117; }
+.spectrum-overview { cursor: pointer; touch-action: none; }
+.spectrum-label { font-size: .95rem; margin: 16px 0 6px; }

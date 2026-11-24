@@ -10,6 +10,7 @@ import { ForgotPasswordPage, RegisterPage } from './account-pages';
 import { ConfirmationDialog } from './confirmation';
 import { ScenePage, ScenesPage } from './scene-pages';
 import { AdminPage } from './admin-page';
+import { SpectrumPage } from './spectrum-page';
 
 const authenticated: CanActivateFn = () =>
   inject(AuthService).signedIn() || inject(Router).createUrlTree(['/login']);
@@ -126,6 +127,7 @@ async function start(): Promise<void> {
         { path: 'forgot-password', component: ForgotPasswordPage, canActivate: [anonymous] },
         { path: 'split', component: SplitPage, canActivate: [authenticated], canDeactivate: [(page: SplitPage) => page.canLeave()] },
         { path: 'mixer/:jobId', component: MixerPage, canActivate: [authenticated] },
+        { path: 'spectrum/:jobId', component: SpectrumPage, canActivate: [authenticated] },
         { path: 'list', component: ListPage, canActivate: [authenticated] },
         { path: 'scenes', component: ScenesPage, canActivate: [authenticated] },
         { path: 'admin', component: AdminPage, canActivate: [authenticated, admin] },
