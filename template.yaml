@@ -304,6 +304,10 @@ Resources:
             - Effect: Allow
               Action: s3:GetObject
               Resource: !Sub '${AudioBucket.Arn}/users/*'
+            # A score read from a PDF is saved to the song from its reading (song-score.mjs).
+            - Effect: Allow
+              Action: s3:GetObject
+              Resource: !Sub '${AudioBucket.Arn}/score-readings/*'
             # Edited lyrics, harmony from an uploaded score and the song's score are saved here; original stems stay out of reach.
             - Effect: Allow
               Action: s3:PutObject

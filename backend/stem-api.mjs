@@ -235,7 +235,7 @@ export function createStemHandler({
       if (error instanceof SongDeletingError) return reply(409, { message: 'This song is being deleted.' });
       if (error instanceof LimitError) return reply(403, { message: error.message, code: error.code });
       console.error('Stem API failed', { name: error.name });
-      return reply(500, { message: 'The separation service is unavailable. Please try again.' });
+      return reply(500, { message: 'The server could not finish this request. Please try again.' });
     }
   };
 }
