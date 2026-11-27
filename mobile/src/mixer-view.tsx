@@ -2,7 +2,7 @@ import { useIsFocused } from 'expo-router';
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
-import { HARMONY_STEMS, REGENERATED_STEMS, STEM_NAMES, getSong, type LyricLine, type SceneEntry, type SceneSettings, type Song, type StemName } from './api';
+import { HARMONY_STEMS, STEM_NAMES, getSong, type LyricLine, type SceneEntry, type SceneSettings, type Song, type StemName } from './api';
 import { addCleanedFile, holdSong, songFiles, stemPaths } from './cache';
 import { EFFECT_CONTROLS } from './effects';
 import { t as text } from './i18n';
@@ -207,6 +207,17 @@ export function MixerControls({ mixer, song = null, peaks, inScene = false }: { 
       const expanded = open.has(name);
       const replaced = mixer.replacedStem === name;
       const live = mixer.isPlaying && !channel.muted && !replaced && !(soloing && !channel.solo);
+      // Removing the other instruments' bleed, in the row of the stem's other buttons.
+      const clean = !mixer.hasCleaned(name) && song && (cleanErrors[name]
+        ? <Pressable onPress={() => { setCleanErrors(({ [name]: _, ...others }) => others); setCleanRetry(value => value + 1); }}
+          accessibilityRole="button" accessibilityLabel={t('mixer.loadCleanedFor', { stem: label })} style={styles.taskButton}>
+          <Text style={styles.taskButtonText}>{t('mixer.loadCleaned')}</Text>
+        </Pressable>
+        : <Pressable onPress={() => tasks.clean(name)} disabled={locked || tasks.cleaning(name)}
+          accessibilityRole="button" accessibilityLabel={t('mixer.cleanFor', { stem: label })} accessibilityState={{ disabled: busy || tasks.cleaning(name) }}
+          style={[styles.taskButton, (busy || tasks.cleaning(name)) && { opacity: 0.5 }]}>
+          <Text style={styles.taskButtonText}>{tasks.cleaning(name) ? t('mixer.cleaning') : t('mixer.clean')}</Text>
+        </Pressable>);
       return <View key={name} style={styles.stem}>
         <View style={styles.stemHeader}>
           <Text style={styles.stemTitle}>{label}</Text>
@@ -218,21 +229,11 @@ export function MixerControls({ mixer, song = null, peaks, inScene = false }: { 
               <Text style={[styles.versionText, channel.useCleaned === cleaned && { color: theme.onAccent }]}>{cleaned ? t('mixer.cleaned') : t('mixer.original')}</Text>
             </Pressable>)}
           </View>}
-          {!mixer.hasCleaned(name) && song && (cleanErrors[name]
-            ? <Pressable onPress={() => { setCleanErrors(({ [name]: _, ...others }) => others); setCleanRetry(value => value + 1); }}
-              accessibilityRole="button" accessibilityLabel={t('mixer.loadCleanedFor', { stem: label })} style={styles.taskButton}>
-              <Text style={styles.taskButtonText}>{t('mixer.loadCleaned')}</Text>
-            </Pressable>
-            : <Pressable onPress={() => tasks.clean(name)} disabled={locked || tasks.cleaning(name)}
-              accessibilityRole="button" accessibilityLabel={t('mixer.cleanFor', { stem: label })} accessibilityState={{ disabled: busy || tasks.cleaning(name) }}
-              style={[styles.taskButton, (busy || tasks.cleaning(name)) && { opacity: 0.5 }]}>
-              <Text style={styles.taskButtonText}>{tasks.cleaning(name) ? t('mixer.cleaning') : t('mixer.clean')}</Text>
-            </Pressable>)}
         </View>
         {!!(tasks.cleanFailure(name) || cleanErrors[name]) &&
           <Text accessibilityRole="alert" style={[styles.error, styles.stemError]}>{tasks.cleanFailure(name) || cleanErrors[name]}</Text>}
         {song && <StemTasks transpose={mixer.transpose} title={song.title || t('common.untitledSong')} artist={song.author} name={name} label={label} cleaned={channel.useCleaned} tasks={tasks} position={position}
-          disabled={locked} onEditLyrics={editLyrics} />}
+          disabled={locked} onEditLyrics={editLyrics} extra={clean || undefined} />}
         <Timeline label={label} duration={mixer.duration} start={mixer.sectionStart} end={mixer.sectionEnd} position={position}
           peaks={channel.useCleaned ? peaks?.[name]?.cleaned ?? cleanedPeaks[name] : peaks?.[name]?.original}
           disabled={locked} onSection={(start, end) => mixer.setSection(start, end)}
@@ -442,8 +443,8 @@ function KeyChange({ mixer, songKey }: { mixer: Mixer; songKey?: string }) {
 }
 
 // The website's lyrics and 악보 controls for one stem: find, edit or regenerate, then the scrolling strip.
-function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyrics, transpose, title, artist }: {
-  name: StemName; label: string; cleaned: boolean; tasks: ReturnType<typeof useSongTasks>; position: number;
+function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyrics, transpose, title, artist, extra }: {
+  extra?: React.ReactNode; name: StemName; label: string; cleaned: boolean; tasks: ReturnType<typeof useSongTasks>; position: number;
   disabled: boolean; onEditLyrics: () => void; transpose: number; title: string; artist?: string;
 }) {
   const styles = useStyles(makeStyles), t = useT();
@@ -468,7 +469,7 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
   }, [name, part, songKey, label, transpose, ensembleKey, title, artist, t]);
   const sheet = useMemo(() => previewing && part && grid ? sheetPages(part, name, grid, sheetText, songKey) : null,
     [previewing, part, grid, name, sheetText, songKey]);
-  if (!vocals && !harmonic) return null;
+  if (!vocals && !harmonic) return extra ? <View style={styles.taskRow}>{extra}</View> : null;
   // An A4 PDF for the share sheet.
   const savePdf = async () => {
     if (!part || !grid) return;
@@ -488,7 +489,8 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
       : { label: t(name === 'drums' ? 'tasks.drumScore' : 'tasks.chordsMelody'), onPress: name === 'drums' ? tasks.findDrums : name === 'bass' ? tasks.findBass : tasks.findChords, hint: t('tasks.findHint') }
       : tasks.updatingChords ? { label: t('tasks.updatingNotes') }
       : regenerating ? { label: t('tasks.regenerating') }
-        : !REGENERATED_STEMS.includes(name) ? null
+        // Only the drum score is written again from the audio; a part's notes come from its uploaded score instead.
+        : name !== 'drums' ? null
           : { label: regenerateLabel(name), onPress: () => tasks.regenerate(name, cleaned),
             hint: t('tasks.regenerateFor', { action: regenerateLabel(name), stem: label }) };
   const failure = vocals ? tasks.lyricsFailure : tasks.chordsFailure ?? tasks.partFailure(name);
@@ -497,7 +499,7 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
     : tasks.processingFor(name) ? t('tasks.processing', { minutes: tasks.processingFor(name) })
       : (parts ? regenerating || tasks.updatingChords : tasks.findingChords) && t('tasks.chordsNote');
   return <View>
-    {(action || printable || harmonic) && <View style={styles.taskRow}>
+    {(action || printable || harmonic || extra) && <View style={styles.taskRow}>
       {action && <Pressable onPress={action.onPress} disabled={!action.onPress || disabled || (!vocals && !!tasks.processing)} accessibilityRole="button"
         accessibilityLabel={action.hint ?? action.label} accessibilityState={{ disabled: !action.onPress || disabled }}
         style={[styles.taskButton, (!action.onPress || disabled) && { opacity: 0.5 }]}>
@@ -513,6 +515,7 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
         style={[styles.taskButton, (disabled || !!tasks.processing) && { opacity: 0.5 }]}>
         <Text style={styles.taskButtonText}>{t(tasks.hasScore(name) ? 'tasks.replaceScore' : 'tasks.uploadScore')}</Text>
       </Pressable>}
+      {extra}
     </View>}
     {!!saveFailure && <Text accessibilityRole="alert" style={[styles.error, styles.taskError]}>{saveFailure}</Text>}
     {sheet && <ScorePreview sheet={sheet} title={[title, label].join(' · ')} saving={saving}

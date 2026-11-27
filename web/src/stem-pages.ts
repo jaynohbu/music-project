@@ -3,7 +3,7 @@ import { NgTemplateOutlet } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
-import { ActivityService, ENSEMBLE_STEMS, HARMONY_STEMS, HarmonyGrid, REGENERATED_STEMS, HarmonyPart, Job, LyricLine, SceneEntry, SceneSettings, STEM_NAMES, type ScorePartName, StemName, StemsService, errorMessage } from './services';
+import { ActivityService, ENSEMBLE_STEMS, HARMONY_STEMS, HarmonyGrid, HarmonyPart, Job, LyricLine, SceneEntry, SceneSettings, STEM_NAMES, type ScorePartName, StemName, StemsService, errorMessage } from './services';
 import { ConfirmationService } from './confirmation';
 import { captureSceneSettings, restoredSceneInterval } from './scene-settings';
 import { HarmonyStrip, transposeKey, transposePart } from './harmony-strip';
@@ -495,7 +495,8 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                         aria-label="Find the chords and notes for the Harmonic and bass stems, and the drum score">{{ track.name === 'drums' ? 'Drum score' : 'Chords & notes' }}</button>
                     }
                   }
-                  @if (isRegenerable(track.name) && harmonyParts() && !updatingChords()) {
+                  <!-- Only the drum score is written again from the audio; the other parts take an uploaded score. -->
+                  @if (track.name === 'drums' && harmonyParts() && !updatingChords()) {
                     @if (regenerating(track.name)) {
                       <button type="button" class="secondary" disabled>Regenerating...</button>
                     } @else {
@@ -512,13 +513,13 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                       <button type="button" [class.active]="!track.useCleaned" [attr.aria-pressed]="!track.useCleaned"
                         (click)="showVersion(track.name, false)">Original</button>
                       <button type="button" [class.active]="track.useCleaned" [attr.aria-pressed]="track.useCleaned"
-                        (click)="showVersion(track.name, true)">Cleaned</button>
+                        (click)="showVersion(track.name, true)">Bleed removed</button>
                     </div>
                   } @else if (cleaning(track.name)) {
-                    <button type="button" class="secondary" disabled>Cleaning...</button>
+                    <button type="button" class="secondary" disabled>Removing bleed...</button>
                   } @else {
                     <button type="button" class="secondary" (click)="clean(track.name)" [disabled]="!canPlay()"
-                      [attr.aria-label]="'Clean ' + track.label">Clean</button>
+                      [attr.aria-label]="'Remove bleed from ' + track.label">Remove bleed</button>
                   }
                   @if (track.status === 'ready') {
                     <a [href]="track.useCleaned ? track.cleanedDownloadUrl : track.downloadUrl"
@@ -1536,7 +1537,6 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     return name === 'drums' ? 'Regenerate drum score' : 'Regenerate chords & notes';
   }
 
-  isRegenerable(name: string): boolean { return REGENERATED_STEMS.includes(name); }
 
   regenerating(name: string): boolean {
     const status = this.job()?.harmony?.stems?.[name]?.status;

@@ -514,6 +514,7 @@ The staff uses `react-native-svg`. It draws in four-bar chunks and mounts only t
 - A Harmonic, bass or drum card whose part is transcribed says so under the key line: not exact, and an uploaded score replaces it (`tasks.transcribedNote`, 12 languages).
 - The scroll rails are gone; pages inset by EDGE = 16. `controlHold` (was `railCover`) keeps the page still while a control is held.
 - iPhone staging build `25c87f87`.
+- **Bleed removal and Regenerate (2026-11-27, later):** "Clean" is now "Remove bleed" (Korean 다른 소리 제거; the switch reads Original / Bleed removed), since `restore_stem.py` lowers the other stems' sound bleeding into the stem, not noise; in the app it sits in the stem's button row with the other buttons, not in the header. "Regenerate chords & notes" is gone from the Harmonic and bass tracks (app and website): their notes come from an uploaded score; only "Regenerate drum score" remains.
 
 ### Languages
 
