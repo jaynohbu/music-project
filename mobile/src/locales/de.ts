@@ -237,6 +237,8 @@ const de: Strings = {
   'score.drums': 'Schlagzeug (Noten)',
   'score.soundFor': 'Klang für {part}',
   'score.closest': 'am nächsten',
+  'score.rendering': 'Dieser Klang wird auf dem Server erstellt…',
+  'score.renderFailed': 'Dieser Klang konnte nicht erstellt werden: {error}',
   'tasks.scoreQuestion': 'Haben Sie Noten dieses Songs (PDF oder MusicXML)? Dann werden Akkorde und Noten daraus übernommen. Sonst werden sie aus dem Audio ermittelt.',
   'tasks.uploadScore': 'Noten hochladen',
   'tasks.replaceScore': 'Noten ersetzen',

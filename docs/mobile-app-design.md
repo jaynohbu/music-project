@@ -12,16 +12,16 @@ Replace the WebView wrapper with a native Expo app that plays stems from its own
 
 | Area | State | Where |
 |---|---|---|
-| App | Installed from EAS `staging` builds on the user's iPhone; signed-in use daily. Latest build `25c87f87` (commit `91c318d`, 2026-11-27) | `mobile/src/` |
+| App | Installed from EAS `staging` builds on the user's iPhone; signed-in use daily. Latest build `5594c4b7` (score parts from server stems, 2026-11-27) | `mobile/src/` |
 | Sign-in | Email + device ID, as designed. Codes now go through SES, which is in sandbox (see Constraints) | `mobile/src/auth.ts`, `backend/accounts.mjs` |
 | Audio engine | Four stems streamed from disk, full effects, key change through a library patch | `mobile/src/player.ts`, `mobile/patches/` |
 | Score analysis | Version 10: Harmonic score (key from the notes, extended chords spelled in the key, every chord tone played, no chord where it is silent), bass and drum parts, hi-hat filling. Found automatically when a song is first opened. Versions up to 16 since (see Harmonic notes) | `backend/analyze_harmony.py`, `backend/note_lines.py` |
-| Song scores | A song's own Harmonic, bass and drum scores (PDF or MusicXML), laid on it by the stem worker and used instead of the transcription; each played on chosen sounds (66 in the library) as mixer channels | `web/src/score-align.ts`, `backend/score_run.mjs`, `mobile/src/score-parts.ts` |
+| Song scores | A song's own Harmonic, bass and drum scores (PDF or MusicXML), laid on it by the stem worker and used instead of the transcription; each made on the server as a stem in a chosen sound (66 in the library; the closest when the score is laid) and played as a mixer channel | `web/src/score-align.ts`, `backend/score_run.mjs`, `backend/score-render.mjs`, `mobile/src/score-parts.ts` |
 | Live input | A mixer channel like a stem; instrument detected automatically; take saved per song | `mobile/src/live-*.ts`, `mobile/src/instrument-detect.ts`, [live-follow.md](./live-follow.md) |
 | Scenes | Mix, live mix and key change saved per scene entry; nothing saved from Music | `backend/scene-api.mjs`, `mobile/src/mixer-settings.ts` |
 | Themes | Heavy metal (default), Rock, Pop, Jazz club, Worship, Simple, with backgrounds, in app and website | `mobile/src/theme.tsx`, `web/src/themes.ts` |
-| Website | Deployed 2026-11-27 with song scores, the spectrum page, sampled sounds and their credits, besides the ensemble score, themes, usage and store links | `web/src/` |
-| Worker images | Analysis `cpu-20261127181708` (`backend/Dockerfile.stems`); split `split-20261127175341` (`backend/Dockerfile.split`), see Two worker containers | `backend/` |
+| Website | Deployed 2026-11-27 (sound list served without caching) with song scores, the spectrum page, sampled sounds and their credits, besides the ensemble score, themes, usage and store links | `web/src/` |
+| Worker images | Analysis `cpu-20261127213704` (`backend/Dockerfile.stems`); split `split-20261127175341` (`backend/Dockerfile.split`), see Two worker containers | `backend/` |
 | Not built | Score editor, website languages and live input, account deletion, billing, store submission | see Build order |
 
 Since 2026-11-27 the user wants the work done without asking: implement, test, commit, deploy (API, worker image, website) and build, then report in Korean. Nothing destructive to user data outside the task (test scores are not uploaded to the user's songs).
@@ -195,7 +195,7 @@ Added parts are played from the Harmonic score in the browser, not rendered or s
 The user found splitting slow. Splits took 5.6–7.6 min for songs of 3.7–5.5 min: about 100 s fixed (starting the Fargate task and pulling the 4.3 GB compressed image, which carried Whisper, CLAP, Basic Pitch and ADTOF that a split never uses) plus about 1.07 s per second of audio (Demucs on 4 vCPU, then the uploads and AAC encodes one at a time). The split did nothing else; chords and lyrics start after it, when the song is opened.
 
 - **Split container:** `backend/Dockerfile.split` (Node, ffmpeg, torch CPU, Demucs and the htdemucs weights only), entry `stem-split-task.mjs`, task definition `SplitTask` (same 4 vCPU / 16 GB), image `split-<time>` in the stem repository from `build-split-image.sh`, released with `SPLIT_IMAGE=… bash publish-api.sh`.
-- **Analysis container:** the old image and `StemTask`, unchanged, for lyrics, harmony, songs' scores and cleanups.
+- **Analysis container:** the old image and `StemTask`, unchanged, for lyrics, harmony, songs' scores, cleanups and score parts made as stems (`rendering`).
 - **Routing:** the state machine starts with a Choice: input with a `kind` (lyrics, harmony, restoration) goes to `StemTask`, a split (no `kind`) to `SplitTask`. Both on demand; Finalize is shared.
 - **Inside the split:** the four WAVs upload together, the four AAC copies encode together and upload together (a failure still removes everything that arrived). The worker logs `Split timing` with seconds per stage (download, separate, upload, playCopies); before this, nothing was logged, so stage times could not be read.
 - **Measured (deployed, image `split-20261127175341`, 0.62 GB against 4.3 GB):** Psalm 139 live (3 min 42 s) under a test user, removed afterwards: 4 min 30 s from start to finish, against 5 min 37 s before. Task start about 46 s (was about 100 s); Demucs 181 s; WAV upload 0.7 s; AAC copies 16.7 s. Demucs is now nearly all of it.
@@ -537,6 +537,31 @@ The user asked that, where a score has several layers, the layer matching the vo
 - The scroll rails are gone; pages inset by EDGE = 16. `controlHold` (was `railCover`) keeps the page still while a control is held.
 - iPhone staging build `25c87f87`.
 - **Bleed removal and Regenerate (2026-11-27, later):** "Clean" is now "Remove bleed" (Korean 다른 소리 제거; the switch reads Original / Bleed removed), since `restore_stem.py` lowers the other stems' sound bleeding into the stem, not noise; in the app it sits in the stem's button row with the other buttons, not in the header. "Regenerate chords & notes" is gone from the Harmonic and bass tracks (app and website): their notes come from an uploaded score; only "Regenerate drum score" remains.
+
+### Score parts made on the server (2026-11-27, evening)
+
+The user found the guitar and keys playing badly in real time on the phone (the whole part was rendered on the phone, then played from memory). Now the server makes every score part as an audio stem, and the phone only plays it.
+
+- **Renderer:** `backend/score-render.mjs`. It ports the app's renderer (sampleShape, matchLoudness, renderPart, familyEvents, offered).
+  - The sound's FLAC is fetched from `tunesbasis.com/accompaniment` and read by ffmpeg (first channel, at its own rate).
+  - The part is rendered at 44.1 kHz, as loud through the song as its stem (the result's `loudness`). It is saved as stereo AAC 192k, at the song's key: the app moves it with the key change and the speed, like a stem.
+  - Peaks are held under full scale (ffmpeg alimiter 0.9, no level change). About 3.5 s per part for a 4-minute song; live on the server, a picked sound took 127 s, nearly all task start.
+- **Records:** type `rendering` under the song: `harmonyId` (the result it plays), `family`, `sound`, `auto` (made with the score), `playBytes`.
+  - The file is `users/<user>/harmony/<song>/rendered/<id>.m4a`, inside the harmony folder, so the existing task permissions and song deletion cover it.
+  - Listed with the song as `renderings` (`playUrl` signed for an hour). `backend/stem-render.mjs`, `backend/rendering-api.mjs`.
+- **When they are made:**
+  - The run that lays a score (stem-analysis.mjs) records a rendering per family laid from a score, in its closest sound (`offered(library, result.accompaniment, family)[0]`). They are recorded as processing before the result is marked done, then made in the same task, so the app waits for them.
+  - A sound chosen in the app is asked for with `POST /api/stems/jobs/{id}/renderings {family, sound}`, which returns the same rendering if it is made or being made. It runs as its own task (`kind: 'rendering'`, analysis container), so it takes about the task start (1–2 min) plus seconds.
+  - A result laid before this has no renderings; the app asks for its closest sound when opened.
+  - At most 40 renderings per song: older results' finished ones go first.
+- **App:**
+  - `ScoreParts` plays the rendering of the shown result in the chosen sound (else the one made with the score), downloaded once into the cache (`renderedFile`).
+  - The player opens it as a file source like the take, at every start, sought with the stems; one arriving mid-song joins from the position then. Key and speed follow the stems.
+  - While a sound is being made, "Making this sound on the server…" shows and the sound before keeps playing; a failure shows its message and Try again (12 languages).
+  - The phone renderer, sample decoding and loudness matching are gone from the app.
+- **Sounds missing from the picker:** the library list (`accompaniment/styles.json`) was uploaded with the site's one-year immutable cache, so a phone or browser that had it before the fourteen sampled sounds kept the old list.
+  - `publish-web.sh` now uploads it with `no-cache`; the app fetches it with `no-store` and the website with `no-cache`.
+- The website still plays the score parts live in the browser.
 
 ### Languages
 

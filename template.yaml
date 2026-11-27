@@ -365,6 +365,12 @@ Resources:
             ApiId: !Ref HttpApi
             Path: /api/stems/jobs/{jobId}/restorations
             Method: POST
+        CreateRendering:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/stems/jobs/{jobId}/renderings
+            Method: POST
         DeleteRestoration:
           Type: HttpApi
           Properties:

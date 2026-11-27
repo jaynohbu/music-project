@@ -237,6 +237,8 @@ const it: Strings = {
   'score.drums': 'Batteria (spartito)',
   'score.soundFor': 'Suono per {part}',
   'score.closest': 'il più vicino',
+  'score.rendering': 'Creazione di questo suono sul server…',
+  'score.renderFailed': 'Impossibile creare questo suono: {error}',
   'tasks.scoreQuestion': 'Hai uno spartito di questo brano (PDF o MusicXML)? Se sì, accordi e note vengono presi da lì. Altrimenti vengono trovati nell\'audio.',
   'tasks.uploadScore': 'Carica uno spartito',
   'tasks.replaceScore': 'Sostituisci spartito',

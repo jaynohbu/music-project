@@ -237,6 +237,8 @@ const ja: Strings = {
   'score.drums': 'ドラム(楽譜)',
   'score.soundFor': '{part}の音色',
   'score.closest': '最も近い',
+  'score.rendering': 'サーバーでこの音色を作成中…',
+  'score.renderFailed': 'この音色を作れませんでした: {error}',
   'tasks.scoreQuestion': 'この曲の楽譜(PDFまたはMusicXML)はありますか?あれば楽譜からコードと音符を取り、なければ音声から検出します。',
   'tasks.uploadScore': '楽譜をアップロード',
   'tasks.replaceScore': '楽譜を差し替え',

@@ -237,6 +237,8 @@ const zh: Strings = {
   'score.drums': '鼓(乐谱)',
   'score.soundFor': '{part}音色',
   'score.closest': '最接近',
+  'score.rendering': '正在服务器上制作此音色…',
+  'score.renderFailed': '无法制作此音色：{error}',
   'tasks.scoreQuestion': '你有这首歌的乐谱(PDF 或 MusicXML)吗?有的话,和弦与音符将取自乐谱;没有的话,将从音频中查找。',
   'tasks.uploadScore': '上传乐谱',
   'tasks.replaceScore': '替换乐谱',

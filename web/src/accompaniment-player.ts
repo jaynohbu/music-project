@@ -41,7 +41,8 @@ function leadOf(buffer: AudioBuffer, samples: StyleLibrary['samples'], index: nu
 let library: Promise<StyleLibrary> | undefined;
 
 export function loadLibrary(): Promise<StyleLibrary> {
-  library ??= fetch('accompaniment/styles.json').then(response => {
+  // Checked again every time: copies cached before it was served without caching would miss new sounds.
+  library ??= fetch('accompaniment/styles.json', { cache: 'no-cache' }).then(response => {
     if (!response.ok) throw new Error(`Accompaniment styles request failed (HTTP ${response.status}).`);
     return response.json() as Promise<StyleLibrary>;
   });

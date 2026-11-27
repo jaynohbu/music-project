@@ -19,7 +19,8 @@ const SCENE_RETRIES = 5;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const CONTROL = /[\u0000-\u001f\u007f]/;
 const RUNNING = ['uploading', 'queued', 'processing'];
-const CHILD_FOLDERS = { restoration: 'restored', lyrics: 'lyrics', harmony: 'harmony' };
+// Renderings (score parts made as stems, stem-render.mjs) are kept with the song's chords.
+const CHILD_FOLDERS = { restoration: 'restored', lyrics: 'lyrics', harmony: 'harmony', rendering: 'harmony' };
 
 // Ranges mirror web/src/stem-effects.ts FADER_CONTROLS.
 export const TRACK_RANGES = {
@@ -404,7 +405,7 @@ export function songPrefixes(userId, jobId) {
   return [
     `stem-inputs/${userId}/${jobId}/`,
     `users/${userId}/stems/${jobId}/`,
-    ...Object.values(CHILD_FOLDERS).map(folder => `users/${userId}/${folder}/${jobId}/`),
+    ...[...new Set(Object.values(CHILD_FOLDERS))].map(folder => `users/${userId}/${folder}/${jobId}/`),
     // The song's own score (song-score.mjs) and its extracted sound.
     `users/${userId}/scores/${jobId}/`,
   ];

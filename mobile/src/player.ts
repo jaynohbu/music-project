@@ -2,7 +2,7 @@
 // driven by one audio context so they stay sample-aligned (design doc, Audio engine).
 import {
   AnalyserNode, AudioContext, AudioManager, MediaElementAudioSourceNode, PlaybackNotificationManager,
-  type AudioBuffer, type AudioBufferSourceNode, type AudioParam, type GainNode, type RecorderAdapterNode,
+  type AudioParam, type GainNode, type RecorderAdapterNode,
 } from 'react-native-audio-api';
 // @ts-expect-error Not part of the public API, so the library is pinned (design doc).
 // It is the only way to start every stem at one shared time.
@@ -13,7 +13,7 @@ import { EXPLICIT_STEREO, applyEffects, createEffects, defaults, stereoGain, typ
 import { t, type TextKey } from './i18n';
 import { bandLevels, type StemLevels } from './instrument-detect';
 import { MAX_RATE, MIN_RATE, rateAt, songPositionAt, takeTimeAt, type TempoPoint } from './live-follow';
-import { RENDER_RATE, SCORE_FAMILIES, loadSound, type Family, type Samples } from './score-parts';
+import { SCORE_FAMILIES, type Family } from './score-parts';
 
 export interface Channel extends Omit<Effects, 'volume'> {
   volume: number; // 0 to 1
@@ -78,9 +78,9 @@ interface Stem {
 // The player's own channel: the live input and the recorded take both play through it.
 interface LiveChannel { effects: EffectNodes; gain: GainNode }
 
-// A part played from the Harmonic score (score-parts.ts): a channel of its own, like a stem's, muted to begin with;
-// its notes rendered whole into `buffer`, played by one source started with the stems.
-interface ScorePart { effects: EffectNodes; gain: GainNode; channel: Channel; buffer?: AudioBuffer; source?: AudioBufferSourceNode }
+// A part played from a score, made as a stem on the server in its sound (score-parts.ts): a channel of its own, like a
+// stem's, muted to begin with; its file opened and started with the stems at every start, as the take is.
+interface ScorePart { effects: EffectNodes; gain: GainNode; channel: Channel; path?: string; open?: OpenSource }
 export const defaultScoreChannel = (): Channel => ({ ...defaultChannel(), muted: true });
 
 // The native media-control registry is an unsynchronised dictionary that every
@@ -348,6 +348,7 @@ export class Mixer {
     this.semitones = semitones;
     for (const source of this.sources) shiftPitch(source.getFileSourceNode(), semitones);
     if (this.take?.open) shiftPitch(this.take.open.source.getFileSourceNode(), semitones);
+    for (const family of SCORE_FAMILIES) { const open = this.scoreParts[family].open; if (open) shiftPitch(open.source.getFileSourceNode(), semitones); }
     this.changed();
   }
 
@@ -362,7 +363,7 @@ export class Mixer {
     }
     this.speed = rate;
     for (const source of this.sources) source.setPlaybackRate(rate);
-    for (const family of SCORE_FAMILIES) { const source = this.scoreParts[family].source; if (source) source.playbackRate.value = rate; }
+    for (const family of SCORE_FAMILIES) this.scoreParts[family].open?.source.setPlaybackRate(rate);
   }
 
   // Where playback ends: the section end, but never past the playable end of the stems.
@@ -380,13 +381,14 @@ export class Mixer {
       this.pauseAll();
       for (const source of sources) source.seekToTime(position);
       const takeStart = this.prepareTake(position);
+      for (const family of SCORE_FAMILIES) this.prepareScorePart(family, position);
       await wait(SEEK_SETTLE_MS);
       if (this.closed) return;
       await this.context.resume();
       if (this.context.state !== 'running') throw new Error(t('player.engineStatePlay', { state: this.context.state }));
       const when = this.context.currentTime + START_DELAY;
       for (const source of sources) source.getFileSourceNode().start(when);
-      for (const family of SCORE_FAMILIES) this.startScorePart(family, when, position);
+      for (const family of SCORE_FAMILIES) this.startScorePart(family, when);
       this.startClock = when;
       this.startTake(takeStart, when);
     } finally {
@@ -466,24 +468,24 @@ export class Mixer {
     this.closeTakeSource();
   }
 
-  // A score part's source, started at an audio-clock time from a song position, at the stems' speed with its pitch kept.
-  private startScorePart(family: Family, when: number, position: number) {
+  // A score part's file opened and sought to a song position, for a start soon after (at the stems' speed and key).
+  private prepareScorePart(family: Family, position: number) {
     const part = this.scoreParts[family];
     this.stopScorePart(family);
-    if (!part.buffer || position >= part.buffer.duration) return;
-    const source = this.context.createBufferSource({ pitchCorrection: true });
-    source.buffer = part.buffer;
-    source.playbackRate.value = this.speed;
-    source.connect(part.effects.input);
-    source.start(when, position);
-    part.source = source;
+    if (!part.path) return;
+    part.open = this.openSource(part.path, part.effects.input, false);
+    if (position > 0) part.open.source.seekToTime(position);
+  }
+  private startScorePart(family: Family, when: number) {
+    this.scoreParts[family].open?.source.getFileSourceNode().start(when);
   }
   private stopScorePart(family: Family) {
-    const part = this.scoreParts[family], source = part.source;
-    part.source = undefined;
-    if (!source) return;
-    try { source.stop(); } catch { /* Not started or already ended. */ }
-    source.disconnect();
+    const part = this.scoreParts[family], open = part.open;
+    part.open = undefined;
+    if (!open) return;
+    open.source.pause();
+    open.routed.disconnect();
+    open.source.dispose();
   }
 
   // Each score part's sound (a library sound id); undefined until chosen, then the closest for the song.
@@ -494,11 +496,8 @@ export class Mixer {
     this.scoreSounds = { ...this.scoreSounds, [family]: sound };
     this.changed();
   }
-  // A sound's samples decoded for this mixer.
-  decodeSound(sound: number, samples: Samples) { return loadSound(this.context, sound, samples); }
 
-  // The parts played from the score: their channels, and their notes in a sound (velocities set to follow the
-  // Harmonic stem, `gain` the level at which a part is as loud as it).
+  // The parts played from the scores: their channels, and their stems made on the server.
   scoreChannel(family: Family) { return this.scoreParts[family].channel; }
   setScoreChannel(family: Family, change: Partial<Channel>) {
     const part = this.scoreParts[family];
@@ -507,14 +506,21 @@ export class Mixer {
     this.applyGains();
     this.changed();
   }
-  // A part's notes rendered whole (score-parts.ts renderPart, at RENDER_RATE from the song's start); heard at once
-  // when the song is playing, from where it is.
-  setScoreRender(family: Family, signal: Float32Array<ArrayBuffer>) {
+  // A part's stem as a file on the phone; heard at once when the song is playing, from where it is then.
+  scoreFile(family: Family) { return this.scoreParts[family].path; }
+  setScoreFile(family: Family, path: string) {
     const part = this.scoreParts[family];
-    const buffer = this.context.createBuffer(1, Math.max(1, signal.length), RENDER_RATE);
-    buffer.copyToChannel(signal, 0);
-    part.buffer = buffer;
-    if (this.playing && !this.restarting) this.startScorePart(family, this.context.currentTime + 0.05, this.positionAt(this.context.currentTime + 0.05));
+    if (part.path === path) return;
+    part.path = path;
+    if (!this.playing) return;
+    void this.run(async () => {
+      if (!this.playing || part.path !== path) return;
+      const when = this.context.currentTime + SEEK_SETTLE_MS / 1000 + START_DELAY;
+      this.prepareScorePart(family, this.positionAt(when));
+      await wait(SEEK_SETTLE_MS);
+      if (this.closed || !this.playing) { this.stopScorePart(family); return; }
+      this.startScorePart(family, when);
+    }).catch(error => console.warn('Score part could not start', error));
   }
 
 

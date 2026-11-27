@@ -55,7 +55,7 @@ export function summarize(items, now = new Date()) {
     if (item.type === 'stems') {
       if (visibleJob(item, now.getTime()).status !== 'failed') songs++;
       for (const stem of Object.values(item.stems ?? {})) bytes += (stem.bytes ?? 0) + (stem.playBytes ?? 0);
-    } else if (item.type === 'restoration' && item.status === 'completed') {
+    } else if ((item.type === 'restoration' || item.type === 'rendering') && item.status === 'completed') {
       bytes += (item.bytes ?? 0) + (item.playBytes ?? 0);
     }
   }

@@ -26,6 +26,9 @@ export interface Song {
   // Signed for one hour.
   stems?: Partial<Record<StemName, { playUrl: string; downloadUrl: string }>>;
   restorations?: { id: string; stem: StemName; status: SongStatus; playUrl?: string; playVersion?: string; error?: string }[];
+  // The score parts made as stems on the server (backend/stem-render.mjs), for a harmony result: one per family and
+  // sound; `auto` for the closest sounds made when the score was laid.
+  renderings?: Rendering[];
   lyrics?: Lyrics;
   harmony?: Harmony;
   // The song's own score (an uploaded score's MusicXML), from which its chords & notes always come.
@@ -95,6 +98,12 @@ export async function readScore(file: File): Promise<string> {
   }
   throw new Error(t('tasks.scoreFailed'));
 }
+
+export type RenderFamily = 'guitar' | 'keys' | 'bass' | 'drums';
+export interface Rendering { id: string; harmonyId: string; family: RenderFamily; sound: number; status: TaskStatus; auto?: boolean; error?: string; playUrl?: string }
+// A score part in a sound, made as a stem on the server (the same one again once asked for).
+export const createRendering = (jobId: string, family: RenderFamily, sound: number) =>
+  request('POST', `/stems/jobs/${jobId}/renderings`, { family, sound });
 
 // Cleans one stem, using the other five as references, as the website does.
 export const createRestoration = (jobId: string, stem: StemName) =>

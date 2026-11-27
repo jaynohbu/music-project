@@ -237,6 +237,8 @@ const es: Strings = {
   'score.drums': 'Batería (partitura)',
   'score.soundFor': 'Sonido de {part}',
   'score.closest': 'el más parecido',
+  'score.rendering': 'Creando este sonido en el servidor…',
+  'score.renderFailed': 'No se pudo crear este sonido: {error}',
   'tasks.scoreQuestion': '¿Tienes la partitura de esta canción (PDF o MusicXML)? Si la tienes, los acordes y las notas se toman de ella. Si no, se buscan en el audio.',
   'tasks.uploadScore': 'Subir una partitura',
   'tasks.replaceScore': 'Reemplazar partitura',

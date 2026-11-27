@@ -583,3 +583,36 @@ test('a key change shifts every stem, keeps speed, and is saved with the scene e
   assert.equal(other.transpose, 0, 'Reset returns to the original key');
   await other.close(); await mixer.close();
 });
+
+test('a score part made on the server plays as a file with the stems, at their key and speed, and joins mid-song', async () => {
+  const f = fixture(), mixer = await f.load('player').Mixer.create(f.paths, 'Score');
+  const context = f.contexts.at(-1);
+  const parts = () => context.files.filter(file => file.source.includes('render'));
+  mixer.setScoreFile('keys', '/cache/renderings/a.m4a');
+  assert.equal(mixer.scoreFile('keys'), '/cache/renderings/a.m4a');
+  assert.equal(parts().length, 0, 'opened only when playing');
+  await mixer.seek(30);
+  mixer.setTranspose(2);
+  await mixer.play();
+  const keys = parts()[0];
+  assert.equal(keys.currentTime, 30);
+  assert.deepEqual(keys.starts, [context.files[0].starts.at(-1)], 'started with the stems');
+  assert.equal(keys.pitchShift, 2, 'moved with the key');
+  mixer.setRate(1.1);
+  assert.equal(keys.rate, 1.1);
+  mixer.setTranspose(-1);
+  assert.equal(keys.pitchShift, -1);
+  // Another sound made while playing joins from where the song is then; the one before stops.
+  context.currentTime = 10.2;
+  mixer.setScoreFile('keys', '/cache/renderings/b.m4a');
+  await new Promise(resolve => setTimeout(resolve, 600));
+  const next = parts().at(-1);
+  assert.ok(next.source.endsWith('b.m4a') && keys.disposed);
+  assert.equal(next.starts.length, 1);
+  // Started 0.7 s on (the seek settling and the start delay), from the song's position then: 30 s + 1.1 × 10.7 s.
+  assert.ok(Math.abs(next.starts[0] - 10.9) < 1e-9 && Math.abs(next.currentTime - (30 + 1.1 * 10.7)) < 1e-9, `${next.starts[0]} ${next.currentTime}`);
+  assert.equal(next.pitchShift, -1);
+  await mixer.pause();
+  assert.ok(next.disposed, 'closed on pause, opened again on the next start');
+  await mixer.close();
+});

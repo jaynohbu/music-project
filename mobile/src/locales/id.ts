@@ -237,6 +237,8 @@ const id: Strings = {
   'score.drums': 'Drum (partitur)',
   'score.soundFor': 'Suara untuk {part}',
   'score.closest': 'paling mirip',
+  'score.rendering': 'Membuat suara ini di server…',
+  'score.renderFailed': 'Tidak dapat membuat suara ini: {error}',
   'tasks.scoreQuestion': 'Apakah Anda punya partitur lagu ini (PDF atau MusicXML)? Jika ada, akor dan not diambil darinya. Jika tidak, keduanya dicari dari audio.',
   'tasks.uploadScore': 'Unggah partitur',
   'tasks.replaceScore': 'Ganti partitur',

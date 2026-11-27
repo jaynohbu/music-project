@@ -31,8 +31,11 @@ node --input-type=module -e '
 '
 aws s3 sync web/dist/youtube-library/browser/ "s3://$BUCKET/" --region "$REGION" \
   --exclude index.html --exclude config.json --exclude config.example.json \
-  --exclude sorituh-mark.svg --exclude sorituh-logo.svg \
+  --exclude sorituh-mark.svg --exclude sorituh-logo.svg --exclude accompaniment/styles.json \
   --cache-control 'public,max-age=31536000,immutable'
+# The sound library grows (new sounds are added under it), so its list is checked again every time.
+aws s3 cp web/dist/youtube-library/browser/accompaniment/styles.json "s3://$BUCKET/accompaniment/styles.json" \
+  --region "$REGION" --content-type application/json --cache-control no-cache
 for asset in sorituh-mark.svg sorituh-logo.svg; do
   aws s3 cp "web/dist/youtube-library/browser/$asset" "s3://$BUCKET/$asset" \
     --region "$REGION" --content-type image/svg+xml --cache-control no-cache

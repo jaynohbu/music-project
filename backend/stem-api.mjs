@@ -7,6 +7,7 @@ import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { visibleJob } from './shared.mjs';
 import { createRestorationRoutes, listRestorations } from './restoration-api.mjs';
+import { createRenderingRoutes, listRenderings } from './rendering-api.mjs';
 import { ANALYSES, createAnalysisRoutes, currentAnalysis } from './analysis-api.mjs';
 import { STEM_NAMES, stemInput, UPLOAD_WINDOW_MS, STEM_WINDOW_MS } from './stem-shared.mjs';
 import { createSongDeletion, guardChildWrites, SongDeletingError } from './scene-api.mjs';
@@ -59,6 +60,7 @@ export function createStemHandler({
   const guarded = guardChildWrites(database, storage);
   const restorations = createRestorationRoutes({ database: guarded, storage, orchestrator, signer });
   const analyses = createAnalysisRoutes({ database: guarded, storage, orchestrator, signer });
+  const renderings = createRenderingRoutes({ database: guarded, storage, orchestrator, signer });
   const deleteSong = createSongDeletion({ database, storage });
   const scores = createScoreRoutes({ database, storage, uploadSigner, signer, startScoring: (userId, job) => analyses.startScored({ userId, parent: job }) });
   return async event => {
@@ -77,7 +79,7 @@ export function createStemHandler({
       if (song && method === 'DELETE') return await deleteSong({ userId, jobId: song[1], reply });
       // The song-deletion function's role may delete original stems, so it serves nothing else.
       if (deleteOnly) return reply(404, { message: 'Endpoint not found.' });
-      const child = /^\/api\/stems\/jobs\/([0-9a-f-]{36})\/(?:restorations|lyrics|harmony|score)(?:\/|$)/.exec(route ?? '');
+      const child = /^\/api\/stems\/jobs\/([0-9a-f-]{36})\/(?:restorations|lyrics|harmony|score|renderings)(?:\/|$)/.exec(route ?? '');
       if (child && method === 'POST') {
         const parent = (await database.send(new GetCommand({
           TableName: process.env.TABLE_NAME, Key: { userId, jobId: child[1] }, ConsistentRead: true,
@@ -90,6 +92,11 @@ export function createStemHandler({
         if (id && method === 'DELETE') return await restorations.remove({ userId, parentJobId, id, reply });
         if (!id && method === 'POST') return await restorations.create({ userId, parentJobId, body, reply });
         return reply(404, { message: 'Endpoint not found.' });
+      }
+      const rendering = /^\/api\/stems\/jobs\/([0-9a-f-]{36})\/renderings$/.exec(route ?? '');
+      if (rendering) {
+        if (method !== 'POST') return reply(404, { message: 'Endpoint not found.' });
+        return await renderings.create({ userId, parentJobId: rendering[1], body, reply });
       }
       const scored = /^\/api\/stems\/jobs\/([0-9a-f-]{36})\/score(?:\/(bass|drums))?(\/extracted)?$/.exec(route ?? '');
       if (scored && !(scored[2] && scored[3])) {
@@ -174,6 +181,7 @@ export function createStemHandler({
         return reply(200, { job: signed.status === 'completed' ? {
           ...signed,
           restorations: await listRestorations(job, { database, signer, storage }),
+          renderings: await listRenderings(job, { database, signer, storage }),
           ...Object.fromEntries(await Promise.all(Object.keys(ANALYSES).map(async type =>
             [type, await currentAnalysis(type, job, { database, signer, storage })]))),
         } : signed });

@@ -236,6 +236,8 @@ const en = {
   'score.drums': 'Drums (score)',
   'score.soundFor': 'Sound for {part}',
   'score.closest': 'closest',
+  'score.rendering': 'Making this sound on the server…',
+  'score.renderFailed': 'Could not make this sound: {error}',
   'tasks.scoreQuestion': 'Do you have a score of this song (a PDF, or MusicXML)? With one, the chords and notes are taken from it. Without one, they are found from the audio.',
   'tasks.uploadScore': 'Upload a score',
   'tasks.replaceScore': 'Replace score',

@@ -185,6 +185,7 @@ export async function finalize(event) {
           restoration: 'Stem cleanup stopped before completion. Please try again.',
           lyrics: 'Lyrics recognition stopped before completion. Please try again.',
           harmony: 'Chord analysis stopped before completion. Please try again.',
+          rendering: 'Making this sound stopped before completion. Please try again.',
         }[result.Item.type] ?? 'The separation task stopped before completion. Please try again.',
         ':at': retention.failedAt, ':expiry': retention.expiresAt,
         ':code': 'STEM_TASK_STOPPED', ':stage': 'worker',

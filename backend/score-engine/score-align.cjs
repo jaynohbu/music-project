@@ -4,6 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.PARTIALS = exports.PRESENT_DB = exports.INTRO_SECONDS = exports.FEATURE_FRAMES = exports.PITCHED_STEMS = void 0;
 exports.stemFeatures = stemFeatures;
 exports.warp = warp;
+exports.noteStems = noteStems;
 exports.alignScore = alignScore;
 exports.restoredScore = restoredScore;
 exports.scoreMask = scoreMask;
@@ -60,6 +61,8 @@ const BEND = 0.05; // Cost of a step off the diagonal (a change of tempo).
 const CHORD_WEIGHT = 0.4; // Chord symbols count this much against the notes.
 const SHIFTS_TRIED = 2;
 const PART_LEAST = 0.45; // A part goes to a stem only when it sounds this much like it.
+const LAYER_NOTES = 8; // A staff's layer is matched on its own with at least this many notes.
+const DOUBLED_LAYER = 0.6; // A layer whose notes double the sung line this often is the vocals' too.
 const SNAP = 0.35; // Measure starts move to a song beat within this share of a beat.
 exports.INTRO_SECONDS = 8;
 const RIGID_BEATS = 8; // Beats either side of the path's start tried for the score on the beats.
@@ -314,6 +317,34 @@ function interpolate(knots, x) {
     const [x0, y0] = knots[index], [x1, y1] = knots[index + 1];
     return y0 + (y1 - y0) * (x - x0) / (x1 - x0 || 1);
 }
+// The stem each note belongs to: its layer's match (a layer matched on its own first, else its staff's), and the
+// vocals' for a note that doubles the sung line (the same pitch starting with a note given to the vocals, as a piano
+// under a melody plays it); a layer that is mostly such doubling is the vocals' as a whole. So the sung line is left
+// out of the Harmonic notes wherever the score writes it.
+function noteStems(score, parts) {
+    const matchOf = (note) => parts.find(match => match.part === note.part && match.staff === note.staff && match.voice === (note.voice ?? 1))
+        ?? parts.find(match => match.part === note.part && match.staff === note.staff && match.voice === undefined);
+    const layerKey = (note) => `${note.part}/${note.staff}/${note.voice ?? 1}`;
+    const at = (note) => `${note.start.toFixed(3)}/${note.pitch}`;
+    const sung = new Set(score.notes.filter(note => matchOf(note)?.stem === 'vocals').map(at));
+    const layers = new Map();
+    for (const note of score.notes) {
+        if (matchOf(note)?.stem === 'vocals')
+            continue;
+        const layer = layers.get(layerKey(note)) ?? { notes: 0, doubled: 0 };
+        layer.notes++;
+        if (sung.has(at(note)))
+            layer.doubled++;
+        layers.set(layerKey(note), layer);
+    }
+    return note => {
+        const stem = matchOf(note)?.stem ?? null;
+        if (stem === 'vocals' || !sung.size)
+            return stem;
+        const layer = layers.get(layerKey(note));
+        return sung.has(at(note)) || (layer && layer.notes >= LAYER_NOTES && layer.doubled >= DOUBLED_LAYER * layer.notes) ? 'vocals' : stem;
+    };
+}
 function alignScore({ score, spectrograms, seconds, beats, intro, target, fill }) {
     // Measures after the last note (rests to the end of a page) match anything; they are left out.
     const lastSound = Math.max(...score.notes.map(note => note.start + note.length));
@@ -385,8 +416,8 @@ function alignScore({ score, spectrograms, seconds, beats, intro, target, fill }
     const groups = [...new Set(score.notes.map(note => `${note.part}/${note.staff}`))].map(key => key.split('/').map(Number))
         .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
     const staves = new Set(score.notes.filter(note => note.staff > 1).map(note => note.part));
-    const parts = groups.map(([part, staff]) => {
-        const drawn = scoreFeatures(score, step, best.secondsPerQuarter, best.shift, note => note.part === part && note.staff === staff, false);
+    const likenessOf = (chosen) => {
+        const drawn = scoreFeatures(score, step, best.secondsPerQuarter, best.shift, chosen, false);
         const likeness = {};
         for (const stem of exports.PITCHED_STEMS) {
             const feature = features[stem];
@@ -402,9 +433,32 @@ function alignScore({ score, spectrograms, seconds, beats, intro, target, fill }
             likeness[stem] = count ? sum / count : 0;
         }
         const ranked = Object.entries(likeness).sort((a, b) => b[1] - a[1]);
+        return { likeness, stem: ranked[0] && ranked[0][1] >= PART_LEAST ? ranked[0][0] : null };
+    };
+    const parts = groups.map(([part, staff]) => {
         const name = (score.parts[part]?.name ?? `Part ${part + 1}`) + (staves.has(part) ? ` (staff ${staff})` : '');
-        return { part, staff, name, stem: ranked[0] && ranked[0][1] >= PART_LEAST ? ranked[0][0] : null, likeness };
+        return { part, staff, name, ...likenessOf(note => note.part === part && note.staff === staff) };
     });
+    // A staff written in several layers (a piano's right hand with the tune above its chords, say): a layer that
+    // sounds most like the vocals is the vocals', and left out like a sung part.
+    for (const [part, staff] of groups) {
+        const voices = new Map();
+        for (const note of score.notes)
+            if (note.part === part && note.staff === staff)
+                voices.set(note.voice ?? 1, (voices.get(note.voice ?? 1) ?? 0) + 1);
+        if (voices.size < 2)
+            continue;
+        const staffMatch = parts.find(match => match.part === part && match.staff === staff && match.voice === undefined);
+        if (staffMatch.stem === 'vocals')
+            continue;
+        for (const [voice, count] of voices) {
+            if (count < LAYER_NOTES)
+                continue;
+            const layer = likenessOf(note => note.part === part && note.staff === staff && (note.voice ?? 1) === voice);
+            if (layer.stem === 'vocals')
+                parts.push({ part, staff, voice, name: `${staffMatch.name} (voice ${voice})`, ...layer });
+        }
+    }
     // Second pass, at the tempo the first found: each stem against its own parts (parts given to no stem, against the
     // stems together).
     const found = best;
@@ -412,7 +466,7 @@ function alignScore({ score, spectrograms, seconds, beats, intro, target, fill }
     // without, the path's own.
     const tempo = beats && beats.length > 2 ? found.secondsPerQuarter
         : found.secondsPerQuarter * (found.path[found.path.length - 1] - found.path[0] + 1) / found.path.length;
-    const ownStem = (note) => parts.find(part => part.part === note.part && part.staff === note.staff)?.stem ?? null;
+    const ownStem = noteStems(score, parts);
     const assigned = exports.PITCHED_STEMS.filter(stem => features[stem] && parts.some(part => part.stem === stem));
     const own = assigned.map(stem => ({ feature: features[stem], drawn: scoreFeatures(score, step, tempo, found.shift, note => ownStem(note) === stem, false) }));
     const rest = parts.some(part => !part.stem) ? scoreFeatures(score, step, tempo, found.shift, note => !ownStem(note), true) : null;
@@ -544,7 +598,7 @@ function alignScore({ score, spectrograms, seconds, beats, intro, target, fill }
     likeness /= best.drawn.steps;
     // A melody is the singer's, though the other stem's overtones sound at its pitches; a bass line the other stem
     // also plays (a piano's left hand, a guitar's low strings) is restored where it has it.
-    const stemOf = (note) => parts.find(part => part.part === note.part && part.staff === note.staff)?.stem ?? null;
+    const stemOf = ownStem;
     const { notes, missing } = restore(score, spectrograms, target ?? { spectrogram: other, stems: ['other'] }, timeAt, best.shift, beatGap, stemOf, undefined, false, fill);
     return { measures, shift: best.shift, secondsPerQuarter, likeness, parts, notes, missing, timeAt };
 }
@@ -780,7 +834,7 @@ function fitMeasures({ score, spectrograms, beats: original, target }, base, fir
     const stems = exports.PITCHED_STEMS.filter(stem => spectrograms[stem] && spectrograms[stem].rate === other.rate);
     const features = Object.fromEntries(stems.map(stem => [stem, stemFeatures(spectrograms[stem])]));
     const steps = Math.min(...stems.map(stem => features[stem].steps));
-    const stemOf = (note) => base.parts.find(part => part.part === note.part && part.staff === note.staff)?.stem ?? null;
+    const stemOf = noteStems(score, base.parts);
     const assigned = stems.filter(stem => base.parts.some(part => part.stem === stem));
     const unassigned = base.parts.some(part => !part.stem);
     const uncovered = unassigned ? [] : stems.filter(stem => !assigned.includes(stem));

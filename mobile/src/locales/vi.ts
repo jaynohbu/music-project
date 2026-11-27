@@ -237,6 +237,8 @@ const vi: Strings = {
   'score.drums': 'Trống (bản nhạc)',
   'score.soundFor': 'Âm thanh cho {part}',
   'score.closest': 'gần nhất',
+  'score.rendering': 'Đang tạo âm thanh này trên máy chủ…',
+  'score.renderFailed': 'Không tạo được âm thanh này: {error}',
   'tasks.scoreQuestion': 'Bạn có bản nhạc của bài này (PDF hoặc MusicXML) không? Nếu có, hợp âm và nốt sẽ lấy từ đó. Nếu không, chúng sẽ được tìm từ âm thanh.',
   'tasks.uploadScore': 'Tải bản nhạc lên',
   'tasks.replaceScore': 'Thay bản nhạc',

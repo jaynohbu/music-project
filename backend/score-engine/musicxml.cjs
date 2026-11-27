@@ -227,7 +227,7 @@ function parseMusicXml(source) {
                             tied.delete(key);
                         continue;
                     }
-                    const note = { pitch: Math.round(midi), start: start + noteStart, length, measure: index, part, staff };
+                    const note = { pitch: Math.round(midi), start: start + noteStart, length, measure: index, part, staff, voice: numberOf(element, 'voice', 1) };
                     notes.push(note);
                     if (ties.includes('start'))
                         tied.set(key, note);

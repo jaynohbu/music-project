@@ -237,6 +237,8 @@ const fil: Strings = {
   'score.drums': 'Drums (score)',
   'score.soundFor': 'Tunog ng {part}',
   'score.closest': 'pinakamalapit',
+  'score.rendering': 'Ginagawa ang tunog na ito sa server…',
+  'score.renderFailed': 'Hindi magawa ang tunog na ito: {error}',
   'tasks.scoreQuestion': 'May score ka ba ng kantang ito (PDF o MusicXML)? Kung mayroon, kukunin dito ang chords at nota. Kung wala, hahanapin ang mga ito sa audio.',
   'tasks.uploadScore': 'Mag-upload ng score',
   'tasks.replaceScore': 'Palitan ang score',

@@ -3,11 +3,11 @@ import { Alert } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { File } from 'expo-file-system';
 import {
-  createHarmony, createLyrics, createRestoration, fetchResult, getSong, readScore, saveLyrics as sendLyrics, saveSongScore, laySongScore,
-  ENSEMBLE_STEMS, type HarmonyGrid, type HarmonyPart, type LyricLine, type ScorePart, type Song, type StemName,
+  createHarmony, createLyrics, createRendering, createRestoration, fetchResult, getSong, readScore, saveLyrics as sendLyrics, saveSongScore, laySongScore,
+  ENSEMBLE_STEMS, type HarmonyGrid, type RenderFamily, type HarmonyPart, type LyricLine, type ScorePart, type Song, type StemName,
 } from './api';
 import { t, type TextKey } from './i18n';
-import type { Loudness, SoundChoices } from './score-parts';
+import type { SoundChoices } from './score-parts';
 import { errorText } from './ui';
 
 // The same interval and wording as the website (web/src/stem-pages.ts).
@@ -20,7 +20,7 @@ const SCORE_FILES = /\.(pdf|png|jpe?g)$/i, MUSICXML_FILES = /\.(musicxml|xml)$/i
 const running = (status?: string) => status === 'queued' || status === 'processing';
 export const working = (song: Song | null) => !!song && (running(song.lyrics?.status) || running(song.harmony?.status) ||
   Object.values(song.harmony?.stems ?? {}).some(part => running(part?.status)) ||
-  (song.restorations ?? []).some(item => running(item.status)));
+  (song.restorations ?? []).some(item => running(item.status)) || (song.renderings ?? []).some(item => running(item.status)));
 export const hasMusic = (part?: HarmonyPart) => !!part && (part.chords.length > 0 || part.notes.length > 0 || !!part.hits?.length);
 export const regenerateLabel = (name: string) => t(name === 'drums' ? 'tasks.regenDrums' : 'tasks.regenChordsMelody');
 export const stemName = (name: string) => t(`stem.${name}` as TextKey);
@@ -44,9 +44,8 @@ export function useSongTasks(initial: Song | null) {
   const [startingClean, setStartingClean] = useState<string[]>([]);
   const [partLoadErrors, setPartLoadErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
-  // The analysis's sounds for the song, and the Harmonic stem's loudness (with a result made from a score).
+  // The analysis's sounds for the song.
   const [soundChoices, setSoundChoices] = useState<SoundChoices>();
-  const [loudness, setLoudness] = useState<Loudness>();
   // Reading and saving an uploaded score: the minutes it should take, shown alone, on the stem it is for.
   const [scoreMinutes, setScoreMinutes] = useState(0);
   const [scorePart, setScorePart] = useState<ScorePart>('other');
@@ -102,11 +101,10 @@ export function useSongTasks(initial: Song | null) {
   useEffect(() => {
     if (!chordsUrl || chordsId === loadedChords || loading.current.chords || chordsLoadError) return;
     loading.current.chords = true;
-    fetchResult<HarmonyGrid & { stems: Record<string, HarmonyPart>; ensemble?: HarmonyPart; accompaniment?: SoundChoices; loudness?: Loudness }>(chordsUrl, 'Chords')
-      .then(({ stems, ensemble, beats, firstBar, accompaniment, loudness }) => {
+    fetchResult<HarmonyGrid & { stems: Record<string, HarmonyPart>; ensemble?: HarmonyPart; accompaniment?: SoundChoices }>(chordsUrl, 'Chords')
+      .then(({ stems, ensemble, beats, firstBar, accompaniment }) => {
         if (!alive.current) return;
         setSoundChoices(accompaniment);
-        setLoudness(loudness);
         // A newer result replaces the shown one, regenerated parts included.
         loadedParts.current.clear();
         setPartLoadErrors({});
@@ -228,8 +226,24 @@ export function useSongTasks(initial: Song | null) {
       () => createHarmony(jobId, { stem: name, cleaned }), error => t('tasks.startRegenFailed', { stem: stemName(name), error }));
   };
 
+  // A score part in a sound, made on the server for the result shown (asked for once per result, family and sound).
+  const askedRenderings = useRef(new Set<string>());
+  const render = (family: RenderFamily, sound: number, again = false) => {
+    if (!jobId || !loadedChords) return;
+    const wanted = `${loadedChords}:${family}:${sound}`;
+    if (again) askedRenderings.current.delete(wanted);
+    if (askedRenderings.current.has(wanted)) return;
+    askedRenderings.current.add(wanted);
+    createRendering(jobId, family, sound).then(refresh, failure => {
+      askedRenderings.current.delete(wanted);
+      if (alive.current) setError(t('score.renderFailed', { error: errorText(failure) }));
+    });
+  };
+
   return {
-    song, lyrics, grid, parts, error, findingLyrics, findingChords, updatingChords, regenerating, cleaning, soundChoices, loudness,
+    // The result whose parts are shown, its renderings, and asking for one.
+    resultId: loadedChords, renderings: song?.renderings ?? [], render,
+    song, lyrics, grid, parts, error, findingLyrics, findingChords, updatingChords, regenerating, cleaning, soundChoices,
     // While a score is read and saved, or laid on the song on the server: about how many minutes (on the stem the
     // upload is for, or on every stem with a score while they are laid).
     processing: scoreMinutes || (scoring ? Math.round(LAYING_SECONDS / 60) : 0),

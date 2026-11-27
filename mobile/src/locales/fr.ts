@@ -237,6 +237,8 @@ const fr: Strings = {
   'score.drums': 'Batterie (partition)',
   'score.soundFor': 'Son de {part}',
   'score.closest': 'le plus proche',
+  'score.rendering': 'Création de ce son sur le serveur…',
+  'score.renderFailed': 'Impossible de créer ce son : {error}',
   'tasks.scoreQuestion': 'Avez-vous une partition de ce morceau (PDF ou MusicXML) ? Si oui, les accords et les notes en sont tirés. Sinon, ils sont trouvés dans l\'audio.',
   'tasks.uploadScore': 'Importer une partition',
   'tasks.replaceScore': 'Remplacer la partition',

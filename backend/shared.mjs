@@ -30,7 +30,7 @@ export function failedHistoryExpired(job, now = Date.now()) {
 }
 
 export function visibleJob(job, now = Date.now()) {
-  const stemJob = ['stems', 'restoration', 'lyrics', 'harmony'].includes(job.type);
+  const stemJob = ['stems', 'restoration', 'lyrics', 'harmony', 'rendering'].includes(job.type);
   if (stemJob && ['uploading', 'queued', 'processing'].includes(job.status) &&
       now >= stemDeadline(job)) {
     return {
@@ -40,6 +40,7 @@ export function visibleJob(job, now = Date.now()) {
         restoration: 'Stem cleanup expired. Please try again.',
         lyrics: 'Lyrics recognition expired. Please try again.',
         harmony: 'Chord analysis expired. Please try again.',
+        rendering: 'Making this sound took too long. Please try again.',
       }[job.type],
       ...failureRetention(stemDeadline(job)),
     };

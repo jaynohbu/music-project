@@ -2,14 +2,14 @@ import { useIsFocused } from 'expo-router';
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
-import { HARMONY_STEMS, STEM_NAMES, getSong, type LyricLine, type SceneEntry, type SceneSettings, type Song, type StemName } from './api';
+import { HARMONY_STEMS, STEM_NAMES, getSong, type LyricLine, type Rendering, type SceneEntry, type SceneSettings, type Song, type StemName } from './api';
 import { addCleanedFile, holdSong, songFiles, stemPaths } from './cache';
 import { EFFECT_CONTROLS } from './effects';
 import { t as text } from './i18n';
 import { useT } from './language';
 import { LivePanel } from './live-panel';
 import { MAX_TRANSPOSE, Mixer, defaultChannel, defaultScoreChannel, type Channel } from './player';
-import { FAMILY_STEM, SCORE_FAMILIES, familyEvents, loadLibrary, matchLoudness, offered, renderPartAsync, samplesFor, type Family, type SoundLibrary } from './score-parts';
+import { FAMILY_STEM, SCORE_FAMILIES, familyEvents, loadLibrary, offered, renderedFile, type Family, type SoundLibrary } from './score-parts';
 import { ChannelStrip, IconButton, LampSwitch, MasterFader, Timeline } from './mixer-console';
 import { EDGE } from './stem-scroll';
 import { stemPeaks } from './waveform';
@@ -344,9 +344,9 @@ function ChannelConsole({ songKey, mixer, label, channel, expanded, live, replac
 }
 
 // The scores played under their stems: the Harmonic score on guitar and on keys, the bass part on a bass, the drum
-// part on a kit. For each, its sound (the song's closest to begin with) and a console like a stem's. The notes are
-// made again when the part, the sound or the key changes, as loud through the song as the stem when its loudness came
-// with the result.
+// part on a kit. For each, its sound (the song's closest to begin with) and a console like a stem's. Each part is
+// made on the server as a stem in its sound, as loud through the song as its stem: the closest sound when the score
+// is laid, another when it is chosen (heard once made; the sound before plays meanwhile).
 function ScoreParts({ mixer, tasks, stem, console }: {
   mixer: Mixer; tasks: ReturnType<typeof useSongTasks>; stem: 'other' | 'bass' | 'drums';
   console: (family: Family, label: string, expanded: boolean, onToggle: () => void) => React.ReactNode;
@@ -356,37 +356,39 @@ function ScoreParts({ mixer, tasks, stem, console }: {
   const [failure, setFailure] = useState('');
   const [picking, setPicking] = useState<Family | null>(null);
   const [expanded, setExpanded] = useState<Family | null>(null);
-  const parts = tasks.parts, grid = tasks.grid, choices = tasks.soundChoices, loudness = tasks.loudness, transpose = mixer.transpose;
+  const parts = tasks.parts, grid = tasks.grid, choices = tasks.soundChoices, resultId = tasks.resultId;
   const part = parts?.[stem];
   const families = SCORE_FAMILIES.filter(family => FAMILY_STEM[family] === stem);
   useEffect(() => { loadLibrary().then(setLibrary, error => setFailure(errorText(error))); }, []);
   const sounds = (family: Family) => library ? offered(library, choices, family) : [];
-  const chosen = families.map(family => mixer.scoreSound(family)).join();
+  const shown = families.filter(family => parts && grid && familyEvents(family, parts, grid, 0));
+  // The result's renderings of a family, oldest first; the sound played: the one chosen, else the closest made with
+  // the score, else the song's closest.
+  const madeFor = (family: Family) => tasks.renderings.filter(item => item.harmonyId === resultId && item.family === family);
+  const soundOf = (family: Family) => mixer.scoreSound(family) ?? madeFor(family).find(item => item.auto && item.status !== 'failed')?.sound
+    ?? (library ? offered(library, choices, family)[0] : undefined);
+  const renderingOf = (family: Family) => madeFor(family).filter(item => item.sound === soundOf(family)).at(-1);
+  const wanted = shown.map(family => `${family}:${soundOf(family)}`).join();
+  const made = tasks.renderings.map(item => `${item.id}:${item.status}`).join();
   useEffect(() => {
-    if (!library || !part || !grid || !parts) return;
+    if (!library || !resultId) return;
     let cancelled = false;
-    for (const family of families) {
-      const played = familyEvents(family, parts, grid, family === 'drums' ? 0 : transpose);
-      const sound = mixer.scoreSound(family) ?? offered(library, choices, family)[0];
-      if (!played || sound === undefined) continue;
+    for (const family of shown) {
+      const sound = soundOf(family);
+      if (sound === undefined) continue;
       if (mixer.scoreSound(family) === undefined) mixer.setScoreSound(family, sound);
-      const samples = samplesFor(library, family), levels = loudness?.[stem];
-      mixer.decodeSound(sound, samples).then(async ({ buffer, attacks, levels: shape }) => {
-        if (cancelled || mixer.scoreSound(family) !== sound) return;
-        const matched = loudness && levels ? matchLoudness(played.events, played.measured, { window: loudness.window, other: levels }, samples, shape)
-          : { events: played.events, gain: 1 };
-        // Rendered whole, the part's level at which it is as loud as its stem included.
-        const signal = await renderPartAsync(matched.events, buffer.getChannelData(0), buffer.sampleRate, samples, attacks, mixer.duration + 1, () => cancelled);
-        if (!signal) return;
-        if (matched.gain !== 1) for (let index = 0; index < signal.length; index++) signal[index] *= matched.gain;
-        if (!cancelled && mixer.scoreSound(family) === sound) mixer.setScoreRender(family, signal);
+      const rendering = renderingOf(family);
+      // A result laid before parts were made on the server, or a sound just chosen: asked for once.
+      if (!rendering) { tasks.render(family, sound); continue; }
+      if (rendering.status !== 'completed' || !rendering.playUrl) continue;
+      renderedFile(rendering.id, rendering.playUrl).then(path => {
+        if (!cancelled && mixer.scoreSound(family) === sound) mixer.setScoreFile(family, path);
       }, error => { if (!cancelled) setFailure(errorText(error)); });
     }
     return () => { cancelled = true; };
-    // families follows stem.
+    // shown, soundOf and renderingOf follow wanted and made.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mixer, library, part, grid, choices, loudness, transpose, chosen, stem]);
-  const shown = families.filter(family => parts && grid && familyEvents(family, parts, grid, 0));
+  }, [mixer, library, resultId, wanted, made]);
   if (!part || !library || !shown.length) return failure ? <Text accessibilityRole="alert" style={[styles.error, styles.taskError]}>{failure}</Text> : null;
   const name = (sound?: number) => sound === undefined ? '' : library.sounds[String(sound)]?.name ?? String(sound);
   return <View style={styles.scoreParts}>
@@ -402,6 +404,7 @@ function ScoreParts({ mixer, tasks, stem, console }: {
             <Text style={styles.soundPickerArrow}>▾</Text>
           </Pressable>
         </View>
+        <RenderingState rendering={renderingOf(family)} onRetry={() => { const sound = soundOf(family); if (sound !== undefined) tasks.render(family, sound, true); }} />
         {console(family, label, expanded === family, () => setExpanded(open => open === family ? null : family))}
       </View>;
     })}
@@ -421,6 +424,17 @@ function ScoreParts({ mixer, tasks, stem, console }: {
         </View>
       </Pressable>
     </Modal>
+  </View>;
+}
+
+// Whether a part's chosen sound is still being made on the server, or could not be.
+function RenderingState({ rendering, onRetry }: { rendering?: Rendering; onRetry: () => void }) {
+  const styles = useStyles(makeStyles), t = useT();
+  if (!rendering || rendering.status === 'completed') return null;
+  if (rendering.status !== 'failed') return <Text style={styles.taskHint} accessibilityLiveRegion="polite">{t('score.rendering')}</Text>;
+  return <View style={styles.renderFailure}>
+    <Text accessibilityRole="alert" style={[styles.error, styles.renderFailureText]}>{t('score.renderFailed', { error: rendering.error ?? '' })}</Text>
+    <Pressable onPress={onRetry} accessibilityRole="button" hitSlop={8}><Text style={styles.renderRetry}>{t('common.tryAgain')}</Text></Pressable>
   </View>;
 }
 
@@ -598,6 +612,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   soundPicker: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 38, paddingHorizontal: 12,
     borderRadius: 8, borderWidth: 1, borderColor: t.line, backgroundColor: t.surface },
   soundPickerText: { flex: 1, fontSize: 14, fontWeight: '600', color: t.ink },
+  renderFailure: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  renderFailureText: { flex: 1 },
+  renderRetry: { fontSize: 14, fontWeight: '700', color: t.accent },
   soundPickerArrow: { fontSize: 13, color: t.muted, marginLeft: 8 },
   sheetBackdrop: { flex: 1, backgroundColor: '#0008', justifyContent: 'flex-end' },
   sheet: { maxHeight: '60%', backgroundColor: t.surface, borderTopLeftRadius: 14, borderTopRightRadius: 14, paddingVertical: 8 },

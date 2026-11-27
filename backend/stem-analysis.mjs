@@ -13,6 +13,7 @@ import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } fro
 import { extractedKey } from './song-score.mjs';
 import { failureRetention } from './shared.mjs';
 import { stemDeadline } from './stem-shared.mjs';
+import { renderClosest } from './stem-render.mjs';
 
 const db = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const s3 = new S3Client({});
@@ -229,9 +230,14 @@ function createAnalysisWorker(analysis, {
         }
       }
       stage = 'record';
+      // The parts laid from scores made as stems in their closest sounds, waited for by the app once the result is in.
+      const closest = child.scoreKey ? await renderClosest({
+        userId: child.userId, parentJobId: child.parentJobId, harmonyId: child.jobId, result, seconds: parent.duration + 1, directory, database, storage,
+      }) : undefined;
       await update('processing', {
         status: 'completed', completedAt: new Date().toISOString(), ...(child.scoreKey ? { fromScore: summary(result.fromScore) } : {}),
       }, ['expiresAt']);
+      await closest?.start().catch(error => console.error('Score renderings stopped', { jobId: child.jobId, name: error.name }));
     } catch (error) {
       console.error('Stem analysis failed', { jobId: child.jobId, type: analysis.type, stage, name: error.name });
       await update('processing', {

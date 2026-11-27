@@ -237,6 +237,8 @@ const ko: Strings = {
   'score.drums': '드럼 (악보)',
   'score.soundFor': '{part} 소리',
   'score.closest': '가장 가까움',
+  'score.rendering': '서버에서 이 소리로 만드는 중…',
+  'score.renderFailed': '이 소리를 만들지 못했어요: {error}',
   'tasks.scoreQuestion': '이 곡의 악보(PDF 또는 MusicXML)가 있나요? 있으면 코드와 음표를 악보에서 가져오고, 없으면 오디오에서 찾아요.',
   'tasks.uploadScore': '악보 올리기',
   'tasks.replaceScore': '악보 바꾸기',
