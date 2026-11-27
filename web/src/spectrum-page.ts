@@ -3,9 +3,18 @@
 // scale with the moment playing at the middle. It plays the stem as it is, only what the meaningful view keeps (the
 // stem's own sound in those cells, the rest silenced: spectrogram.ts maskedSignal), or only what it leaves out. The song's beats (from its
 // chord analysis, when there is one) are drawn on both, bar lines brighter.
+//
+// A score of a passage (the intro, say) can be given: a PDF, read into MusicXML by the local score reader
+// (tools/omr, Audiveris; only while running locally), or MusicXML itself. It is aligned with the song through all
+// the stems (score-align.ts), its measures drawn on both views, and the Harmonic stem restored from it: the score's
+// notes the stem plays, when and as loud as it plays them, drawn over the spectrogram and heard alone or with the stem.
 import { ChangeDetectionStrategy, Component, ElementRef, OnDestroy, OnInit, inject, signal, viewChild } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { StemsService, errorMessage, type HarmonyGrid, type Job } from './services';
+import { type Score, parseMusicXml, unzipMusicXml } from './musicxml';
+import { type AlignStem, type Alignment, alignScore, restoredScore } from './score-align';
+import { harmonyMidi } from './score-export';
+import { renderNotes } from './accompaniment-player';
 import {
   HOP, LOWEST_PITCH, RANGE_DB, ROWS, ROWS_PER_SEMITONE, type Spectrogram, heatColors, maskedSignal, meaningful, monoSignal, spectrogramOf,
 } from './spectrogram';
@@ -17,6 +26,9 @@ const OVERVIEW_HEIGHT = 64;
 // Zoom: pixels per second.
 const ZOOMS = [40, 80, 160, 320, 640];
 const COLORS = heatColors();
+// The other stems the score is compared with, besides the Harmonic stem itself.
+const COMPARED: AlignStem[] = ['vocals', 'bass', 'drums'];
+type Listen = 'all' | 'meaningful' | 'rest' | 'restored' | 'both';
 
 // The loudest sample (absolute) in each block of a signal.
 function blockPeaks(signal: Float32Array, block: number) {
@@ -63,6 +75,47 @@ function blockPeaks(signal: Float32Array, block: number) {
         </div>
         @if (grid()) { <span class="hint">Beats from the chord analysis; bar lines brighter.</span> }
       </div>
+      <div class="spectrum-score">
+        <div class="spectrum-heading">
+          <h2 class="spectrum-label">Score</h2>
+          <label class="button-link secondary spectrum-file">{{ score() ? 'Another score…' : 'Upload a score…' }}
+            <input type="file" accept=".pdf,.png,.jpg,.jpeg,.musicxml,.xml,.mxl,application/pdf" (change)="chooseScore($event)" [disabled]="!ready() || aligning()">
+          </label>
+          <label>The score is
+            <select (change)="setIntro($any($event.target).value === 'intro')" [disabled]="aligning()">
+              <option value="intro" [selected]="intro()">the song's beginning (intro)</option>
+              <option value="anywhere" [selected]="!intro()">a passage anywhere in the song</option>
+            </select>
+          </label>
+          @if (alignment()) {
+            <label><input type="checkbox" [checked]="showNotes()" (change)="setShowNotes($any($event.target).checked)"> Show the score's notes</label>
+            <button type="button" class="secondary" (click)="download('midi')">Restored MIDI</button>
+            <button type="button" class="secondary" (click)="download('json')">Restored JSON</button>
+          }
+        </div>
+        <p class="hint">A passage of the song (the intro, say) as a PDF or MusicXML (.musicxml, .mxl). It is found in the song by
+          comparing it with every stem; the Harmonic stem is then restored from it: the score's notes the stem plays, as it plays them.</p>
+        @if (scoreError()) { <p class="error" role="alert">{{ scoreError() }}</p> }
+        @if (scoreStatus()) { <p class="hint" role="status">{{ scoreStatus() }}</p> }
+        @if (alignment(); as found) {
+          <p><strong>{{ score()?.title || scoreName() }}</strong>: {{ found.measures.length }} measures, {{ clock(found.measures[0].start) }} to
+            {{ clock(found.measures[found.measures.length - 1].end) }}, about {{ tempoOf(found) }} quarters a minute{{ shiftText(found) }};
+            the score and the song alike {{ percent(found.likeness) }}%.</p>
+          <p>Parts:
+            @for (part of found.parts; track part.name; let last = $last) {
+              {{ part.name }} → {{ part.stem ?? 'no single stem' }}{{ part.stem ? ' (' + percent(part.likeness[part.stem] ?? 0) + '%)' : '' }}{{ last ? '' : '; ' }}
+            }
+          </p>
+          <p>Restored {{ found.notes.length }} notes on the Harmonic stem; {{ found.missing.length }} score notes it does not play{{ missingText(found) }}.
+            @if (rendering()) { <span class="hint">Preparing the restored sound…</span> }</p>
+          <div class="spectrum-measures" role="group" aria-label="Measures">
+            @for (measure of found.measures; track measure.index) {
+              <button type="button" class="secondary" [class.off-beat]="!measure.onBeat" (click)="seekTo(measure.start)"
+                [attr.aria-label]="'Measure ' + measure.number + ' at ' + clock(measure.start)">{{ measure.number }}</button>
+            }
+          </div>
+        }
+      </div>
       <canvas #overview class="spectrum-overview" [style.height.px]="overviewHeight" (pointerdown)="seekOverview($event)"
         role="slider" aria-label="Song position" [attr.aria-valuenow]="position()" aria-valuemin="0" [attr.aria-valuemax]="duration()"></canvas>
       <h2 class="spectrum-label">Waveform</h2>
@@ -107,12 +160,25 @@ export class SpectrumPage implements OnInit, OnDestroy {
   readonly duration = signal(0);
   readonly pixelsPerSecond = signal(160);
   readonly grid = signal<HarmonyGrid | null>(null);
-  readonly listen = signal<'all' | 'meaningful' | 'rest'>('all');
+  readonly listen = signal<Listen>('all');
   readonly keptShare = signal(0);
   readonly masking = signal(false);
   readonly maskedReady = signal(false);
   readonly aboveFloor = signal(12);
   readonly withinLoudest = signal(30);
+  readonly score = signal<Score | null>(null);
+  readonly scoreName = signal('');
+  readonly scoreStatus = signal('');
+  readonly scoreError = signal('');
+  readonly aligning = signal(false);
+  readonly alignment = signal<Alignment | null>(null);
+  readonly rendering = signal(false);
+  readonly showNotes = signal(true);
+  readonly intro = signal(true);
+  private restored?: AudioBuffer;
+  private both?: AudioBuffer;
+  private compared = new Map<AlignStem, Promise<Spectrogram>>();
+  private spectrumReady?: Promise<Spectrogram>;
   private readonly overview = viewChild.required<ElementRef<HTMLCanvasElement>>('overview');
   private readonly wave = viewChild.required<ElementRef<HTMLCanvasElement>>('wave');
   private readonly spectrum = viewChild.required<ElementRef<HTMLCanvasElement>>('spectrum');
@@ -175,9 +241,10 @@ export class SpectrumPage implements OnInit, OnDestroy {
       this.ready.set(true);
       this.status.set('Drawing the spectrogram… 0%');
       this.draw();
-      this.spectrogram = await spectrogramOf(mono, rate, share => {
+      this.spectrumReady = spectrogramOf(mono, rate, share => {
         if (!this.destroyed) this.status.set(`Drawing the spectrogram… ${(share * 100).toFixed(0)}%`);
       });
+      this.spectrogram = await this.spectrumReady;
       if (this.destroyed) return;
       this.kept = meaningful(this.spectrogram, this.aboveFloor(), this.withinLoudest());
       this.status.set('');
@@ -214,7 +281,8 @@ export class SpectrumPage implements OnInit, OnDestroy {
     void this.context.resume();
     if (this.position() >= this.buffer.duration - 0.01) this.position.set(0);
     const source = this.context.createBufferSource();
-    source.buffer = (this.listen() === 'meaningful' ? this.masked : this.listen() === 'rest' ? this.rest : undefined) ?? this.buffer;
+    const chosen = { all: undefined, meaningful: this.masked, rest: this.rest, restored: this.restored, both: this.both }[this.listen()];
+    source.buffer = chosen ?? this.buffer;
     source.connect(this.context.destination);
     this.startedAt = this.context.currentTime + 0.02;
     this.startOffset = this.position();
@@ -321,17 +389,195 @@ export class SpectrumPage implements OnInit, OnDestroy {
     if (this.playing() && this.listen() !== 'all') this.seekTo(this.now());
   }
 
-  readonly listenChoices: { kind: 'all' | 'meaningful' | 'rest'; label: string }[] = [
+  private readonly plainChoices: { kind: Listen; label: string }[] = [
     { kind: 'all', label: 'Full spectrum' }, { kind: 'meaningful', label: 'Filtered' }, { kind: 'rest', label: 'Left out' },
   ];
+  private readonly scoreChoices: { kind: Listen; label: string }[] = [
+    { kind: 'restored', label: 'Restored notes' }, { kind: 'both', label: 'Stem + restored' },
+  ];
+  get listenChoices(): { kind: Listen; label: string }[] {
+    return this.alignment() ? [...this.plainChoices, ...this.scoreChoices] : this.plainChoices;
+  }
 
   // Switches what is heard at the same moment, and plays if stopped. Until the filtered sound is ready the full one
   // plays; it switches by itself when ready.
-  hear(kind: 'all' | 'meaningful' | 'rest'): void {
+  hear(kind: Listen): void {
     const changed = kind !== this.listen();
     this.listen.set(kind);
     if (!this.playing()) this.play();
     else if (changed) this.seekTo(this.now());
+  }
+
+  // A score file chosen: read (a PDF by the local score reader), aligned with the song, the Harmonic stem restored.
+  async chooseScore(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement, file = input.files?.[0];
+    input.value = '';
+    if (!file || this.aligning()) return;
+    this.aligning.set(true);
+    this.scoreError.set('');
+    this.scoreName.set(file.name);
+    try {
+      this.scoreStatus.set(/\.(pdf|png|jpe?g)$/i.test(file.name) ? 'Reading the score (this can take a minute)…' : 'Reading the score…');
+      const score = parseMusicXml(await this.scoreText(file));
+      if (!score.notes.length) throw new Error('No notes were found in the score.');
+      this.score.set(score);
+      await this.align(score);
+    } catch (error) {
+      this.scoreError.set(`Could not use the score: ${errorMessage(error)}`);
+    } finally {
+      this.scoreStatus.set('');
+      this.aligning.set(false);
+    }
+  }
+
+  private async scoreText(file: File): Promise<string> {
+    if (/\.mxl$/i.test(file.name)) return unzipMusicXml(new Uint8Array(await file.arrayBuffer()));
+    if (!/\.(pdf|png|jpe?g)$/i.test(file.name)) return file.text();
+    let response: Response;
+    try {
+      response = await fetch('/omr', { method: 'POST', body: file, headers: { 'content-type': 'application/octet-stream' } });
+    } catch {
+      throw new Error('the score reader could not be reached.');
+    }
+    const type = response.headers.get('content-type') ?? '';
+    if (!response.ok || !type.includes('musicxml')) {
+      const message = type.includes('json') ? (await response.json() as { message?: string }).message : undefined;
+      throw new Error(message ?? 'PDFs are read by the score reader, which runs only locally for now (npm run omr in web/). Upload MusicXML (.musicxml or .mxl) instead.');
+    }
+    const parts = Number(response.headers.get('x-omr-scores') ?? 1);
+    if (parts > 1) this.scoreError.set(`The score was read as ${parts} separate pieces; the first is used.`);
+    return unzipMusicXml(new Uint8Array(await response.arrayBuffer()));
+  }
+
+  // How much of the song to search: two and a half times the score at the song's tempo, at least two minutes.
+  private searchSeconds(score: Score): number {
+    const last = score.measures[score.measures.length - 1];
+    const beats = this.grid()?.beats;
+    const beat = beats && beats.length > 2 ? (beats[beats.length - 1] - beats[0]) / (beats.length - 1) : score.tempo ? 60 / score.tempo : 0.6;
+    return Math.min(this.duration(), Math.max(120, (last.start + last.length) * beat * 2.5 + 20));
+  }
+
+  private comparedSpectrogram(stem: AlignStem, seconds: number, progress: (share: number) => void): Promise<Spectrogram> {
+    let found = this.compared.get(stem);
+    if (!found) {
+      found = (async () => {
+        const url = this.job()?.stems?.[stem]?.playUrl;
+        if (!url) throw new Error(`this song has no ${stem} stem.`);
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`the ${stem} stem request failed (HTTP ${response.status}).`);
+        const decoded = await this.context!.decodeAudioData(await response.arrayBuffer());
+        // The whole stem, so a later, longer search needs no second pass.
+        const channels = Array.from({ length: decoded.numberOfChannels }, (_, index) => decoded.getChannelData(index));
+        const { signal } = monoSignal(channels.map(channel => channel.subarray(0, Math.ceil(Math.max(seconds, 180) * decoded.sampleRate))), decoded.sampleRate);
+        return spectrogramOf(signal, this.rate, progress);
+      })();
+      found.catch(() => this.compared.delete(stem));
+      this.compared.set(stem, found);
+    }
+    return found;
+  }
+
+  private async align(score: Score): Promise<void> {
+    const seconds = this.searchSeconds(score);
+    const other = this.spectrogram ?? await this.spectrumReady;
+    if (!other) throw new Error('the Harmonic stem is not ready.');
+    const spectrograms: Partial<Record<AlignStem, Spectrogram>> = { other };
+    for (const [index, stem] of COMPARED.entries()) {
+      try {
+        spectrograms[stem] = await this.comparedSpectrogram(stem, seconds, share =>
+          this.scoreStatus.set(`Looking at the ${stem} stem (${index + 1} of ${COMPARED.length})… ${(share * 100).toFixed(0)}%`));
+      } catch (error) {
+        // Alignment works with fewer stems.
+        console.warn(`Score alignment without the ${stem} stem: ${errorMessage(error)}`);
+      }
+      if (this.destroyed) return;
+    }
+    // Usable stems only: covering the stretch searched.
+    for (const stem of COMPARED) {
+      const found = spectrograms[stem];
+      if (found && found.frames * HOP / found.rate < Math.min(seconds, 180) - 1) delete spectrograms[stem];
+    }
+    this.scoreStatus.set('Finding the score in the song…');
+    await new Promise(resolve => setTimeout(resolve, 30));
+    const found = alignScore({ score, spectrograms, seconds: Math.min(seconds, ...Object.values(spectrograms).map(one => one!.frames * HOP / one!.rate)), beats: this.grid()?.beats, intro: this.intro() });
+    this.alignment.set(found);
+    this.restored = this.both = undefined;
+    this.seekTo(Math.max(0, found.measures[0].start - 1));
+    void this.renderRestored(found);
+  }
+
+  // The restored notes as a sound (a piano), alone and over the stem.
+  private async renderRestored(found: Alignment): Promise<void> {
+    if (!this.mono || !this.context) return;
+    this.rendering.set(true);
+    try {
+      const events = found.notes.map(note => ({ time: note.start, duration: note.end - note.start, pitch: note.pitch, velocity: note.velocity }));
+      const restored = await renderNotes(events, this.mono.length / this.rate, this.rate);
+      if (this.alignment() !== found || this.destroyed) return;
+      const alone = restored.getChannelData(0), mixed = new Float32Array(alone.length);
+      for (let index = 0; index < mixed.length; index++) mixed[index] = 0.7 * (this.mono[index] ?? 0) + alone[index];
+      this.restored = restored;
+      this.both = this.context.createBuffer(1, mixed.length, this.rate);
+      this.both.copyToChannel(mixed, 0);
+      if (this.playing() && (this.listen() === 'restored' || this.listen() === 'both')) this.seekTo(this.now());
+    } catch (error) {
+      this.scoreError.set(`Could not prepare the restored sound: ${errorMessage(error)}`);
+    } finally {
+      this.rendering.set(false);
+    }
+  }
+
+  download(kind: 'midi' | 'json'): void {
+    const found = this.alignment(), score = this.score();
+    if (!found || !score) return;
+    const { notes, grid } = restoredScore(found, score);
+    const blob = kind === 'midi' ? new Blob([harmonyMidi({ chords: [], notes }, grid)], { type: 'audio/midi' })
+      : new Blob([JSON.stringify({
+        score: score.title || this.scoreName(), shift: found.shift, secondsPerQuarter: found.secondsPerQuarter, likeness: found.likeness,
+        measures: found.measures, parts: found.parts, notes: found.notes, missing: found.missing,
+      }, null, 2)], { type: 'application/json' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `${(this.job()?.title || 'song').replace(/[\\/:*?"<>|]+/g, ' ').trim()} - restored from score.${kind === 'midi' ? 'mid' : 'json'}`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  }
+
+  // Aligned again with the score already given.
+  setIntro(value: boolean): void {
+    this.intro.set(value);
+    const score = this.score();
+    if (!score || this.aligning()) return;
+    this.aligning.set(true);
+    this.scoreError.set('');
+    void this.align(score).catch(error => this.scoreError.set(`Could not use the score: ${errorMessage(error)}`))
+      .finally(() => { this.scoreStatus.set(''); this.aligning.set(false); });
+  }
+
+  setShowNotes(value: boolean): void {
+    this.showNotes.set(value);
+    this.draw();
+  }
+
+  percent(value: number): number {
+    return Math.round(value * 100);
+  }
+
+  tempoOf(found: Alignment): number {
+    return Math.round(60 / found.secondsPerQuarter);
+  }
+
+  shiftText(found: Alignment): string {
+    if (!found.shift) return '';
+    const size = Math.abs(found.shift);
+    return `, the song ${size} semitone${size > 1 ? 's' : ''} ${found.shift > 0 ? 'above' : 'below'} the score`;
+  }
+
+  missingText(found: Alignment): string {
+    const counts = new Map<string, number>();
+    for (const note of found.missing) for (const stem of note.stems) counts.set(stem, (counts.get(stem) ?? 0) + 1);
+    const heard = [...counts].map(([stem, count]) => `${count} heard in ${stem}`);
+    return heard.length ? ` (${heard.join(', ')})` : '';
   }
 
   setZoom(value: number): void {
@@ -474,6 +720,7 @@ export class SpectrumPage implements OnInit, OnDestroy {
       context.drawImage(this.scratch!, 0, 0, width, SPECTRUM_HEIGHT);
     }
     this.drawBeats(context, width, SPECTRUM_HEIGHT, time);
+    this.drawScore(context, width, time);
     // Every C, named.
     context.font = '11px system-ui, sans-serif';
     for (let pitch = 24; pitch <= 108; pitch += 12) {
@@ -484,5 +731,42 @@ export class SpectrumPage implements OnInit, OnDestroy {
       context.fillText(`C${pitch / 12 - 1}`, 4, y - 2);
     }
     this.drawPlayhead(context, width, SPECTRUM_HEIGHT);
+  }
+  // The aligned score: its measure lines, numbered at the top, and (when shown) the restored notes outlined at their
+  // pitch, the score notes the Harmonic stem does not play dotted.
+  private drawScore(context: CanvasRenderingContext2D, width: number, time: number): void {
+    const found = this.alignment();
+    if (!found) return;
+    const x = (seconds: number) => (seconds - time) * this.pixelsPerSecond() + width / 2;
+    const y = (pitch: number) => SPECTRUM_HEIGHT - ((pitch - LOWEST_PITCH) * ROWS_PER_SEMITONE + 0.5) / ROWS * SPECTRUM_HEIGHT;
+    const tall = Math.max(3, ROWS_PER_SEMITONE / ROWS * SPECTRUM_HEIGHT);
+    if (this.showNotes()) {
+      context.lineWidth = 1;
+      context.setLineDash([2, 2]);
+      context.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+      for (const note of found.missing) {
+        if (x(note.end) < 0 || x(note.start) > width) continue;
+        context.strokeRect(Math.round(x(note.start)) + 0.5, Math.round(y(note.pitch) - tall / 2) + 0.5, Math.max(2, x(note.end) - x(note.start)), tall);
+      }
+      context.setLineDash([]);
+      context.strokeStyle = '#3df2ff';
+      for (const note of found.notes) {
+        if (x(note.end) < 0 || x(note.start) > width) continue;
+        context.strokeRect(Math.round(x(note.start)) + 0.5, Math.round(y(note.pitch) - tall / 2) + 0.5, Math.max(2, x(note.end) - x(note.start)), tall);
+      }
+    }
+    context.font = '12px system-ui, sans-serif';
+    for (const measure of found.measures) {
+      const at = Math.round(x(measure.start));
+      if (at < -40 || at > width) continue;
+      context.fillStyle = 'rgba(255, 214, 10, 0.9)';
+      context.fillRect(at, 0, 2, SPECTRUM_HEIGHT);
+      context.fillText(measure.number, at + 4, 14);
+    }
+    const last = found.measures[found.measures.length - 1];
+    if (x(last.end) >= 0 && x(last.end) <= width) {
+      context.fillStyle = 'rgba(255, 214, 10, 0.9)';
+      context.fillRect(Math.round(x(last.end)), 0, 2, SPECTRUM_HEIGHT);
+    }
   }
 }

@@ -149,3 +149,34 @@ export class AccompanimentVoice {
     source.onended = () => { this.active.delete(source); envelope.disconnect(); };
   }
 }
+
+// Notes rendered offline into one buffer `seconds` long at `rate`, in a sound of the library (a piano by default),
+// as a voice would play them: for listening to notes against the song without scheduling them live.
+export async function renderNotes(events: NoteEvent[], seconds: number, rate: number, program = 0): Promise<AudioBuffer> {
+  const { samples } = await loadLibrary();
+  const context = new OfflineAudioContext(1, Math.max(1, Math.ceil(seconds * rate)), rate);
+  const buffer = await loadSound(context, program);
+  const sorted = [...events].sort((a, b) => a.time - b.time);
+  let from = 0, to = 0;
+  sorted.forEach(event => {
+    while (sorted[from].time < event.time - TOGETHER) from++;
+    while (to < sorted.length && sorted[to].time <= event.time + TOGETHER) to++;
+    const share = 1 / Math.sqrt(Math.max(1, (to - from) / 2));
+    const { index, rate: speed } = sampleFor(samples.pitches, event.pitch);
+    const source = context.createBufferSource();
+    source.buffer = buffer;
+    source.playbackRate.value = speed;
+    const envelope = context.createGain();
+    const level = (event.velocity / 127) ** 1.5 * 0.5 * share, at = Math.max(0, event.time);
+    const held = Math.max(ATTACK, Math.min(event.duration, samples.length / speed - RELEASE));
+    envelope.gain.setValueAtTime(0, at);
+    envelope.gain.linearRampToValueAtTime(level, at + ATTACK);
+    envelope.gain.setValueAtTime(level, at + held);
+    envelope.gain.linearRampToValueAtTime(0, at + held + RELEASE);
+    source.connect(envelope);
+    envelope.connect(context.destination);
+    source.start(at, index * samples.slot, samples.length);
+    source.stop(at + held + RELEASE + 0.01);
+  });
+  return context.startRendering();
+}

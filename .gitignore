@@ -9,3 +9,5 @@ web/public/config.json
 # Local secrets, such as the master admin (backend/create-admin.mjs).
 .env
 .env.*
+# Songs and scores for testing (copyrighted; kept local).
+music-files/
