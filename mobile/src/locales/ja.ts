@@ -172,7 +172,6 @@ const ja: Strings = {
 
   'mixer.loading': '曲を読み込み中…',
   'mixer.downloading': 'ステムをダウンロード中 {percent}%',
-  'scroll.rail': 'ステムをスクロール',
   'mixer.retryLoad': '音声の読み込みを再試行',
   'mixer.cleanLoadFailed': 'ノイズ除去版を読み込めませんでした: {error}',
   'mixer.resetTitle': '曲の設定をリセットしますか？',
@@ -249,6 +248,7 @@ const ja: Strings = {
   'tasks.scoreKind': 'PDF、PNG、JPEG、またはMusicXML(.musicxml、.xml)ファイルを選んでください。',
   'tasks.useScoreFailed': '楽譜を使えませんでした: {error}',
   'tasks.ensembleNote': 'キー {key} · ギター、キーボード、その他の楽器をまとめて聴き取った譜面です。',
+  'tasks.transcribedNote': '録音から自動で採譜したため正確ではありません。実際の楽譜をアップロードすると、その楽譜の内容が反映されます。',
   'tasks.findHint': 'ハーモニックとベースのコードと音符、およびドラム譜を検出',
   'tasks.regenerating': '再生成中...',
   'tasks.pdf': 'PDFを保存',

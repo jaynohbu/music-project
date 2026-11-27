@@ -172,7 +172,6 @@ const de: Strings = {
 
   'mixer.loading': 'Song wird geladen…',
   'mixer.downloading': 'Spuren werden heruntergeladen {percent} %',
-  'scroll.rail': 'Spuren scrollen',
   'mixer.retryLoad': 'Audio erneut laden',
   'mixer.cleanLoadFailed': 'Bereinigte Version konnte nicht geladen werden: {error}',
   'mixer.resetTitle': 'Song-Einstellungen zurücksetzen?',
@@ -249,6 +248,7 @@ const de: Strings = {
   'tasks.scoreKind': 'Wählen Sie eine PDF-, PNG-, JPEG- oder MusicXML-Datei (.musicxml, .xml).',
   'tasks.useScoreFailed': 'Die Noten konnten nicht verwendet werden: {error}',
   'tasks.ensembleNote': 'Tonart {key} · Gitarren, Tasten und übrige Instrumente zusammen gehört.',
+  'tasks.transcribedNote': 'Automatisch aus der Aufnahme herausgehört und daher nicht genau. Lade die echten Noten hoch, dann wird deren Inhalt übernommen.',
   'tasks.findHint': 'Akkorde und Noten für Harmonic- und Bass-Stem sowie Schlagzeug-Noten finden',
   'tasks.regenerating': 'Wird neu erstellt…',
   'tasks.pdf': 'PDF speichern',

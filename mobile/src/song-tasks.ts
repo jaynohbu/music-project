@@ -237,6 +237,10 @@ export function useSongTasks(initial: Song | null) {
       : scoring && (scores as Record<string, unknown>)[name] ? Math.round(LAYING_SECONDS / 60) : 0,
     // A stem's own score, uploaded from its card.
     hasScore: (name: string) => !!(scores as Record<string, unknown>)[name],
+    // Whether the stem's part shown is laid from its uploaded score, not transcribed from its sound (an older result
+    // names only the Harmonic score, at its top).
+    fromScore: (name: string) => harmony?.fromScore?.parts ? !!(harmony.fromScore.parts as Record<string, unknown>)[name]
+      : name === 'other' && !!harmony?.fromScore,
     uploadScore(name: string) { if (name === 'other' || name === 'bass' || name === 'drums') void uploadScore(name); },
     cleanFailure: (name: string) => cleaning(name) ? undefined
       : song?.restorations?.find(item => item.stem === name && item.status === 'failed')?.error,

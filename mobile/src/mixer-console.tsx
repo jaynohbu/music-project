@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { PanResponder, Pressable, StyleSheet, Text, TextInput, View, type GestureResponderEvent, type PanResponderGestureState } from 'react-native';
 import Svg, { Path, Rect } from 'react-native-svg';
 import { useT } from './language';
-import { EDGE, railCover } from './stem-scroll';
+import { EDGE, controlHold } from './stem-scroll';
 import { type Theme, useStyles, useTheme } from './theme';
 
 // Visual parity with the website mixer (web/src/styles.css: marker rail, waveform, console faders).
@@ -32,16 +32,16 @@ function createDrag(handlers: DragHandlers) {
       && Math.abs(gesture.dx) > 6 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.5,
     onPanResponderTerminationRequest: () => false,
     onShouldBlockNativeResponder: () => true,
-    // The scroll rails hide while a control is held, so the hand sees the whole mixer.
-    onPanResponderGrant: (event, gesture) => { railCover.press(); latest.current.grant(event, gesture); },
-    onPanResponderMove: (event, gesture) => { railCover.move(); latest.current.move(event, gesture); },
-    onPanResponderRelease: (event, gesture) => { railCover.release(); latest.current.release?.(event, gesture); },
-    onPanResponderTerminate: (event, gesture) => { railCover.release(); latest.current.release?.(event, gesture); },
+    // The page holds still while a control is held.
+    onPanResponderGrant: (event, gesture) => { controlHold.press(); latest.current.grant(event, gesture); },
+    onPanResponderMove: (event, gesture) => { controlHold.move(); latest.current.move(event, gesture); },
+    onPanResponderRelease: (event, gesture) => { controlHold.release(); latest.current.release?.(event, gesture); },
+    onPanResponderTerminate: (event, gesture) => { controlHold.release(); latest.current.release?.(event, gesture); },
   });
   return { handlersRef: latest, responder };
 }
 
-// The S and E markers centre past the scroll rail's touch strip.
+// The S and E markers centre inside the page edge.
 const MARKER_WIDTH = 44, EDITOR_PADDING = EDGE + 8, RAIL = 28, WAVE = 44, HANDLE = 32;
 export function Timeline({ label, duration, start, end, position, peaks, disabled, onSection, onSeek, onReset }: {
   label: string; duration: number; start: number; end: number; position: number; peaks?: number[]; disabled?: boolean;

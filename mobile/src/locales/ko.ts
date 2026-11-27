@@ -172,7 +172,6 @@ const ko: Strings = {
 
   'mixer.loading': '곡 불러오는 중…',
   'mixer.downloading': '스템 다운로드 중 {percent}%',
-  'scroll.rail': '스템 목록 스크롤',
   'mixer.retryLoad': '오디오 불러오기 재시도',
   'mixer.cleanLoadFailed': '노이즈 제거 버전을 불러오지 못했어요: {error}',
   'mixer.resetTitle': '곡 설정을 초기화할까요?',
@@ -249,6 +248,7 @@ const ko: Strings = {
   'tasks.scoreKind': 'PDF, PNG, JPEG 또는 MusicXML(.musicxml, .xml) 파일을 골라 주세요.',
   'tasks.useScoreFailed': '악보를 쓰지 못했어요: {error}',
   'tasks.ensembleNote': '조성 {key} · 기타, 건반 등 나머지 악기를 함께 들은 악보예요.',
+  'tasks.transcribedNote': '녹음을 듣고 자동으로 채보한 것이라 정확하지 않아요. 실제 악보를 올리면 그 악보 내용이 반영돼요.',
   'tasks.findHint': '하모닉과 베이스 스템의 코드와 음표, 드럼 악보 찾기',
   'tasks.regenerating': '다시 생성 중...',
   'tasks.pdf': 'PDF 저장',

@@ -172,7 +172,6 @@ const pt: Strings = {
 
   'mixer.loading': 'Carregando música…',
   'mixer.downloading': 'Baixando faixas {percent}%',
-  'scroll.rail': 'Rolar as faixas',
   'mixer.retryLoad': 'Tentar carregar o áudio novamente',
   'mixer.cleanLoadFailed': 'Não foi possível carregar a versão limpa: {error}',
   'mixer.resetTitle': 'Redefinir ajustes da música?',
@@ -249,6 +248,7 @@ const pt: Strings = {
   'tasks.scoreKind': 'Escolha um arquivo PDF, PNG, JPEG ou MusicXML (.musicxml, .xml).',
   'tasks.useScoreFailed': 'Não foi possível usar a partitura: {error}',
   'tasks.ensembleNote': 'Tom {key} · Guitarras, teclados e demais instrumentos ouvidos juntos.',
+  'tasks.transcribedNote': 'Transcrito automaticamente da gravação, por isso não é exato. Envie a partitura real e o conteúdo dela será usado.',
   'tasks.findHint': 'Encontrar acordes e notas das faixas Harmônica e baixo, e a partitura de bateria',
   'tasks.regenerating': 'Gerando novamente...',
   'tasks.pdf': 'Salvar PDF',

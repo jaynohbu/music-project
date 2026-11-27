@@ -172,7 +172,6 @@ const zh: Strings = {
 
   'mixer.loading': '正在加载歌曲…',
   'mixer.downloading': '正在下载音轨 {percent}%',
-  'scroll.rail': '滚动音轨列表',
   'mixer.retryLoad': '重试加载音频',
   'mixer.cleanLoadFailed': '无法加载净化版本：{error}',
   'mixer.resetTitle': '重置歌曲设置？',
@@ -249,6 +248,7 @@ const zh: Strings = {
   'tasks.scoreKind': '请选择 PDF、PNG、JPEG 或 MusicXML(.musicxml、.xml)文件。',
   'tasks.useScoreFailed': '无法使用乐谱: {error}',
   'tasks.ensembleNote': '调性 {key} · 吉他、键盘和其他乐器合在一起听写的乐谱。',
+  'tasks.transcribedNote': '这是根据录音自动听写的，并不准确。上传实际乐谱后，将以该乐谱为准。',
   'tasks.findHint': '查找和声与贝斯分轨的和弦与音符,以及鼓谱',
   'tasks.regenerating': '正在重新生成...',
   'tasks.pdf': '保存 PDF',

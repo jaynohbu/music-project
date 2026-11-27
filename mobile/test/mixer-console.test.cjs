@@ -35,7 +35,7 @@ function harness() {
   const t = (key, values = {}) => english.exports.default[key].replace(/\{(\w+)\}/g, (match, name) => name in values ? String(values[name]) : match);
   const mocks = { react, 'react-native': native, 'react/jsx-runtime': { jsx: element, jsxs: element, Fragment: 'Fragment' }, './theme': theme,
     './language': { useT: () => t },
-    './stem-scroll': { EDGE: 22, railCover: { press: () => cover.push('press'), move: () => cover.push('move'), release: () => cover.push('release') } } };
+    './stem-scroll': { EDGE: 22, controlHold: { press: () => cover.push('press'), move: () => cover.push('move'), release: () => cover.push('release') } } };
   const cover = [];
   const module = { exports: {} };
   new Function('require', 'module', 'exports', code)(name => mocks[name], module, module.exports);

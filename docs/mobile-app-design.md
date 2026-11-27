@@ -93,7 +93,7 @@ AAC adds about 20–50 ms of start delay. Stems shift together, but timing again
 - Background playback: iOS background audio, Android foreground media service, lock-screen controls.
 - `react-native-audio-api` 0.13.6 carries the mixer on the iPhone (Step 1). Android phones are still untested.
 - **Library patch (2026-11-21):** `mobile/patches/react-native-audio-api+0.13.6.patch`, applied by `patch-package` on `postinstall`, adds a `pitchShift` property (semitones) to file sources. The library already had a WSOLA stretcher with a pitch factor for buffer sources; the patch passes it on file sources too and uses the stretcher whenever the pitch is shifted. Regenerate the patch with `npx patch-package react-native-audio-api --exclude '^package\.json$|^android/|/external/|\.DS_Store$'`, or it picks up build output.
-- Mixer layout on the phone: the page does not scroll by finger, so faders never drag the page; rails on both sides scroll it, faint when idle and dark while scrolling. Space under the last stem lets it reach the focus line. Faders are 90 pt, the master bar is slim, each console is named after its stem ("Guitar mixer").
+- Mixer layout on the phone: a finger scrolls the page from anywhere that is not a control, and the page holds still while a control is held (no scroll rails since 2026-11-27). Space under the last stem lets it reach the focus line. Faders are 90 pt, the master bar is slim, each console is named after its stem ("Guitar mixer").
 
 ### Local cache
 
@@ -466,7 +466,7 @@ The staff uses `react-native-svg`. It draws in four-bar chunks and mounts only t
 
 **Beams (2026-11-22).** Eighths and shorter that follow each other within one beat are joined by beams instead of flags (`beamNotes` in `src/score.ts`, the same block in `web/src/harmony-strip.ts`, checked by `web/test/score-sheet.test.mjs`). Each group's stems go one way (the voice's side when two lines share the staff, else where most notes sit); the beam follows the notes at a slant of at most 0.2 and moves out until every stem is at least 20 long; runs of sixteenths get one second beam, a lone sixteenth a stub. Used by the app and website strips, the full score and the PDF.
 
-**Rails while dragging (2026-11-22).** Holding any mixer control (fader, knob, markers, waveform) hides both scroll rails; letting go shows them again. `railCover` in `src/stem-scroll.tsx` also checks every 3 s while hidden and shows them if nothing moved, in case a release is lost.
+**Held controls (2026-11-22, rails removed 2026-11-27).** Holding any mixer control (fader, knob, markers, waveform) stops the page scrolling; letting go frees it. `controlHold` in `src/stem-scroll.tsx` also checks every 3 s while held and lets go if nothing moved, in case a release is lost.
 
 **Score PDF and full score (2026-11-22).** Each written score (other, bass, drums) has "Full score" and "Save PDF" buttons. `src/score-sheet.ts` lays the strip's marks out four bars to a line on A4 pages, with the title, the artist (right, under the title), part and key, tempo, a clef and key signature on every line, bar numbers and page numbers. `sheetPages` returns each page as an SVG string and `scoreSheet` wraps them in printable HTML, so both are pure and tested in `test/score-sheet.test.cjs`.
 
@@ -524,3 +524,9 @@ The ADTOF licence is handled by a plan to train an in-house model before product
 - **iPhone builds:** `eas build --platform ios --profile staging` and install from the build link. `xcrun devicectl` cannot install on the user's iPhone because Xcode 16.2 has no disk image for its iOS. The `simulator` profile builds for the iOS 18 simulator on this Mac. `eas build` sometimes fails right after a cancel; rerunning works.
 - **Scene settings and the server:** the backend validates every field of scene settings, so a new app field (like `live` or `transpose`) needs the API deployed before an app build that sends it.
 - **Names:** "youtube" in the stack name, the `youtube-session` key and similar is only a label; YouTube downloading has been removed.
+
+## Score channels and rails (2026-11-27)
+
+- The score channels under a stem (Guitar and Keys under Harmonic, Bass (score), Drums (score)) appear only once that stem's own uploaded score is laid on the song (`tasks.fromScore`). A transcribed part plays only through its stem.
+- A Harmonic card whose part is transcribed says so: not exact, and an uploaded score replaces it (`tasks.transcribedNote`).
+- The scroll rails are gone; pages inset by EDGE = 16.

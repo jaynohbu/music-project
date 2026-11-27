@@ -172,7 +172,6 @@ const id: Strings = {
 
   'mixer.loading': 'Memuat lagu…',
   'mixer.downloading': 'Mengunduh stem {percent}%',
-  'scroll.rail': 'Gulir daftar stem',
   'mixer.retryLoad': 'Coba muat audio lagi',
   'mixer.cleanLoadFailed': 'Versi yang dibersihkan tidak dapat dimuat: {error}',
   'mixer.resetTitle': 'Atur ulang pengaturan lagu?',
@@ -249,6 +248,7 @@ const id: Strings = {
   'tasks.scoreKind': 'Pilih file PDF, PNG, JPEG, atau MusicXML (.musicxml, .xml).',
   'tasks.useScoreFailed': 'Tidak dapat memakai partitur: {error}',
   'tasks.ensembleNote': 'Kunci {key} · Gitar, keyboard, dan instrumen lain didengar bersama.',
+  'tasks.transcribedNote': 'Ditranskripsi otomatis dari rekaman, jadi tidak akurat. Unggah partitur aslinya dan isinya akan dipakai.',
   'tasks.findHint': 'Cari akor dan not untuk stem Harmonic dan bass, serta partitur drum',
   'tasks.regenerating': 'Membuat ulang...',
   'tasks.pdf': 'Simpan PDF',

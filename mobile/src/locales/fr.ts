@@ -172,7 +172,6 @@ const fr: Strings = {
 
   'mixer.loading': 'Chargement du morceau…',
   'mixer.downloading': 'Téléchargement des pistes {percent} %',
-  'scroll.rail': 'Faire défiler les pistes',
   'mixer.retryLoad': 'Réessayer de charger l’audio',
   'mixer.cleanLoadFailed': 'Impossible de charger la version nettoyée : {error}',
   'mixer.resetTitle': 'Réinitialiser les réglages du morceau ?',
@@ -249,6 +248,7 @@ const fr: Strings = {
   'tasks.scoreKind': 'Choisissez un fichier PDF, PNG, JPEG ou MusicXML (.musicxml, .xml).',
   'tasks.useScoreFailed': 'Impossible d\'utiliser la partition : {error}',
   'tasks.ensembleNote': 'Tonalité {key} · Guitares, claviers et autres instruments écoutés ensemble.',
+  'tasks.transcribedNote': 'Transcrit automatiquement d’après l’enregistrement, donc pas exact. Importez la vraie partition et son contenu sera repris.',
   'tasks.findHint': 'Trouver les accords et les notes des pistes Harmonique et basse, et la partition de batterie',
   'tasks.regenerating': 'Nouvelle génération…',
   'tasks.pdf': 'Enregistrer en PDF',

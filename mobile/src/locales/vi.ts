@@ -172,7 +172,6 @@ const vi: Strings = {
 
   'mixer.loading': 'Đang tải bài hát…',
   'mixer.downloading': 'Đang tải stem {percent}%',
-  'scroll.rail': 'Cuộn danh sách stem',
   'mixer.retryLoad': 'Thử tải lại âm thanh',
   'mixer.cleanLoadFailed': 'Không thể tải bản đã làm sạch: {error}',
   'mixer.resetTitle': 'Đặt lại cài đặt bài hát?',
@@ -249,6 +248,7 @@ const vi: Strings = {
   'tasks.scoreKind': 'Hãy chọn tệp PDF, PNG, JPEG hoặc MusicXML (.musicxml, .xml).',
   'tasks.useScoreFailed': 'Không dùng được bản nhạc: {error}',
   'tasks.ensembleNote': 'Giọng {key} · Guitar, phím và các nhạc cụ khác được nghe cùng nhau.',
+  'tasks.transcribedNote': 'Được ký âm tự động từ bản thu nên chưa chính xác. Hãy tải bản nhạc thật lên, nội dung bản nhạc đó sẽ được dùng.',
   'tasks.findHint': 'Tìm hợp âm và nốt cho stem Harmonic và bass, cùng bản nhạc trống',
   'tasks.regenerating': 'Đang tạo lại...',
   'tasks.pdf': 'Lưu PDF',

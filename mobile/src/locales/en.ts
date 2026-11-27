@@ -171,7 +171,6 @@ const en = {
 
   'mixer.loading': 'Loading song…',
   'mixer.downloading': 'Downloading stems {percent}%',
-  'scroll.rail': 'Scroll the stems',
   'mixer.retryLoad': 'Retry loading audio',
   'mixer.cleanLoadFailed': 'Could not load the cleaned version: {error}',
   'mixer.resetTitle': 'Reset song settings?',
@@ -248,6 +247,7 @@ const en = {
   'tasks.scoreKind': 'Choose a PDF, PNG, JPEG or MusicXML (.musicxml, .xml) file.',
   'tasks.useScoreFailed': 'Could not use the score: {error}',
   'tasks.ensembleNote': 'Key {key} · Guitars, keys and the other instruments, heard together.',
+  'tasks.transcribedNote': 'Transcribed by ear from the recording, so it is not exact. Upload the real score and the part follows that score.',
   'tasks.findHint': 'Find the chords and notes for the Harmonic and bass stems, and the drum score',
   'tasks.regenerating': 'Regenerating...',
   'tasks.pdf': 'Save PDF',

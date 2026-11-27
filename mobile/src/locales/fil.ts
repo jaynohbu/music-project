@@ -172,7 +172,6 @@ const fil: Strings = {
 
   'mixer.loading': 'Naglo-load ng kanta…',
   'mixer.downloading': 'Dina-download ang mga stem {percent}%',
-  'scroll.rail': 'I-scroll ang mga stem',
   'mixer.retryLoad': 'Subukang i-load ulit ang audio',
   'mixer.cleanLoadFailed': 'Hindi ma-load ang nilinis na bersyon: {error}',
   'mixer.resetTitle': 'I-reset ang settings ng kanta?',
@@ -249,6 +248,7 @@ const fil: Strings = {
   'tasks.scoreKind': 'Pumili ng PDF, PNG, JPEG o MusicXML (.musicxml, .xml) na file.',
   'tasks.useScoreFailed': 'Hindi magamit ang score: {error}',
   'tasks.ensembleNote': 'Key {key} · Mga gitara, keyboard at iba pang instrumento, magkakasamang pinakinggan.',
+  'tasks.transcribedNote': 'Awtomatikong isinulat mula sa recording, kaya hindi eksakto. I-upload ang tunay na score at iyon ang susundin.',
   'tasks.findHint': 'Hanapin ang chords at nota ng Harmonic at bass stem, at ang drum score',
   'tasks.regenerating': 'Ginagawa ulit...',
   'tasks.pdf': 'I-save ang PDF',

@@ -244,7 +244,8 @@ export function MixerControls({ mixer, song = null, peaks, inScene = false }: { 
             mixer.setChannel(name, { ...defaultChannel(), useCleaned: channel.useCleaned });
             if (replaced) mixer.releaseReplacedStem();
           }} />
-        {(name === 'other' || name === 'bass' || name === 'drums') && <ScoreParts mixer={mixer} tasks={tasks} stem={name}
+        {/* Played from a score only once the stem's own score is laid on the song. */}
+        {(name === 'other' || name === 'bass' || name === 'drums') && tasks.fromScore(name) && <ScoreParts mixer={mixer} tasks={tasks} stem={name}
           console={(family, label, expanded, onToggle) => {
             const part = mixer.scoreChannel(family);
             return <ChannelConsole {...{ mixer, locked, inside, position, allMuted, soloing, run: operation => void run(operation), onReset: inScene ? () => void reset() : undefined, songKey: tasks.parts?.other?.key }}
@@ -518,6 +519,7 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
       onSave={() => void savePdf()} onClose={() => setPreviewing(false)} />}
     {/* The ensemble is written at concert pitch on a treble staff, the same on all three cards. */}
     {!!part?.key && <Text style={styles.taskHint}>{t('tasks.ensembleNote', { key: part.key })}</Text>}
+    {harmonic && part && !tasks.fromScore(name) && <Text style={styles.taskHint}>{t('tasks.transcribedNote')}</Text>}
     {!!failure && <Text accessibilityRole="alert" style={[styles.error, styles.taskError]}>{failure}</Text>}
     {!!note && <Text accessibilityRole="text" style={styles.taskNote}>{note}</Text>}
     {vocals && tasks.lyrics && (tasks.lyrics.length
@@ -541,7 +543,7 @@ function displayValue(key: ControlKey, value: number, center: string) {
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
-  // Edge to edge under the scroll rails; the pages inset their other content by EDGE.
+  // Edge to edge; the pages inset their other content by EDGE.
   page: { gap: 14, marginHorizontal: -EDGE }, card: { backgroundColor: t.surface, padding: 20, gap: 14, borderRadius: 12 },
   stem: { backgroundColor: t.surface, borderTopWidth: 1, borderBottomWidth: 1, borderColor: t.line, overflow: 'hidden', paddingTop: 12 },
   stemHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: EDGE, minHeight: 36 },
