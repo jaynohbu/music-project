@@ -610,3 +610,23 @@ export function restoredScore(alignment: Alignment, score: Score): { notes: Harm
   }));
   return { notes, grid: { beats, firstBar: pickup } };
 }
+
+// Where the restored notes sound in a spectrogram of the other stem, for spectrogram.ts maskedSignal to keep them
+// alone: for each note, from its start to a little past its end, the rows of its pitch and of its overtones (up to
+// PARTIALS of them), each with the rows a third of a semitone either side.
+export const PARTIALS = 10;
+const MASK_TAIL = 0.05;
+export function scoreMask(notes: RestoredNote[], frames: number, rate: number): Uint8Array {
+  const kept = new Uint8Array(frames * ROWS), perSecond = rate / HOP;
+  for (const note of notes) {
+    const from = Math.max(0, Math.floor(note.start * perSecond)), to = Math.min(frames - 1, Math.ceil((note.end + MASK_TAIL) * perSecond));
+    for (let partial = 1; partial <= PARTIALS; partial++) {
+      const row = Math.round(rowOf(note.pitch + 12 * Math.log2(partial)));
+      if (row > ROWS) break;
+      for (let near = Math.max(0, row - 1); near <= Math.min(ROWS - 1, row + 1); near++) {
+        for (let frame = from; frame <= to; frame++) kept[frame * ROWS + near] = 1;
+      }
+    }
+  }
+  return kept;
+}

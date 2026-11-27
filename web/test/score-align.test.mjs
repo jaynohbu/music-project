@@ -195,3 +195,35 @@ test('an excerpt of a score: measures from one to another, starting at zero, not
   assert.equal(part.notes.find(n => n.pitch === 40).length, 3);
   assert.deepEqual(xml.scoreExcerpt(score, 7, 99).measures.map(m => m.number), ['7', '8']);
 });
+
+test('the restored notes separated from the stem: a scored note and its overtones kept, an unscored one left out', async () => {
+  const rate = 22050, length = rate * 2;
+  const tone = (pitch, from, to) => {
+    const out = new Float32Array(length), hz = 440 * 2 ** ((pitch - 69) / 12);
+    for (let i = Math.round(from * rate); i < Math.round(to * rate); i++) {
+      const t = i / rate;
+      out[i] = 0.2 * (Math.sin(2 * Math.PI * hz * t) + 0.5 * Math.sin(4 * Math.PI * hz * t) + 0.3 * Math.sin(6 * Math.PI * hz * t));
+    }
+    return out;
+  };
+  // No overtone of one is an overtone of the other (A3 and D4); one they shared would be kept with the scored note.
+  const scored = tone(57, 0.3, 1.2), other = tone(62, 0.6, 1.6);
+  const stem = scored.map((value, i) => value + other[i]);
+  const frames = Math.ceil(length / spectrogram.HOP);
+  const note = { pitch: 57, start: 0.3, end: 1.2, velocity: 90, measure: 0, written: { pitch: 57, start: 0, length: 2 }, heard: {}, octave: 0 };
+  const kept = align.scoreMask([note], frames, rate);
+  const separated = await spectrogram.maskedSignal(stem, rate, kept, frames, undefined, 1e9);
+  const rms = (signal, from, to) => {
+    let sum = 0;
+    for (let i = Math.round(from * rate); i < Math.round(to * rate); i++) sum += signal[i] ** 2;
+    return Math.sqrt(sum / ((to - from) * rate));
+  };
+  // Where only the scored note sounds, it is all there; where only the other one does, nothing is.
+  assert.ok(Math.abs(rms(separated, 0.35, 0.55) / rms(scored, 0.35, 0.55) - 1) < 0.1);
+  assert.ok(rms(separated, 1.3, 1.55) < 0.05 * rms(other, 1.3, 1.55));
+  // Where both sound, the scored one is kept and the other mostly left out (about 12 dB down: what the window
+  // spreads of it into the scored note's bins stays).
+  let error = 0;
+  for (let i = Math.round(0.7 * rate); i < Math.round(1.1 * rate); i++) error += (separated[i] - scored[i]) ** 2;
+  assert.ok(Math.sqrt(error / (0.4 * rate)) < 0.35 * rms(other, 0.7, 1.1));
+});

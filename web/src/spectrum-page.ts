@@ -12,7 +12,7 @@ import { ChangeDetectionStrategy, Component, ElementRef, OnDestroy, OnInit, inje
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { StemsService, errorMessage, type HarmonyGrid, type Job } from './services';
 import { type Score, parseMusicXml, scoreExcerpt, unzipMusicXml } from './musicxml';
-import { type AlignStem, type Alignment, alignScore, restoredScore } from './score-align';
+import { type AlignStem, type Alignment, alignScore, restoredScore, scoreMask } from './score-align';
 import { harmonyMidi } from './score-export';
 import { renderNotes } from './accompaniment-player';
 import {
@@ -30,7 +30,8 @@ const COLORS = heatColors();
 const COMPARED: AlignStem[] = ['vocals', 'bass', 'drums'];
 // A long score is aligned up to MOST_MEASURES measures at a time (the alignment's table grows with both lengths).
 const MOST_MEASURES = 40, DEFAULT_MEASURES = 16;
-type Listen = 'all' | 'meaningful' | 'rest' | 'restored' | 'both';
+// separated: the Harmonic stem split by the score, its two layers played together, each muted on its own.
+type Listen = 'all' | 'meaningful' | 'rest' | 'restored' | 'both' | 'separated';
 
 // The loudest sample (absolute) in each block of a signal.
 function blockPeaks(signal: Float32Array, block: number) {
@@ -126,6 +127,19 @@ function blockPeaks(signal: Float32Array, block: number) {
           </p>
           <p>Restored {{ found.notes.length }} notes on the Harmonic stem; {{ found.missing.length }} score notes it does not play{{ missingText(found) }}.
             @if (rendering()) { <span class="hint">Preparing the restored sound…</span> }</p>
+          <div class="spectrum-heading spectrum-separation" role="group" aria-label="The Harmonic stem separated by the score">
+            <strong>Separated by the score:</strong>
+            <button type="button" [class.secondary]="listen() !== 'separated'" [attr.aria-pressed]="listen() === 'separated'"
+              (click)="hear('separated')" [disabled]="!ready()">Play separated</button>
+            <button type="button" [class.secondary]="!layerOn().score" [attr.aria-pressed]="layerOn().score" (click)="toggleLayer('score')">
+              Score notes: {{ layerOn().score ? 'playing' : 'muted' }}</button>
+            <button type="button" [class.secondary]="!layerOn().rest" [attr.aria-pressed]="layerOn().rest" (click)="toggleLayer('rest')">
+              Everything else: {{ layerOn().rest ? 'playing' : 'muted' }}</button>
+            @if (separating()) { <span class="hint" role="status">Separating… the whole stem plays until it is ready.</span> }
+            @else if (separatedShare() !== null) { <span class="hint">The score notes hold {{ separatedShare() }}% of the stem's energy in the passage.</span> }
+          </div>
+          <p class="hint">The stem's own sound where the restored notes and their overtones are (the cells drawn in
+            light blue, and the overtones above them), and everything else; both play together, each can be muted while playing.</p>
           <div class="spectrum-measures" role="group" aria-label="Measures">
             @for (measure of found.measures; track measure.index) {
               <button type="button" class="secondary" [class.off-beat]="!measure.onBeat" (click)="seekTo(measure.start)"
@@ -193,6 +207,13 @@ export class SpectrumPage implements OnInit, OnDestroy {
   readonly rendering = signal(false);
   readonly showNotes = signal(true);
   readonly intro = signal(true);
+  readonly separating = signal(false);
+  readonly separatedShare = signal<number | null>(null);
+  readonly layerOn = signal({ score: true, rest: true });
+  private scorePart?: AudioBuffer;
+  private scoreRest?: AudioBuffer;
+  private extraSource?: AudioBufferSourceNode;
+  private layerGains?: { score: GainNode; rest: GainNode };
   readonly pages = signal('');
   readonly wholeScore = signal<Score | null>(null);
   readonly fromMeasure = signal(1);
@@ -303,11 +324,26 @@ export class SpectrumPage implements OnInit, OnDestroy {
     void this.context.resume();
     if (this.position() >= this.buffer.duration - 0.01) this.position.set(0);
     const source = this.context.createBufferSource();
-    const chosen = { all: undefined, meaningful: this.masked, rest: this.rest, restored: this.restored, both: this.both }[this.listen()];
-    source.buffer = chosen ?? this.buffer;
-    source.connect(this.context.destination);
     this.startedAt = this.context.currentTime + 0.02;
     this.startOffset = this.position();
+    if (this.listen() === 'separated' && this.scorePart && this.scoreRest) {
+      // Both layers, started together, each through its own gain so either can be muted while they play.
+      const extra = this.context.createBufferSource();
+      const score = this.context.createGain(), rest = this.context.createGain();
+      score.gain.value = this.layerOn().score ? 1 : 0;
+      rest.gain.value = this.layerOn().rest ? 1 : 0;
+      source.buffer = this.scorePart;
+      extra.buffer = this.scoreRest;
+      source.connect(score).connect(this.context.destination);
+      extra.connect(rest).connect(this.context.destination);
+      extra.start(this.startedAt, this.startOffset);
+      this.extraSource = extra;
+      this.layerGains = { score, rest };
+    } else {
+      const chosen = { all: undefined, meaningful: this.masked, rest: this.rest, restored: this.restored, both: this.both, separated: undefined }[this.listen()];
+      source.buffer = chosen ?? this.buffer;
+      source.connect(this.context.destination);
+    }
     source.start(this.startedAt, this.startOffset);
     source.onended = () => {
       if (this.source !== source) return;
@@ -329,9 +365,19 @@ export class SpectrumPage implements OnInit, OnDestroy {
   }
 
   private stopSource(): void {
-    const source = this.source;
-    this.source = undefined;
+    const source = this.source, extra = this.extraSource;
+    this.source = this.extraSource = this.layerGains = undefined;
     try { source?.stop(); } catch { /* Already stopped. */ }
+    try { extra?.stop(); } catch { /* Already stopped. */ }
+  }
+
+  // Mutes or plays one layer of the separated stem, at once while playing.
+  toggleLayer(layer: 'score' | 'rest'): void {
+    const on = { ...this.layerOn(), [layer]: !this.layerOn()[layer] };
+    this.layerOn.set(on);
+    const gain = this.layerGains?.[layer];
+    if (gain && this.context) gain.gain.setTargetAtTime(on[layer] ? 1 : 0, this.context.currentTime, 0.01);
+    if (this.listen() !== 'separated') this.hear('separated');
   }
 
   private now(): number {
@@ -415,7 +461,7 @@ export class SpectrumPage implements OnInit, OnDestroy {
     { kind: 'all', label: 'Full spectrum' }, { kind: 'meaningful', label: 'Filtered' }, { kind: 'rest', label: 'Left out' },
   ];
   private readonly scoreChoices: { kind: Listen; label: string }[] = [
-    { kind: 'restored', label: 'Restored notes' }, { kind: 'both', label: 'Stem + restored' },
+    { kind: 'restored', label: 'Restored notes' }, { kind: 'both', label: 'Stem + restored' }, { kind: 'separated', label: 'Separated' },
   ];
   get listenChoices(): { kind: Listen; label: string }[] {
     return this.alignment() ? [...this.plainChoices, ...this.scoreChoices] : this.plainChoices;
@@ -525,9 +571,40 @@ export class SpectrumPage implements OnInit, OnDestroy {
     await new Promise(resolve => setTimeout(resolve, 30));
     const found = alignScore({ score, spectrograms, seconds: Math.min(seconds, ...Object.values(spectrograms).map(one => one!.frames * HOP / one!.rate)), beats: this.grid()?.beats, intro: this.intro() });
     this.alignment.set(found);
-    this.restored = this.both = undefined;
+    this.restored = this.both = this.scorePart = this.scoreRest = undefined;
+    this.separatedShare.set(null);
+    void this.separate(found);
     this.seekTo(Math.max(0, found.measures[0].start - 1));
     void this.renderRestored(found);
+  }
+
+  // The stem split by the score: its own sound where the restored notes and their overtones are, and the rest.
+  private async separate(found: Alignment): Promise<void> {
+    if (!this.mono || !this.context || !this.spectrogram) return;
+    this.separating.set(true);
+    try {
+      const kept = scoreMask(found.notes, this.spectrogram.frames, this.rate);
+      const part = await maskedSignal(this.mono, this.rate, kept, this.spectrogram.frames);
+      if (this.alignment() !== found || this.destroyed) return;
+      const mono = this.mono, rest = new Float32Array(part.length);
+      // The share is taken over the aligned passage.
+      const from = Math.floor(found.measures[0].start * this.rate), to = Math.ceil(found.measures[found.measures.length - 1].end * this.rate);
+      let inPart = 0, total = 0;
+      for (let index = 0; index < part.length; index++) {
+        rest[index] = mono[index] - part[index];
+        if (index >= from && index < to) { inPart += part[index] ** 2; total += mono[index] ** 2; }
+      }
+      this.scorePart = this.context.createBuffer(1, part.length, this.rate);
+      this.scorePart.copyToChannel(part, 0);
+      this.scoreRest = this.context.createBuffer(1, rest.length, this.rate);
+      this.scoreRest.copyToChannel(rest, 0);
+      this.separatedShare.set(Math.round(100 * inPart / Math.max(total, 1e-12)));
+      if (this.playing() && this.listen() === 'separated') this.seekTo(this.now());
+    } catch (error) {
+      this.scoreError.set(`Could not separate the stem: ${errorMessage(error)}`);
+    } finally {
+      this.separating.set(false);
+    }
   }
 
   // The restored notes as a sound (a piano), alone and over the stem.
