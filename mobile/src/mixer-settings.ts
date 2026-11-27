@@ -1,5 +1,6 @@
 import { STEM_NAMES, type SceneSettings } from './api';
 import type { Mixer } from './player';
+import { SCORE_FAMILIES } from './score-parts';
 
 export function snapshot(mixer: Mixer): SceneSettings {
   const { useCleaned: _cleaned, ...live } = mixer.liveChannel;
@@ -8,6 +9,11 @@ export function snapshot(mixer: Mixer): SceneSettings {
     tracks: Object.fromEntries(STEM_NAMES.map(name => [name, { ...mixer.channel(name), volume: mixer.channel(name).volume * 100 }])),
     live: { ...live, volume: live.volume * 100, replace: mixer.replacePart },
     transpose: mixer.transpose,
+    // The parts played from the score, as the website keeps them: a "-notes" part per instrument, style 'score'.
+    accompaniment: SCORE_FAMILIES.flatMap(family => {
+      const sound = mixer.scoreSound(family), channel = mixer.scoreChannel(family);
+      return sound === undefined ? [] : [{ kind: `${family}-notes`, style: 'score', sound, volume: Math.round(channel.volume * 100), muted: channel.muted }];
+    }),
   };
 }
 export function restore(mixer: Mixer, settings: SceneSettings) {
@@ -18,6 +24,13 @@ export function restore(mixer: Mixer, settings: SceneSettings) {
     mixer.setChannel(name, { ...settings.tracks[name], volume: settings.tracks[name].volume / 100 });
   }
   mixer.setTranspose(settings.transpose ?? 0);
+  // A scene's score parts (older ones of another kind take their instrument's channel).
+  for (const part of settings.accompaniment ?? []) {
+    const family = part.kind.startsWith('guitar') ? 'guitar' : 'keys';
+    if (mixer.scoreSound(family) !== undefined) continue;
+    mixer.setScoreSound(family, part.sound);
+    mixer.setScoreChannel(family, { volume: part.volume / 100, muted: part.muted });
+  }
   if (settings.live) {
     const { replace, ...live } = settings.live;
     mixer.setLiveChannel({ ...live, volume: live.volume / 100 });

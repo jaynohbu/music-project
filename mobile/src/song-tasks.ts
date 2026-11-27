@@ -7,6 +7,7 @@ import {
   ENSEMBLE_STEMS, type HarmonyGrid, type HarmonyPart, type LyricLine, type Song, type StemName,
 } from './api';
 import { t, type TextKey } from './i18n';
+import type { Loudness, SoundChoices } from './score-parts';
 import { errorText } from './ui';
 
 // The same interval and wording as the website (web/src/stem-pages.ts).
@@ -43,6 +44,9 @@ export function useSongTasks(initial: Song | null) {
   const [startingClean, setStartingClean] = useState<string[]>([]);
   const [partLoadErrors, setPartLoadErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
+  // The analysis's sounds for the song, and the Harmonic stem's loudness (with a result made from a score).
+  const [soundChoices, setSoundChoices] = useState<SoundChoices>();
+  const [loudness, setLoudness] = useState<Loudness>();
   // Reading and saving an uploaded score: the minutes it should take, shown alone.
   const [scoreMinutes, setScoreMinutes] = useState(0);
   const appliedScore = useRef<string | undefined>(undefined);
@@ -97,9 +101,11 @@ export function useSongTasks(initial: Song | null) {
   useEffect(() => {
     if (!chordsUrl || chordsId === loadedChords || loading.current.chords || chordsLoadError) return;
     loading.current.chords = true;
-    fetchResult<HarmonyGrid & { stems: Record<string, HarmonyPart>; ensemble?: HarmonyPart }>(chordsUrl, 'Chords')
-      .then(({ stems, ensemble, beats, firstBar }) => {
+    fetchResult<HarmonyGrid & { stems: Record<string, HarmonyPart>; ensemble?: HarmonyPart; accompaniment?: SoundChoices; loudness?: Loudness }>(chordsUrl, 'Chords')
+      .then(({ stems, ensemble, beats, firstBar, accompaniment, loudness }) => {
         if (!alive.current) return;
+        setSoundChoices(accompaniment);
+        setLoudness(loudness);
         // A newer result replaces the shown one, regenerated parts included.
         loadedParts.current.clear();
         setPartLoadErrors({});
@@ -211,7 +217,7 @@ export function useSongTasks(initial: Song | null) {
   };
 
   return {
-    song, lyrics, grid, parts, error, findingLyrics, findingChords, updatingChords, regenerating, cleaning,
+    song, lyrics, grid, parts, error, findingLyrics, findingChords, updatingChords, regenerating, cleaning, soundChoices, loudness,
     // While a score is read and saved, or laid on the song on the server: about how many minutes.
     processing: scoreMinutes || (scoring ? Math.round(LAYING_SECONDS / 60) : 0),
     cleanFailure: (name: string) => cleaning(name) ? undefined

@@ -1,13 +1,14 @@
 import { useIsFocused } from 'expo-router';
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ComponentRef } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { HARMONY_STEMS, REGENERATED_STEMS, STEM_NAMES, getSong, type LyricLine, type SceneEntry, type SceneSettings, type Song, type StemName } from './api';
 import { addCleanedFile, holdSong, songFiles, stemPaths } from './cache';
 import { EFFECT_CONTROLS } from './effects';
 import { t as text } from './i18n';
 import { useT } from './language';
 import { LivePanel } from './live-panel';
-import { MAX_TRANSPOSE, Mixer, defaultChannel, type Channel } from './player';
+import { MAX_TRANSPOSE, Mixer, defaultChannel, defaultScoreChannel, type Channel } from './player';
+import { SCORE_FAMILIES, loadLibrary, matchLoudness, offered, scoreEvents, type Family, type SoundLibrary } from './score-parts';
 import { ChannelStrip, IconButton, LampSwitch, MasterFader, Timeline } from './mixer-console';
 import { EDGE, useStemScroll } from './stem-scroll';
 import { focusedStem } from './stem-focus';
@@ -62,9 +63,7 @@ function MountedMixer({ jobId, title, entry, onSettings, onEnded, onReady, onSon
         stemPaths(jobId, files.cleaned), found.duration);
       if (cancelled) { await player.close(); return; }
       if (initial.current) restore(player, initial.current);
-      // The website's accompaniment parts are not played here, but saving from the app must not drop them.
-      const kept = initial.current?.accompaniment;
-      const settingsOf = (mixer: Mixer) => ({ ...snapshot(mixer), ...(kept ? { accompaniment: kept } : {}) });
+      const settingsOf = (mixer: Mixer) => snapshot(mixer);
       let last = JSON.stringify(settingsOf(player));
       const current = player;
       unsubscribe = player.subscribe(() => {
@@ -209,8 +208,8 @@ export function MixerControls({ mixer, song = null, peaks, inScene = false }: { 
     }
     setEditingLyrics(false);
   };
-  const allMuted = STEM_NAMES.every(name => mixer.channel(name).muted);
-  const soloing = mixer.liveChannel.solo || STEM_NAMES.some(name => mixer.channel(name).solo);
+  const allMuted = STEM_NAMES.every(name => mixer.channel(name).muted) && SCORE_FAMILIES.every(family => mixer.scoreChannel(family).muted);
+  const soloing = mixer.liveChannel.solo || STEM_NAMES.some(name => mixer.channel(name).solo) || SCORE_FAMILIES.some(family => mixer.scoreChannel(family).solo);
   const liveChannel = mixer.liveChannel;
   const inside = position > mixer.sectionStart && position < mixer.sectionEnd;
   return <View style={styles.page}>
@@ -274,6 +273,14 @@ export function MixerControls({ mixer, song = null, peaks, inScene = false }: { 
             mixer.setChannel(name, { ...defaultChannel(), useCleaned: channel.useCleaned });
             if (replaced) mixer.releaseReplacedStem();
           }} />
+        {name === 'other' && <ScoreParts mixer={mixer} tasks={tasks}
+          console={(family, label, expanded, onToggle) => {
+            const part = mixer.scoreChannel(family);
+            return <ChannelConsole {...{ mixer, locked, inside, position, allMuted, soloing, run: operation => void run(operation), onReset: inScene ? () => void reset() : undefined, songKey: tasks.parts?.other?.key }}
+              label={label} channel={part} expanded={expanded} onToggle={onToggle}
+              live={mixer.isPlaying && !part.muted && !(soloing && !part.solo)}
+              setChannel={change => mixer.setScoreChannel(family, change)} resetChannel={() => mixer.setScoreChannel(family, defaultScoreChannel())} />;
+          }} />}
       </View>;
     })}
   </View>;
@@ -320,7 +327,10 @@ function ChannelConsole({ songKey, mixer, label, channel, expanded, live, replac
         <IconButton icon="mute" accessibilityLabel={t('mixer.muteStem', { stem: label })} on={channel.muted}
           onPress={() => setChannel({ muted: !channel.muted })} />
         <IconButton icon="muteAll" accessibilityLabel={t('mixer.muteAll')} on={allMuted}
-          onPress={() => STEM_NAMES.forEach(stem => mixer.setChannel(stem, { muted: !allMuted }))} />
+          onPress={() => {
+            STEM_NAMES.forEach(stem => mixer.setChannel(stem, { muted: !allMuted }));
+            SCORE_FAMILIES.forEach(family => mixer.setScoreChannel(family, { muted: !allMuted }));
+          }} />
         <IconButton icon="solo" accessibilityLabel={t('mixer.soloStem', { stem: label })} on={channel.solo}
           onPress={() => setChannel({ solo: !channel.solo })} />
         <IconButton icon="loop" accessibilityLabel={t('mixer.loopAll')} on={mixer.loop}
@@ -352,6 +362,75 @@ function ChannelConsole({ songKey, mixer, label, channel, expanded, live, replac
       </Text>
     </View>}
   </>;
+}
+
+// The Harmonic score played on guitar and on keys: for each, its sound (the song's closest to begin with) and a
+// console like a stem's. The notes are made again when the score, the sound or the key changes, as loud through the
+// song as the Harmonic stem when its loudness came with the score.
+function ScoreParts({ mixer, tasks, console }: {
+  mixer: Mixer; tasks: ReturnType<typeof useSongTasks>;
+  console: (family: Family, label: string, expanded: boolean, onToggle: () => void) => React.ReactNode;
+}) {
+  const styles = useStyles(makeStyles), theme = useTheme(), t = useT();
+  const [library, setLibrary] = useState<SoundLibrary | null>(null);
+  const [failure, setFailure] = useState('');
+  const [picking, setPicking] = useState<Family | null>(null);
+  const [expanded, setExpanded] = useState<Family | null>(null);
+  const part = tasks.parts?.other, choices = tasks.soundChoices, loudness = tasks.loudness, transpose = mixer.transpose;
+  useEffect(() => { loadLibrary().then(setLibrary, error => setFailure(errorText(error))); }, []);
+  const sounds = (family: Family) => library ? offered(library, choices, family) : [];
+  const guitarSound = mixer.scoreSound('guitar'), keysSound = mixer.scoreSound('keys');
+  useEffect(() => {
+    if (!library || !part) return;
+    let cancelled = false;
+    for (const family of SCORE_FAMILIES) {
+      const sound = mixer.scoreSound(family) ?? offered(library, choices, family)[0];
+      if (sound === undefined) continue;
+      if (mixer.scoreSound(family) === undefined) mixer.setScoreSound(family, sound);
+      mixer.decodeSound(sound, library.samples).then(({ buffer, attacks, levels }) => {
+        if (cancelled || mixer.scoreSound(family) !== sound) return;
+        const events = scoreEvents(part, transpose);
+        const matched = loudness ? matchLoudness(events, scoreEvents(part, transpose, false), loudness, library.samples, levels) : { events, gain: 1 };
+        mixer.setScoreNotes(family, matched.events, buffer, library.samples, attacks, matched.gain);
+      }, error => { if (!cancelled) setFailure(errorText(error)); });
+    }
+    return () => { cancelled = true; };
+  }, [mixer, library, part, choices, loudness, transpose, guitarSound, keysSound]);
+  if (!part || !library) return failure ? <Text accessibilityRole="alert" style={[styles.error, styles.taskError]}>{failure}</Text> : null;
+  const name = (sound?: number) => sound === undefined ? '' : library.sounds[String(sound)]?.name ?? String(sound);
+  return <View style={styles.scoreParts}>
+    {!!failure && <Text accessibilityRole="alert" style={[styles.error, styles.taskError]}>{failure}</Text>}
+    {SCORE_FAMILIES.map(family => {
+      const label = t(family === 'guitar' ? 'score.guitar' : 'score.keys');
+      return <View key={family} style={styles.scorePart}>
+        <View style={styles.scorePartRow}>
+          <Text style={styles.scorePartName}>{label}</Text>
+          <Pressable onPress={() => setPicking(family)} accessibilityRole="button" accessibilityLabel={t('score.soundFor', { part: label })}
+            style={styles.soundPicker}>
+            <Text style={styles.soundPickerText} numberOfLines={1}>{name(mixer.scoreSound(family))}</Text>
+            <Text style={styles.soundPickerArrow}>▾</Text>
+          </Pressable>
+        </View>
+        {console(family, label, expanded === family, () => setExpanded(open => open === family ? null : family))}
+      </View>;
+    })}
+    <Modal visible={!!picking} transparent animationType="fade" onRequestClose={() => setPicking(null)}>
+      <Pressable style={styles.sheetBackdrop} onPress={() => setPicking(null)} accessibilityRole="button" accessibilityLabel={t('common.cancel')}>
+        <View style={styles.sheet}>
+          <ScrollView>
+            {picking && sounds(picking).map((sound, index) => {
+              const chosen = mixer.scoreSound(picking) === sound;
+              return <Pressable key={sound} accessibilityRole="radio" accessibilityState={{ checked: chosen }}
+                onPress={() => { mixer.setScoreSound(picking, sound); setPicking(null); }} style={[styles.sheetRow, chosen && { backgroundColor: theme.accentSoft }]}>
+                <Text style={[styles.sheetText, chosen && { color: theme.accent, fontWeight: '700' }]}>
+                  {name(sound)}{index === 0 ? ` (${t('score.closest')})` : ''}</Text>
+              </Pressable>;
+            })}
+          </ScrollView>
+        </View>
+      </Pressable>
+    </Modal>
+  </View>;
 }
 
 // Raises or lowers the whole song, vocals included, without changing its speed.
@@ -510,4 +589,16 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   taskError: { marginHorizontal: EDGE, marginTop: 8 },
   taskNote: { marginHorizontal: EDGE, marginTop: 10, padding: 8, borderRadius: 6, backgroundColor: t.surfaceMuted, color: t.muted, fontSize: 13 },
   taskHint: { marginHorizontal: EDGE, marginTop: 8, color: t.muted, fontSize: 13 },
+  scoreParts: { marginTop: 12, gap: 0 },
+  scorePart: { borderTopWidth: 1, borderTopColor: t.line, paddingTop: 10 },
+  scorePartRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: EDGE },
+  scorePartName: { fontSize: 15, fontWeight: '700', color: t.ink, minWidth: 56 },
+  soundPicker: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 38, paddingHorizontal: 12,
+    borderRadius: 8, borderWidth: 1, borderColor: t.line, backgroundColor: t.surface },
+  soundPickerText: { flex: 1, fontSize: 14, fontWeight: '600', color: t.ink },
+  soundPickerArrow: { fontSize: 13, color: t.muted, marginLeft: 8 },
+  sheetBackdrop: { flex: 1, backgroundColor: '#0008', justifyContent: 'flex-end' },
+  sheet: { maxHeight: '60%', backgroundColor: t.surface, borderTopLeftRadius: 14, borderTopRightRadius: 14, paddingVertical: 8 },
+  sheetRow: { paddingHorizontal: 20, paddingVertical: 14 },
+  sheetText: { fontSize: 16, color: t.ink },
 });

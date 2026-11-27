@@ -103,6 +103,8 @@ function fixture() {
     'react-native-audio-api/lib/module/Audio/AudioFileSourceNode': { AudioFileSourceNode: Source },
     'react-native-worklets': { createSynchronizable: value => ({ getDirty: () => value, setBlocking: next => { value = next; } }) },
     './api': { STEM_NAMES: names },
+    // Only the score parts' sound downloads use files here; tests that need more set their own.
+    'expo-file-system': { Directory: class { create() {} }, File: class { get exists() { return true; } }, Paths: { cache: '/cache', document: '/docs' } },
   };
   const loaded = new Map();
   function load(file) {

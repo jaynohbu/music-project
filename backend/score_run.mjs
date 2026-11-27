@@ -46,6 +46,18 @@ const result = await importScore({
   source: { musicxml, title: options.title ?? '', savedAt: options['saved-at'] ?? '' }, stems, analysis,
   readPdf: () => { throw new Error('A PDF is read before it is saved with the song.'); }, progress: () => {},
 });
+// The Harmonic stem's loudness every LOUDNESS_WINDOW seconds (RMS), so a part played from the score can follow it
+// without the stem at hand (the app's score parts).
+const LOUDNESS_WINDOW = 0.25;
+const other = stems.other.getChannelData(0), size = Math.round(LOUDNESS_WINDOW * RATE);
+const loudness = [];
+for (let from = 0; from < other.length; from += size) {
+  let sum = 0;
+  const to = Math.min(other.length, from + size);
+  for (let index = from; index < to; index++) sum += other[index] * other[index];
+  loudness.push(Math.round(Math.sqrt(sum / Math.max(1, to - from)) * 1e5) / 1e5);
+}
+result.document.loudness = { window: LOUDNESS_WINDOW, other: loudness };
 await writeFile(output, JSON.stringify(result.document));
 await writeFile(options.extracted, Buffer.from(await result.extracted.arrayBuffer()));
 console.log(`score laid in ${((Date.now() - started) / 1000).toFixed(1)} s: ${result.document.fromScore.measures} measures, ${result.document.fromScore.notes} notes, ${result.fit.corrections.bars} drum bars corrected`);
