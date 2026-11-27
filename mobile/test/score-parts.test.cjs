@@ -30,11 +30,11 @@ test('sounds are offered with the song\'s ranked ones first, then every other of
   assert.deepEqual(parts.offered(library, undefined, 'keys'), [0]);
 });
 
-test('the score\'s events: every note and its sung line, moved by the key change, in time order', () => {
+test('the score\'s events: every note, moved by the key change, in time order, without the sung line', () => {
   const { parts } = load();
-  const part = { chords: [], notes: [{ start: 1, end: 1.5, pitch: 60, unit: 0, length: 4, velocity: 70 }], melody: [{ start: 0.5, end: 1, pitch: 72, unit: 0, length: 2 }] };
-  assert.deepEqual(parts.scoreEvents(part, 2), [{ time: 0.5, duration: 0.5, pitch: 74, velocity: 90 }, { time: 1, duration: 0.5, pitch: 62, velocity: 70 }]);
-  assert.equal(parts.scoreEvents(part, 0, false).length, 1);
+  const part = { chords: [], notes: [{ start: 1, end: 1.5, pitch: 60, unit: 0, length: 4, velocity: 70 }, { start: 0.5, end: 0.75, pitch: 64, unit: 0, length: 1 }],
+    melody: [{ start: 0.5, end: 1, pitch: 72, unit: 0, length: 2 }] };
+  assert.deepEqual(parts.scoreEvents(part, 2), [{ time: 0.5, duration: 0.25, pitch: 66, velocity: 90 }, { time: 1, duration: 0.5, pitch: 62, velocity: 70 }]);
 });
 
 test('a part follows the stem\'s loudness: notes where the stem is louder are played louder, the typical ratio is the gain', () => {

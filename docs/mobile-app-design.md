@@ -510,7 +510,16 @@ The staff uses `react-native-svg`. It draws in four-bar chunks and mounts only t
 - **App:** `src/score-pdf.ts` prints the HTML with `expo-print`, renames the file to "<title> - <part>.pdf" and opens the share sheet with `expo-sharing` (Save to Files, AirDrop, mail). The sheet follows the key change. Both modules are native, so this needs a new native build: 39609899 and later.
 - **Website:** `web/src/score-sheet.ts` is the same code with other imports, which `web/test/score-sheet.test.mjs` checks. It prints from a hidden frame, so the browser's print dialog offers Save as PDF. The file name comes from the page title. The website's layout now has the app's key-signature spelling for this. Its scrolling strip still uses the mixed spelling because it has no key signature.
 
-### Bass and drum scores (2026-11-27)
+### Sung line left out of the Harmonic score (2026-11-27)
+
+The user asked that, where a score has several layers, the layer matching the vocals is left out of the transcription.
+
+- **Layers:** `ScoreNote.voice` is read from MusicXML `<voice>`. A staff in several layers (8 notes or more each) has each layer matched on its own as well; a layer that sounds most like the vocals gets its own `PartMatch` (with `voice`) given to the vocals, the staff's other layers keep the staff's match.
+- **Doubling:** `noteStems` (score-align.ts) gives a note to the vocals when it is the same pitch starting at the same time as a note given to the vocals (a piano's right hand with the tune on top of its chords), and a whole layer when 60% of its notes are such doubling. Used by alignScore and fitMeasures, so the Harmonic notes, the bass line and the chord naming all leave the sung line out.
+- **Playing:** the Guitar and Keys score channels (app and website "notes" parts) no longer play `ensemble.melody`; the melody + rhythm parts still do.
+- **Our God:** the user's piano/vocal score has its right hand in one layer (724 notes, tune on top); 54 printed notes double the sung line. Laid again: same 124 bars, 0 corrections; Harmonic notes 1826 → 1717 (heard 1465 → 1385).
+- Songs laid before keep their old result until their score is laid again.
+
 
 - **Upload per part:** the Harmonic, bass and drum cards each have an Upload score button (web and app); each part's GEN button asks whether there is a score for that part, and a saved one is used without asking. Scores are kept by part (`score` for the Harmonic one, `partScores.bass`/`.drums`; `/api/stems/jobs/{id}/score[/bass|/drums]`), and one worker run lays all of them (score_run.mjs `--score part=file`).
 - **Laying:** the drum score first (its drum hits compared with the drum transcription's, bar by bar, repeats taken, jumps costly since drum bars repeat), then the Harmonic score, then the bass score (fitted against the bass stem in the Harmonic stem's place; its notes replace the bass line). The first corrects the drum beats; the later ones keep that grid. Before laying, the beats are mended: a gap of about two beats gets one back, two half gaps lose the beat between. Our God, test scores made from the transcription: the drum score laid on every true bar; with a beat lost at 60 s and a false one at 150 s every downbeat was right again and the beats 0 ms from the true ones. All three together: 52 s, 0 corrections.

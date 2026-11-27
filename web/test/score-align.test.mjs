@@ -462,3 +462,35 @@ test('a drum score is laid on the drum transcription bar by bar, and a beat the 
   assert.equal(fit.hits.length, score.hits.length);
   assert.equal(fit.heard, score.hits.length);
 });
+
+test('a staff in layers: the layer that sounds like the singer is the vocals\', and its notes are not the Harmonic stem\'s', async () => {
+  const score = songScore(), offset = 3.1, beat = 0.52, seconds = 24;
+  const spectrograms = await spectrogramsOf(synthesize(score, { offset, beat, seconds }));
+  const beats = Array.from({ length: Math.floor(seconds / beat) }, (_, k) => offset - 5 * beat + k * beat).filter(time => time >= 0);
+  // The tune written as a second layer on the guitar's staff, the chords its first; no Voice part.
+  const layered = { ...score, parts: [score.parts[0], score.parts[2]],
+    notes: score.notes.map(n => n.part === 1 ? { ...n, part: 0, voice: 2 } : n.part === 2 ? { ...n, part: 1 } : { ...n, voice: 1 }) };
+  const result = align.alignScore({ score: layered, spectrograms, seconds, beats });
+  assert.ok(result.parts.some(part => part.part === 0 && part.voice === 2 && part.stem === 'vocals'), JSON.stringify(result.parts.map(p => [p.name, p.stem])));
+  assert.equal(result.parts.find(part => part.part === 0 && part.voice === undefined).stem, 'other');
+  const tune = layered.notes.filter(n => n.voice === 2);
+  assert.ok(!result.notes.some(r => tune.some(n => n.pitch === r.pitch && Math.abs(r.start - (offset + n.start * beat)) < 0.05 && !layered.notes.some(c => c.voice === 1 && c.pitch === n.pitch && c.start === n.start))),
+    'no note of the tune is restored');
+});
+
+test('notes doubling the sung line are the vocals\', and a layer made of them is the vocals\' as a whole', () => {
+  const notes = [
+    // The Voice part.
+    { pitch: 72, start: 0, length: 1, measure: 0, part: 1, staff: 1, voice: 1 }, { pitch: 74, start: 1, length: 1, measure: 0, part: 1, staff: 1, voice: 1 },
+    // The piano's right hand: one layer of chords with the tune's first note on top, one layer doubling the tune.
+    { pitch: 64, start: 0, length: 2, measure: 0, part: 0, staff: 1, voice: 1 }, { pitch: 72, start: 0, length: 2, measure: 0, part: 0, staff: 1, voice: 1 },
+    ...Array.from({ length: 8 }, (_, k) => ({ pitch: k % 2 ? 74 : 72, start: k, length: 1, measure: 0, part: 0, staff: 1, voice: 2 })),
+  ];
+  // The tune again on the Voice part for every beat the second layer plays.
+  for (let k = 2; k < 8; k++) notes.push({ pitch: k % 2 ? 74 : 72, start: k, length: 1, measure: 0, part: 1, staff: 1, voice: 1 });
+  const parts = [{ part: 0, staff: 1, name: 'Piano', stem: 'other', likeness: {} }, { part: 1, staff: 1, name: 'Voice', stem: 'vocals', likeness: {} }];
+  const stemOf = align.noteStems({ notes }, parts);
+  assert.equal(stemOf(notes[2]), 'other', 'a chord tone under the tune');
+  assert.equal(stemOf(notes[3]), 'vocals', 'the tune\'s note on top of the chord');
+  assert.ok(notes.filter(n => n.part === 0 && n.voice === 2).every(n => stemOf(n) === 'vocals'), 'the doubling layer');
+});

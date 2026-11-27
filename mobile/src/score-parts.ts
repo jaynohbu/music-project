@@ -65,9 +65,9 @@ export function sampleFor(pitches: number[], pitch: number): { index: number; ra
 }
 
 const velocityOf = (note: HarmonyNote) => note.velocity ?? 90;
-// Every note of the part, and its sung line, as played; moved by the key change.
-export function scoreEvents(part: HarmonyPart, semitones: number, melody = true): NoteEvent[] {
-  return [...part.notes, ...(melody ? part.melody ?? [] : [])].map(note => ({
+// Every note of the part as played (not its sung line, which is the vocals'); moved by the key change.
+export function scoreEvents(part: HarmonyPart, semitones: number): NoteEvent[] {
+  return part.notes.map(note => ({
     time: note.start, duration: Math.max(0.05, note.end - note.start), pitch: note.pitch + semitones, velocity: velocityOf(note),
   })).sort((a, b) => a.time - b.time);
 }
@@ -100,8 +100,9 @@ export function familyEvents(family: Family, parts: Partial<Record<string, Harmo
     return events.length ? { events, measured: events } : null;
   }
   if (!part.notes.length) return null;
-  return family === 'bass' ? { events: scoreEvents(part, semitones, false), measured: scoreEvents(part, semitones, false) }
-    : { events: scoreEvents(part, semitones), measured: scoreEvents(part, semitones, false) };
+  // The Harmonic notes only, on guitar and keys too: the sung line is the vocals', not theirs.
+  const events = scoreEvents(part, semitones);
+  return { events, measured: events };
 }
 
 // Per sample: seconds until it is heard (its level, a 10 ms running mean, first reaches half its peak in its first

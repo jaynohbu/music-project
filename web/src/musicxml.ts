@@ -4,7 +4,8 @@
 // one note; grace notes and cue notes are left out. Unpitched (percussion) notes are the score's drum hits, named
 // as the drum transcription names drums. Repeats are not unrolled: the score is read as printed. Pure functions with its own small XML reader (no DOM), so it can be unit-tested.
 
-export interface ScoreNote { pitch: number; start: number; length: number; measure: number; part: number; staff: number }
+// voice: the layer the note is written in on its staff (MusicXML <voice>), 1 when not written.
+export interface ScoreNote { pitch: number; start: number; length: number; measure: number; part: number; staff: number; voice?: number }
 export interface ScoreMeasure { number: string; start: number; length: number; beats: number; beatType: number }
 // Repeat signs on a measure, from every part: a repeat starts here (forward) or goes back from its end (backward, the
 // times it is played in all), and the endings (first and second time bars) begun or ended on it, by number.
@@ -216,7 +217,7 @@ export function parseMusicXml(source: string): Score {
             if (!ties.includes('start')) tied.delete(key);
             continue;
           }
-          const note = { pitch: Math.round(midi), start: start + noteStart, length, measure: index, part, staff };
+          const note = { pitch: Math.round(midi), start: start + noteStart, length, measure: index, part, staff, voice: numberOf(element, 'voice', 1) };
           notes.push(note);
           if (ties.includes('start')) tied.set(key, note);
         }

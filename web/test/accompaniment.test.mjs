@@ -127,12 +127,12 @@ test('transcribed notes play every score note as the stem played it, at its velo
   assert.equal(a.styled('keys-rhythm'), true);
 });
 
-test('a part from an uploaded score plays its sung line too: with every note, and as the melody over a style', () => {
+test('a part from an uploaded score: the notes parts leave its sung line to the vocals; a melody over a style plays it', () => {
   const part = { chords: [{ start: 0, name: 'C' }], notes: [{ start: 0, end: 1, pitch: 60, unit: 0, length: 8, velocity: 80 }],
     melody: [{ start: 0.5, end: 1, pitch: 76, unit: 4, length: 4, velocity: 100 }] };
   const grid = { beats: [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4], firstBar: 0 };
   const every = a.accompanimentEvents('keys-notes', part, grid, [], 0);
-  assert.deepEqual(every.map(event => [event.time, event.pitch]), [[0, 60], [0.5, 76]]);
+  assert.deepEqual(every.map(event => [event.time, event.pitch]), [[0, 60]]);
   const styled = a.accompanimentEvents('keys-melody', part, grid, Array.from({ length: 8 }, () => [[0, 1, 80]]), 0);
   assert.ok(styled.some(event => event.pitch === 76 && event.time === 0.5), 'the sung line is the melody');
   assert.ok(!styled.some(event => event.pitch === 60 && event.velocity === 108), 'not the top of the chords');

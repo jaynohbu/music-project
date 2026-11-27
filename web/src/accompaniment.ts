@@ -253,7 +253,8 @@ export function playedNotes(notes: HarmonyNote[]): NoteEvent[] {
 // Every note of a part, in song seconds, moved by the key change.
 export function accompanimentEvents(kind: AccompanimentKind, part: HarmonyPart, grid: HarmonyGrid, pattern: Stroke[][], semitones = 0): NoteEvent[] {
   // A part from an uploaded score carries its sung line: played with every note, and as the melody over a style.
-  const events = !styled(kind) ? playedNotes([...part.notes, ...(part.melody ?? [])])
+  // The notes parts play the Harmonic notes only: the sung line is the vocals', not theirs.
+  const events = !styled(kind) ? playedNotes(part.notes)
     : kind.endsWith('rhythm') ? comping(part, grid, pattern, familyOf(kind))
     : withMelody(comping(part, grid, pattern, familyOf(kind)), part.melody?.length ? part.melody : melodyLine(part.notes));
   return events.map(event => ({ ...event, pitch: event.pitch + semitones })).sort((a, b) => a.time - b.time);
