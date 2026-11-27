@@ -4,7 +4,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import { File } from 'expo-file-system';
 import {
   createHarmony, createLyrics, createRestoration, fetchResult, getSong, readScore, saveLyrics as sendLyrics, saveSongScore, laySongScore,
-  ENSEMBLE_STEMS, type HarmonyGrid, type HarmonyPart, type LyricLine, type Song, type StemName,
+  ENSEMBLE_STEMS, type HarmonyGrid, type HarmonyPart, type LyricLine, type ScorePart, type Song, type StemName,
 } from './api';
 import { t, type TextKey } from './i18n';
 import type { Loudness, SoundChoices } from './score-parts';
@@ -47,8 +47,9 @@ export function useSongTasks(initial: Song | null) {
   // The analysis's sounds for the song, and the Harmonic stem's loudness (with a result made from a score).
   const [soundChoices, setSoundChoices] = useState<SoundChoices>();
   const [loudness, setLoudness] = useState<Loudness>();
-  // Reading and saving an uploaded score: the minutes it should take, shown alone.
+  // Reading and saving an uploaded score: the minutes it should take, shown alone, on the stem it is for.
   const [scoreMinutes, setScoreMinutes] = useState(0);
+  const [scorePart, setScorePart] = useState<ScorePart>('other');
   const appliedScore = useRef<string | undefined>(undefined);
   const alive = useRef(true);
   const loading = useRef({ lyrics: false, chords: false });
@@ -135,17 +136,25 @@ export function useSongTasks(initial: Song | null) {
     }
   }, [hasParts, loadedChords, regenerated, partLoadErrors]);
 
-  // A song with its own score whose chords & notes are not yet from it (its analysis just finished, or the score
-  // is newer): the server is asked to lay it on the song, once per score.
-  const score = song?.score, harmony = song?.harmony;
+  // A song with its own scores whose parts are not yet from them (its analysis just finished, or a score is newer):
+  // the server is asked to lay them on the song, once per set of scores.
+  const harmony = song?.harmony;
+  const scores = { ...(song?.score ? { other: song.score } : {}), ...song?.scores };
+  const scoreParts = Object.keys(scores) as ScorePart[];
+  const signature = scoreParts.map(part => `${part}:${scores[part]!.savedAt}`).join(' ');
   useEffect(() => {
-    if (!jobId || !score || harmony?.status !== 'completed' || scoreMinutes) return;
-    if (harmony.fromScore?.scoreSavedAt === score.savedAt || appliedScore.current === score.savedAt) return;
-    appliedScore.current = score.savedAt;
+    if (!jobId || !signature || harmony?.status !== 'completed' || scoreMinutes) return;
+    // Laid already: each score's saving time is in the result (an older result names the Harmonic one at its top).
+    const laid = signature.split(' ').every(entry => {
+      const [part, savedAt] = [entry.slice(0, entry.indexOf(':')), entry.slice(entry.indexOf(':') + 1)] as [ScorePart, string];
+      return (harmony.fromScore?.parts?.[part]?.scoreSavedAt ?? (part === 'other' ? harmony.fromScore?.scoreSavedAt : undefined)) === savedAt;
+    });
+    if (laid || appliedScore.current === signature) return;
+    appliedScore.current = signature;
     laySongScore(jobId).then(refresh, failure => {
       if (alive.current) setError(t('tasks.useScoreFailed', { error: errorText(failure) }));
     });
-  }, [jobId, score, harmony, scoreMinutes, refresh]);
+  }, [jobId, signature, harmony, scoreMinutes, refresh]);
   const scoring = !!harmony?.scoring && running(harmony.status);
 
   const findingLyrics = startingLyrics || (!!song?.lyrics && song.lyrics.status !== 'failed' && !lyricsLoadError);
@@ -164,8 +173,8 @@ export function useSongTasks(initial: Song | null) {
     finally { if (alive.current) end(); }
   };
 
-  // An uploaded score saved with the song: a PDF or image read by the ScoreReader first, MusicXML as it is.
-  const uploadScore = async () => {
+  // An uploaded score saved with the song for one part: a PDF or image read by the ScoreReader first, MusicXML as it is.
+  const uploadScore = async (part: ScorePart) => {
     if (!jobId || scoreMinutes) return;
     let result: DocumentPicker.DocumentPickerResult;
     try { result = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true }); }
@@ -175,10 +184,11 @@ export function useSongTasks(initial: Song | null) {
     const pdf = SCORE_FILES.test(asset.name);
     if (!pdf && !MUSICXML_FILES.test(asset.name)) { setError(t('tasks.scoreKind')); return; }
     setError('');
+    setScorePart(part);
     setScoreMinutes(Math.max(1, Math.round(((pdf ? READING_SECONDS : 0) + LAYING_SECONDS) / 60)));
     try {
       const file = new File(asset.uri), title = asset.name.replace(/\.[^.]+$/, '');
-      await saveSongScore(jobId, pdf ? { title, reading: await readScore(file) } : { title, musicxml: await file.text() });
+      await saveSongScore(jobId, pdf ? { title, reading: await readScore(file) } : { title, musicxml: await file.text() }, part);
       // With no analysis yet, it runs first; the score is laid on the song after it.
       if (!song?.harmony) await createHarmony(jobId);
       await refresh();
@@ -189,18 +199,20 @@ export function useSongTasks(initial: Song | null) {
     }
   };
 
-  // Chords & notes: a song with its own score takes them from it; otherwise the app asks whether there is a score.
-  const chordsAndNotes = (fromAudio: () => void) => {
+  // A part's notes (chords & notes for the Harmonic and bass stems, the drum score for the drums): a song with its
+  // own score for the part takes them from it; otherwise the app asks whether there is a score.
+  const chordsAndNotes = (part: ScorePart, fromAudio: () => void) => {
     if (!jobId || scoreMinutes) return;
-    if (song?.score) {
+    if (scores[part]) {
       laySongScore(jobId).then(refresh, failure => setError(t('tasks.useScoreFailed', { error: errorText(failure) })));
       return;
     }
-    Alert.alert(t('tasks.chordsMelody'), t('tasks.scoreQuestion'), [
-      { text: t('common.cancel'), style: 'cancel' },
-      { text: t('tasks.fromAudio'), onPress: fromAudio },
-      { text: t('tasks.uploadScore'), onPress: () => void uploadScore() },
-    ]);
+    Alert.alert(t(part === 'drums' ? 'tasks.drumScore' : 'tasks.chordsMelody'),
+      t(part === 'drums' ? 'tasks.drumScoreQuestion' : part === 'bass' ? 'tasks.bassScoreQuestion' : 'tasks.scoreQuestion'), [
+        { text: t('common.cancel'), style: 'cancel' },
+        { text: t('tasks.fromAudio'), onPress: fromAudio },
+        { text: t('tasks.uploadScore'), onPress: () => void uploadScore(part) },
+      ]);
   };
 
   const findChords = () => {
@@ -218,8 +230,14 @@ export function useSongTasks(initial: Song | null) {
 
   return {
     song, lyrics, grid, parts, error, findingLyrics, findingChords, updatingChords, regenerating, cleaning, soundChoices, loudness,
-    // While a score is read and saved, or laid on the song on the server: about how many minutes.
+    // While a score is read and saved, or laid on the song on the server: about how many minutes (on the stem the
+    // upload is for, or on every stem with a score while they are laid).
     processing: scoreMinutes || (scoring ? Math.round(LAYING_SECONDS / 60) : 0),
+    processingFor: (name: string) => scoreMinutes ? (name === scorePart ? scoreMinutes : 0)
+      : scoring && (scores as Record<string, unknown>)[name] ? Math.round(LAYING_SECONDS / 60) : 0,
+    // A stem's own score, uploaded from its card.
+    hasScore: (name: string) => !!(scores as Record<string, unknown>)[name],
+    uploadScore(name: string) { if (name === 'other' || name === 'bass' || name === 'drums') void uploadScore(name); },
     cleanFailure: (name: string) => cleaning(name) ? undefined
       : song?.restorations?.find(item => item.stem === name && item.status === 'failed')?.error,
     clean(name: StemName) {
@@ -239,12 +257,13 @@ export function useSongTasks(initial: Song | null) {
       setLyricsLoadError('');
       void start(() => setStartingLyrics(true), () => setStartingLyrics(false), () => createLyrics(jobId), error => t('tasks.startLyricsFailed', { error }));
     },
-    // Chords & notes for the Harmonic and bass parts (asking about a score first); the drum score from the audio.
-    findChords() { chordsAndNotes(findChords); },
-    findDrums() { findChords(); },
-    // Regenerating Harmonic asks for a score first (or uses the song's own); bass and drums are found again from audio.
+    // A part's notes for the first time (asking about its score first); the analysis finds them all.
+    findChords() { chordsAndNotes('other', findChords); },
+    findBass() { chordsAndNotes('bass', findChords); },
+    findDrums() { chordsAndNotes('drums', findChords); },
+    // Regenerating a part asks for its score first (or uses the song's own); without one it is found again from audio.
     regenerate(name: string, cleaned: boolean) {
-      if (name === 'other') chordsAndNotes(() => regenerateFromAudio(name, cleaned));
+      if (name === 'other' || name === 'bass' || name === 'drums') chordsAndNotes(name, () => regenerateFromAudio(name, cleaned));
       else regenerateFromAudio(name, cleaned);
     },
     async saveLyrics(lines: LyricLine[]) {

@@ -6,9 +6,13 @@
 // analysis ranks them for the song (backend/accompaniment.py). Pure functions only, so they can be unit-tested.
 import type { HarmonyGrid, HarmonyNote, HarmonyPart } from './services';
 
-export type AccompanimentKind = 'guitar-rhythm' | 'keys-rhythm' | 'guitar-melody' | 'keys-melody' | 'guitar-notes' | 'keys-notes';
+export type AccompanimentKind = 'guitar-rhythm' | 'keys-rhythm' | 'guitar-melody' | 'keys-melody' | 'guitar-notes' | 'keys-notes' | 'bass-notes' | 'drums-notes';
 export type Family = 'guitar' | 'keys';
-export const ACCOMPANIMENT_KINDS: readonly AccompanimentKind[] = ['guitar-rhythm', 'keys-rhythm', 'guitar-melody', 'keys-melody', 'guitar-notes', 'keys-notes'];
+// The families of sounds a score is played in: guitar and keys for the Harmonic score, a bass for the bass score,
+// a drum kit for the drum score.
+export type SoundFamily = Family | 'bass' | 'drums';
+export interface Samples { rate: number; pitches: number[]; slot: number; length: number }
+export const ACCOMPANIMENT_KINDS: readonly AccompanimentKind[] = ['guitar-rhythm', 'keys-rhythm', 'guitar-melody', 'keys-melody', 'guitar-notes', 'keys-notes', 'bass-notes', 'drums-notes'];
 // Transcribed-notes parts play no style.
 export const styled = (kind: AccompanimentKind): boolean => !kind.endsWith('notes');
 export const familyOf = (kind: AccompanimentKind): Family => kind.startsWith('guitar') ? 'guitar' : 'keys';
@@ -16,10 +20,17 @@ export const familyOf = (kind: AccompanimentKind): Family => kind.startsWith('gu
 // [beat in the bar, length in beats, velocity] per stroke; eight bars per style, repeated.
 export type Stroke = [number, number, number];
 export interface StyleLibrary {
-  groups: Record<string, { styles: string[]; guitar: number[]; keys: number[] }>;
+  groups: Record<string, { styles: string[]; guitar: number[]; keys: number[]; bass?: number[]; drums?: number[] }>;
   styles: Record<string, Record<Family, Stroke[][]>>;
-  sounds: Record<string, { name: string; family: Family }>;
-  samples: { rate: number; pitches: number[]; slot: number; length: number };
+  sounds: Record<string, { name: string; family: SoundFamily }>;
+  samples: Samples;
+  // The basses' notes are on lower pitches; a kit's slots are its drums (DRUM_ORDER), pitch i being drum i.
+  layouts?: Partial<Record<'bass' | 'drums', Samples>>;
+}
+// Where a sound's notes are in its samples.
+export function samplesOf(library: Pick<StyleLibrary, 'sounds' | 'samples' | 'layouts'>, sound: number): Samples {
+  const family = library.sounds[String(sound)]?.family;
+  return (family === 'bass' || family === 'drums' ? library.layouts?.[family] : undefined) ?? library.samples;
 }
 // The analysis's choices for a song, closest first.
 export interface AccompanimentChoices {
@@ -29,6 +40,9 @@ export interface AccompanimentChoices {
   genres?: [string, number][];
   guitar: { styles: string[]; sounds: number[] };
   keys: { styles: string[]; sounds: number[] };
+  // The bass and drum scores' sounds, closest to their stems first (analyses from 2026-11-28 on).
+  bass?: { sounds: number[] };
+  drums?: { sounds: number[] };
 }
 export interface NoteEvent { time: number; duration: number; pitch: number; velocity: number }
 // In melody + rhythm parts the melody plays at this velocity; a melody note starting within ALIGN seconds of a
@@ -245,6 +259,20 @@ export function accompanimentEvents(kind: AccompanimentKind, part: HarmonyPart, 
   return events.map(event => ({ ...event, pitch: event.pitch + semitones })).sort((a, b) => a.time - b.time);
 }
 
+// A drum score's hits as notes for a kit: each drum is its slot (DRUM_ORDER), held as its sound rings (a cymbal
+// longest), as loud as a drummer plays it.
+export const DRUM_ORDER = ['kick', 'snare', 'tom', 'hihat', 'cymbal'] as const;
+const DRUM_PLAY: Record<string, { duration: number; velocity: number }> = {
+  kick: { duration: 0.6, velocity: 110 }, snare: { duration: 0.6, velocity: 105 }, tom: { duration: 0.8, velocity: 100 },
+  hihat: { duration: 0.3, velocity: 80 }, cymbal: { duration: 2.5, velocity: 100 },
+};
+export function drumEvents(hits: { unit: number; drum: string }[], grid: HarmonyGrid): NoteEvent[] {
+  return hits.filter(hit => DRUM_PLAY[hit.drum]).map(hit => ({
+    time: beatTime(grid.beats, hit.unit / 4), duration: DRUM_PLAY[hit.drum].duration,
+    pitch: DRUM_ORDER.indexOf(hit.drum as typeof DRUM_ORDER[number]), velocity: DRUM_PLAY[hit.drum].velocity,
+  })).sort((a, b) => a.time - b.time);
+}
+
 // The sample nearest a pitch and how fast to play it: samples are three semitones apart.
 export function sampleFor(pitches: number[], pitch: number): { index: number; rate: number } {
   let index = 0;
@@ -253,11 +281,11 @@ export function sampleFor(pitches: number[], pitch: number): { index: number; ra
 }
 
 // What to offer: the song's ranked styles and sounds (its genre's group), or a group's own order without them.
-export function offered(library: StyleLibrary, choices: AccompanimentChoices | undefined, family: Family): { styles: string[]; sounds: number[] } {
+export function offered(library: StyleLibrary, choices: AccompanimentChoices | undefined, family: SoundFamily): { styles: string[]; sounds: number[] } {
   const group = library.groups[choices?.genre ?? 'pop'] ?? library.groups.pop;
   const ranked = choices?.[family];
-  const styles = (ranked?.styles.length ? ranked.styles : group.styles).filter(name => library.styles[name]);
-  const sounds = (ranked?.sounds.length ? ranked.sounds : group[family]).filter(sound => library.sounds[String(sound)]);
+  const styles = family === 'bass' || family === 'drums' ? [] : ((choices?.[family]?.styles.length ? choices[family].styles : group.styles).filter(name => library.styles[name]));
+  const sounds = (ranked?.sounds.length ? ranked.sounds : group[family] ?? []).filter(sound => library.sounds[String(sound)]);
   // Every other sound of the family stays reachable after the group's.
   const rest = Object.entries(library.sounds).filter(([id, sound]) => sound.family === family && !sounds.includes(Number(id))).map(([id]) => Number(id));
   return { styles, sounds: [...sounds, ...rest] };

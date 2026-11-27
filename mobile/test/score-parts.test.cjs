@@ -69,3 +69,19 @@ test('a part is rendered whole: each note its sample at its pitch, started early
     sound, soundRate, small, attacks, 3, 1000);
   assert.ok(Math.abs(chord[1200] - 2 * 9 * 0.5) < 1e-6);
 });
+
+test('the bass and drum parts play from their own parts: a kit\'s drums are its slots, basses on their own pitches', () => {
+  const { parts } = load();
+  const grid = { beats: [0, 0.5, 1, 1.5, 2], firstBar: 0 };
+  const drums = { chords: [], notes: [], hits: [{ unit: 4, drum: 'snare' }, { unit: 0, drum: 'kick' }, { unit: 2, drum: 'hihat' }, { unit: 6, drum: 'cowbell' }] };
+  const played = parts.familyEvents('drums', { drums }, grid, 5);
+  // In time order, each drum its slot (kick 0, snare 1, hi-hat 3), not moved by the key; an unknown drum is left out.
+  assert.deepEqual(played.events.map(event => [event.time, event.pitch]), [[0, 0], [0.25, 3], [0.5, 1]]);
+  const bass = { chords: [], notes: [{ start: 1, end: 1.5, pitch: 40, unit: 8, length: 4, velocity: 80 }], melody: [{ start: 0, end: 1, pitch: 72, unit: 0, length: 8 }] };
+  const line = parts.familyEvents('bass', { bass }, grid, 2);
+  assert.deepEqual(line.events.map(event => event.pitch), [42], 'the bass plays its notes, moved by the key, no sung line');
+  assert.equal(parts.familyEvents('keys', { bass }, grid, 0), null, 'no Harmonic part, nothing for keys');
+  const library = { samples, sounds: {}, groups: {}, layouts: { bass: { ...samples, pitches: [24, 27] } } };
+  assert.deepEqual(parts.samplesFor(library, 'bass').pitches, [24, 27]);
+  assert.equal(parts.samplesFor(library, 'keys'), samples);
+});

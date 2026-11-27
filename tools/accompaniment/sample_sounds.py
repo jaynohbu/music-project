@@ -4,7 +4,7 @@ LICENSE file: CC0 or CC BY 3.0; see web/public/accompaniment/CREDITS.txt). Run b
     python tools/accompaniment/sample_sounds.py [cache folder]
 
 For each instrument, one recorded note is taken for every pitch the library samples (every three semitones from C2):
-the nearest sample at a strong but not loudest layer, retuned to the pitch by resampling, three seconds long with a
+the nearest sample at a strong but not loudest layer, retuned to the pitch by resampling (basses every three semitones from C1), three seconds long with a
 quarter-second fade, all notes of a sound normalised together, mono 32 kHz FLAC, as build_assets.py makes them from
 the General MIDI font. Only the samples needed are downloaded. Each sample's pitch is measured, and a library whose
 note names are an octave off (some call middle C C3, others C4, or C5) is moved to match. Writes
@@ -18,6 +18,8 @@ CACHE = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, '..', '.tools',
 OUT = os.path.join(ROOT, 'web/public/accompaniment')
 RATE = 32000
 PITCHES = list(range(36, 97, 3))
+# Basses go down to C1 (a five-string's low B is a semitone under it) and up to C5.
+BASS_PITCHES = list(range(24, 73, 3))
 NOTE_SECONDS, SLOT_SECONDS, FADE_SECONDS = 3.0, 3.5, 0.25
 NAMES = {'c': 0, 'c#': 1, 'db': 1, 'd': 2, 'd#': 3, 'eb': 3, 'e': 4, 'f': 5, 'f#': 6, 'gb': 6, 'g': 7, 'g#': 8, 'ab': 8,
          'a': 9, 'a#': 10, 'bb': 10, 'b': 11}
@@ -53,6 +55,30 @@ INSTRUMENTS = [
      r'^Samples/black/ord/twang_([a-g]#?)(\d)_(f|mf|p)_rr1\.wav$', ['mf', 'f', 'p']),
     (225, 'Spanish classical guitar', 'guitar', 'freepats/spanish-classical-guitar', 'main',
      r'^samples/([A-G]#?)(\d)\.flac$', ['']),
+    (240, 'Meatbass', 'bass', 'sfzinstruments/karoryfer.meatbass', 'master',
+     r'^Samples/pizz/([a-g][#b]?)(\d)_vl(\d)_rr1\.wav$', ['3', '2', '4', '1']),
+    (241, 'Pastabass (fettuccine)', 'bass', 'sfzinstruments/karoryfer.pastabass', 'master',
+     r'^samples/fetuccine/([a-g][#b]?)(\d)_vl(\d)_rr1\.wav$', ['3', '2', '4', '1']),
+    (242, 'Pastabass (linguine)', 'bass', 'sfzinstruments/karoryfer.pastabass', 'master',
+     r'^samples/linguine/([a-g][#b]?)(\d)_vl(\d)_rr1\.wav$', ['3', '2', '4', '1']),
+    (243, 'Fashionbass', 'bass', 'sfzinstruments/karoryfer.fashionbass', 'master',
+     r'^notes/([a-g][#b]?)(\d)_(mf|f|ff|p)_rr1\.wav$', ['mf', 'f', 'p', 'ff']),
+    (244, 'Growlybass', 'bass', 'sfzinstruments/karoryfer.growlybass', 'master',
+     r'^sustain/([a-g][#b]?)(\d)_(f|ff|p|pp)_rr1\.wav$', ['f', 'ff', 'p']),
+    (245, 'Swagbass', 'bass', 'sfzinstruments/karoryfer.swagbass', 'master',
+     r'^notes/([a-g][#b]?)(\d)_(f|fff|p)_rr1\.wav$', ['f', 'fff', 'p']),
+    (246, 'Dark Black bass guitar', 'bass', 'sfzinstruments/karoryfer.black-and-blue-basses', 'main',
+     r'^Samples/darkblack/reg/darkblack_([a-g][#b]?)(\d)_(f|mf|mp|p)_rr1\.wav$', ['mf', 'f', 'mp', 'p']),
+    (247, 'Baby Blue bass guitar', 'bass', 'sfzinstruments/karoryfer.black-and-blue-basses', 'main',
+     r'^Samples/babyblue/reg/babyblue_([a-g][#b]?)(\d)_(f|ff)_rr1\.wav$', ['f', 'ff']),
+    (248, 'Big Little bass guitar', 'bass', 'sfzinstruments/karoryfer.big-little-bass', 'main',
+     r'^Samples/big_little_pluck_([a-g][#b]?)(\d)_(f|p)_rr1\.wav$', ['f', 'p']),
+    (249, 'Pizzicato double bass', 'bass', 'sfzinstruments/dsmolken.double-bass', 'master',
+     r'^pizz/pizz_([a-g][#b]?)(\d)_(m|f|p)a\.wav$', ['m', 'f', 'p']),
+    (250, 'Synth bass', 'bass', 'freepats/synth-bass-1', 'main',
+     r'^samples/([A-G]#?)(\d)\.flac$', ['']),
+    (251, 'Lately synth bass', 'bass', 'freepats/lately-bass', 'main',
+     r'^samples/([A-G]#?)(\d)\.wav$', ['']),
 ]
 
 
@@ -129,7 +155,8 @@ def build(entry):
     offset = max(set(offsets), key=offsets.count) if offsets else 0
     samples = {midi + offset: path for midi, (_, path) in found.items()}
     slots, origins = [], []
-    for pitch in PITCHES:
+    pitches = BASS_PITCHES if family == 'bass' else PITCHES
+    for pitch in pitches:
         source = min(samples, key=lambda midi: (abs(midi - pitch), midi < pitch))
         audio, rate = fetch(repository, branch, samples[source])
         slots.append(note(audio, rate, pitch - source))
@@ -140,7 +167,7 @@ def build(entry):
     path = os.path.join(OUT, 'sounds', f'{sound}.flac')
     sf.write(path, audio, RATE, format='FLAC', subtype='PCM_16')
     print(f'sound {sound} {name}: {len(samples)} samples, octave offset {offset:+d} (measured {offsets}), '
-          f'{os.path.getsize(path) // 1024} KB; widest move {max(abs(p - s) for p, s in zip(PITCHES, [min(samples, key=lambda m: (abs(m - p), m < p)) for p in PITCHES]))} semitones',
+          f'{os.path.getsize(path) // 1024} KB; widest move {max(abs(p - s) for p, s in zip(pitches, [min(samples, key=lambda m: (abs(m - p), m < p)) for p in pitches]))} semitones',
           flush=True)
     return sound, name, family
 
@@ -152,6 +179,8 @@ def main():
     library = json.load(open(library_path))
     for sound, name, family in made:
         library['sounds'][str(sound)] = {'name': name, 'family': family}
+    # The basses' notes are laid out on their own pitches (the guitars and keys keep the library's `samples`).
+    library.setdefault('layouts', {})['bass'] = {'rate': RATE, 'pitches': BASS_PITCHES, 'slot': SLOT_SECONDS, 'length': NOTE_SECONDS}
     json.dump(library, open(library_path, 'w'), separators=(',', ':'))
     print('styles.json:', len(library['sounds']), 'sounds')
 

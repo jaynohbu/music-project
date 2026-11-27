@@ -11,7 +11,7 @@ import { ANALYSES, createAnalysisRoutes, currentAnalysis } from './analysis-api.
 import { STEM_NAMES, stemInput, UPLOAD_WINDOW_MS, STEM_WINDOW_MS } from './stem-shared.mjs';
 import { createSongDeletion, guardChildWrites, SongDeletingError } from './scene-api.mjs';
 import { checkUploadAllowed, LimitError, refundSplit, takeSplit, usage } from './stem-usage.mjs';
-import { createScoreRoutes, signedScore } from './song-score.mjs';
+import { createScoreRoutes, signedScore, signedScores } from './song-score.mjs';
 
 const db = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const s3 = new S3Client({});
@@ -44,8 +44,12 @@ export async function signedStemJob(job, signer = getSignedUrl, storage = s3) {
     }];
   })));
   // Changes when the playback files are replaced, so app caches can tell.
-  const { score, ...rest } = visible;
-  return { ...rest, stems, playVersion: visible.playVersion ?? 'wav', ...(score ? { score: await signedScore(visible, signer, storage) } : {}) };
+  const { score, partScores, ...rest } = visible;
+  return {
+    ...rest, stems, playVersion: visible.playVersion ?? 'wav', ...(score ? { score: await signedScore(visible, signer, storage) } : {}),
+    // Every score the song has, by part (the Harmonic one is also `score`, as older pages read it).
+    ...(score || partScores ? { scores: await signedScores(visible, signer, storage) } : {}),
+  };
 }
 
 export function createStemHandler({
@@ -87,8 +91,10 @@ export function createStemHandler({
         if (!id && method === 'POST') return await restorations.create({ userId, parentJobId, body, reply });
         return reply(404, { message: 'Endpoint not found.' });
       }
-      const scored = /^\/api\/stems\/jobs\/([0-9a-f-]{36})\/score(\/extracted)?$/.exec(route ?? '');
-      if (scored) return await scores({ userId, jobId: scored[1], extracted: !!scored[2], method, body, reply });
+      const scored = /^\/api\/stems\/jobs\/([0-9a-f-]{36})\/score(?:\/(bass|drums))?(\/extracted)?$/.exec(route ?? '');
+      if (scored && !(scored[2] && scored[3])) {
+        return await scores({ userId, jobId: scored[1], part: scored[2] ?? 'other', extracted: !!scored[3], method, body, reply });
+      }
       const analyzing = /^\/api\/stems\/jobs\/([0-9a-f-]{36})\/(lyrics|harmony)$/.exec(route ?? '');
       if (analyzing) {
         if (method !== 'POST') return reply(404, { message: 'Endpoint not found.' });

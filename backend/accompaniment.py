@@ -127,4 +127,14 @@ def choose(stems, beats, first_bar, title=''):
         nearest[family] = float(np.array(fingerprints[str(sounds[0])]) @ heard) if sounds else -1.0
     # The family whose closest sound is nearer the stem: what a part playing the score starts with.
     result['closest'] = max(nearest, key=nearest.get)
+    # The bass and drum scores' sounds, closest to their own stems first (the group's order without the stem).
+    for family in ('bass', 'drums'):
+        sounds = [sound for sound in group.get(family, []) if str(sound) in fingerprints]
+        if not sounds:
+            continue
+        if family in stems:
+            audio, _ = librosa.load(stems[family], sr=RATE, mono=True)
+            stem = audio_embedding(clap, clips(audio, 8)).mean(axis=0)
+            sounds.sort(key=lambda sound: -float(np.array(fingerprints[str(sound)]) @ stem))
+        result[family] = {'sounds': sounds}
     return result

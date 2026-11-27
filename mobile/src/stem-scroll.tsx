@@ -35,10 +35,10 @@ class StemScroll {
 const Context = createContext<StemScroll | null>(null);
 export const useStemScroll = () => useContext(Context);
 
-// The rails lie over the page at the screen's edges: a thin bar to see, a wider strip to touch. The mixers reach the
+// The rails lie over the page at the screen's edges: a bar to see, a wider strip to touch. The mixers reach the
 // edges underneath, and keep their controls at least EDGE in from them so a touch on a control never lands on a rail.
-const RAIL = 18, SHORTEST_THUMB = 56;
-export const EDGE = 22;
+const RAIL = 27, SHORTEST_THUMB = 64, THUMB = 12;
+export const EDGE = 28;
 const clamp = (value: number, low: number, high: number) => Math.min(Math.max(value, low), high);
 
 interface Sizes { view: number; content: number; offset: number }
@@ -144,13 +144,20 @@ function ScrollRail({ scroll, sizes, side, fade, hidden }: {
       opacity: fade.value.interpolate({ inputRange: [0, 1], outputRange: [.12, .55] }) }]} />
     {range > 0 && <Animated.View pointerEvents="none"
       style={[styles.thumb, { top: clamp(top, 0, travel), height: thumb, backgroundColor: theme.accent, borderColor: theme.onAccent,
-        opacity: fade.value.interpolate({ inputRange: [0, 1], outputRange: [.3, 1] }) }]}>
+        opacity: fade.value.interpolate({ inputRange: [0, 1], outputRange: [.45, 1] }) }]}>
+      {/* Arrows at both ends and a grip between, so the thumb reads as something to drag up and down. */}
+      <View style={[styles.arrowUp, { borderBottomColor: theme.onAccent }]} />
+      <View style={styles.grip}>
+        {[0, 1, 2].map(line => <View key={line} style={[styles.gripLine, { backgroundColor: theme.onAccent }]} />)}
+      </View>
+      <View style={[styles.arrowDown, { borderTopColor: theme.onAccent }]} />
     </Animated.View>}
   </View>;
 }
 
-// The mixer pages: a ScrollView that tells the mixer where the screen is while it scrolls, so it can open
-// the stem in view, with scroll rails on both sides in place of finger scrolling.
+// The mixer pages: a ScrollView with scroll rails on both sides. A finger scrolls the page too, from anywhere that is
+// not a control (a fader or a marker holds its touch, and while one is held the page does not move); the rails show
+// while it does.
 export function StemScrollView({ children, ...props }: ScrollViewProps & { children: ReactNode }) {
   const [scroll] = useState(() => new StemScroll());
   const [fade] = useState(() => new RailFade());
@@ -159,7 +166,10 @@ export function StemScrollView({ children, ...props }: ScrollViewProps & { child
   useEffect(() => railCover.subscribe(setHidden), []);
   return <Context.Provider value={scroll}>
     <View style={styles.frame}>
-      <ScrollView ref={view => scroll.attach(view)} scrollEventThrottle={16} {...props} scrollEnabled={false}
+      <ScrollView ref={view => scroll.attach(view)} scrollEventThrottle={16} {...props} scrollEnabled={!hidden}
+        showsVerticalScrollIndicator={false}
+        onScrollBeginDrag={event => { fade.hold(true); props.onScrollBeginDrag?.(event); }}
+        onScrollEndDrag={event => { fade.hold(false); props.onScrollEndDrag?.(event); }}
         style={[styles.page, props.style]}
         onLayout={event => {
           scroll.measure();
@@ -192,7 +202,12 @@ const styles = StyleSheet.create({
   frame: { flex: 1 },
   page: {},
   rail: { position: 'absolute', top: 0, bottom: 0, width: RAIL, alignItems: 'center' },
-  track: { position: 'absolute', top: 4, bottom: 4, width: 4, borderRadius: 2, borderWidth: StyleSheet.hairlineWidth },
-  thumb: { position: 'absolute', width: 7, borderRadius: 3.5, borderWidth: StyleSheet.hairlineWidth,
+  track: { position: 'absolute', top: 4, bottom: 4, width: 6, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth },
+  thumb: { position: 'absolute', width: THUMB, borderRadius: THUMB / 2, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center',
+    justifyContent: 'space-between', paddingVertical: 5,
     shadowColor: '#000', shadowOpacity: .35, shadowRadius: 2, shadowOffset: { width: 0, height: 1 } },
+  arrowUp: { width: 0, height: 0, borderLeftWidth: 4, borderRightWidth: 4, borderBottomWidth: 6, borderLeftColor: 'transparent', borderRightColor: 'transparent' },
+  arrowDown: { width: 0, height: 0, borderLeftWidth: 4, borderRightWidth: 4, borderTopWidth: 6, borderLeftColor: 'transparent', borderRightColor: 'transparent' },
+  grip: { gap: 2 },
+  gripLine: { width: 6, height: 1.5, borderRadius: 1, opacity: .8 },
 });

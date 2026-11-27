@@ -5,7 +5,10 @@
 // bars), the Harmonic score restored from the Harmonic and bass stems together (harmonyFromScore), and the sound of
 // the score's notes extracted from those stems (a WAV, for the spectrum page). Nothing is saved here.
 import { type Score, parseMusicXml, unrollRepeats, unzipMusicXml } from './musicxml';
-import { type AlignStem, type HarmonyDocument, type MeasureFit, alignScore, fitMeasures, harmonyFromScore, scoreMask } from './score-align';
+import {
+  type AlignStem, type DrumFit, type HarmonyDocument, type MeasureFit, type ScoreSummary, alignScore, bassFromScore, drumsFromScore,
+  fitDrumScore, fitMeasures, harmonyFromScore, scoreMask,
+} from './score-align';
 import { HOP, type Spectrogram, maskedSignal, monoSignal, spectrogramOf } from './spectrogram';
 
 export interface ScoreImport { document: HarmonyDocument; fit: MeasureFit; title: string; scores: number; musicxml: string; extracted: Blob }
@@ -37,8 +40,8 @@ export function wavFile(signal: Float32Array, rate: number): Blob {
   return new Blob([data.buffer], { type: 'audio/wav' });
 }
 
-export async function importScore({ source, stems, analysis, readPdf, progress }: {
-  source: ScoreSource;
+export async function importScore({ source, stems, analysis, readPdf, progress, fixed = false }: {
+  source: ScoreSource; fixed?: boolean;
   stems: Partial<Record<AlignStem, AudioBuffer>>;
   analysis: HarmonyDocument;
   readPdf: (file: File, pages: string) => Promise<{ mxl: Uint8Array; scores: number }>;
@@ -76,7 +79,7 @@ export async function importScore({ source, stems, analysis, readPdf, progress }
   const base = alignScore({ score: unrollRepeats(printed), spectrograms, seconds, beats: analysis.beats, intro: true, target });
   progress('Laying the score on the song measure by measure…');
   await new Promise(resolve => setTimeout(resolve, 30));
-  const fit = fitMeasures({ score: printed, spectrograms, seconds, beats: analysis.beats, target }, base, analysis.firstBar);
+  const fit = fitMeasures({ score: printed, spectrograms, seconds, beats: analysis.beats, target }, base, analysis.firstBar, fixed);
   const title = 'file' in source ? printed.title || source.file.name.replace(/\.[^.]+$/, '') : source.title || printed.title;
   const document = harmonyFromScore(analysis, fit.alignment, fit, {
     title, correctedBars: fit.corrections.bars, family: scoreFamily(printed), ...('savedAt' in source ? { scoreSavedAt: source.savedAt } : {}),
@@ -84,4 +87,71 @@ export async function importScore({ source, stems, analysis, readPdf, progress }
   progress('Extracting the score\'s notes from the Harmonic and bass stems…');
   const extracted = await maskedSignal(mixedSignal, rate, scoreMask(fit.alignment.notes, mixed.frames, rate), mixed.frames);
   return { document, fit, title, scores, musicxml: text, extracted: wavFile(extracted, rate) };
+}
+
+async function sourceText(source: ScoreSource, readPdf: (file: File, pages: string) => Promise<{ mxl: Uint8Array; scores: number }>) {
+  return 'file' in source ? (await scoreText(source.file, source.pages, readPdf)).text : source.musicxml;
+}
+const titleOf = (source: ScoreSource, score: Score) => 'file' in source ? score.title || source.file.name.replace(/\.[^.]+$/, '') : source.title || score.title;
+
+// A drum score laid on the song's drum transcription (fitDrumScore): the song's drums become the score's.
+export async function importDrumScore({ source, analysis, readPdf, progress, fixed = false }: {
+  source: ScoreSource; analysis: HarmonyDocument; fixed?: boolean;
+  readPdf: (file: File, pages: string) => Promise<{ mxl: Uint8Array; scores: number }>; progress: (message: string) => void;
+}): Promise<{ document: HarmonyDocument; summary: ScoreSummary; fit: DrumFit }> {
+  const printed = parseMusicXml(await sourceText(source, readPdf));
+  const heard = analysis.stems?.drums?.hits;
+  if (!heard?.length) throw new Error('The song\'s drums have not been found yet.');
+  progress('Laying the drum score on the song measure by measure…');
+  const fit = fitDrumScore(printed, heard, analysis.beats, analysis.firstBar, fixed);
+  return { ...drumsFromScore(analysis, fit, titleOf(source, printed), 'savedAt' in source ? source.savedAt : undefined), fit };
+}
+
+// A bass score laid on the bass stem: aligned and fitted as the Harmonic score is, with the bass stem in its place.
+export async function importBassScore({ source, stems, analysis, readPdf, progress, fixed = false }: {
+  source: ScoreSource; fixed?: boolean; stems: Partial<Record<AlignStem, AudioBuffer>>; analysis: HarmonyDocument;
+  readPdf: (file: File, pages: string) => Promise<{ mxl: Uint8Array; scores: number }>; progress: (message: string) => void;
+}): Promise<{ document: HarmonyDocument; summary: ScoreSummary; fit: MeasureFit }> {
+  const printed = parseMusicXml(await sourceText(source, readPdf));
+  if (!printed.notes.length) throw new Error('No notes were found in the bass score.');
+  if (!stems.bass) throw new Error('The bass stem is not loaded yet.');
+  const buffer = stems.bass;
+  const { signal, rate } = monoSignal(Array.from({ length: buffer.numberOfChannels }, (_, index) => buffer.getChannelData(index)), buffer.sampleRate);
+  const spectrogram = await spectrogramOf(signal, rate, share => progress(`Listening to the bass stem… ${(share * 100).toFixed(0)}%`));
+  const spectrograms = { other: spectrogram }, target = { spectrogram, stems: ['other'] as AlignStem[] };
+  const seconds = spectrogram.frames * HOP / rate;
+  progress('Finding the bass score in the song…');
+  const base = alignScore({ score: unrollRepeats(printed), spectrograms, seconds, beats: analysis.beats, intro: true, target });
+  progress('Laying the bass score on the song measure by measure…');
+  const fit = fitMeasures({ score: printed, spectrograms, seconds, beats: analysis.beats, target }, base, analysis.firstBar, fixed);
+  return { ...bassFromScore(analysis, fit, titleOf(source, printed), 'savedAt' in source ? source.savedAt : undefined), fit };
+}
+
+// The song's scores laid on it in turn: the drum score first (the drums are the song's bars), then the Harmonic
+// score, then the bass score (whose notes replace the bass line the Harmonic score gives). The first corrects the
+// drum analysis's beats; the later ones keep the grid it laid. fromScore tells of each (parts), and at its top of the first of Harmonic, bass, drums.
+export type ScorePart = 'other' | 'bass' | 'drums';
+export async function importScores({ sources, stems, analysis, readPdf, progress }: {
+  sources: Partial<Record<ScorePart, ScoreSource>>; stems: Partial<Record<AlignStem, AudioBuffer>>; analysis: HarmonyDocument;
+  readPdf: (file: File, pages: string) => Promise<{ mxl: Uint8Array; scores: number }>; progress: (message: string) => void;
+}): Promise<{ document: HarmonyDocument; parts: Partial<Record<ScorePart, ScoreSummary>>; corrections: Partial<Record<ScorePart, number>>; extracted?: Blob }> {
+  let document = analysis, extracted: Blob | undefined;
+  const parts: Partial<Record<ScorePart, ScoreSummary>> = {}, corrections: Partial<Record<ScorePart, number>> = {};
+  if (sources.drums) {
+    const laid = await importDrumScore({ source: sources.drums, analysis: document, readPdf, progress });
+    ({ document } = laid); parts.drums = laid.summary; corrections.drums = laid.fit.corrections.bars;
+  }
+  if (sources.other) {
+    const laid = await importScore({ source: sources.other, stems, analysis: document, readPdf, progress, fixed: !!parts.drums });
+    const { fromScore, ...rest } = laid.document;
+    document = rest as HarmonyDocument; parts.other = fromScore as ScoreSummary; corrections.other = laid.fit.corrections.bars;
+    extracted = laid.extracted;
+  }
+  if (sources.bass) {
+    const laid = await importBassScore({ source: sources.bass, stems, analysis: document, readPdf, progress, fixed: !!(parts.drums || parts.other) });
+    ({ document } = laid); parts.bass = laid.summary; corrections.bass = laid.fit.corrections.bars;
+  }
+  const first = parts.other ?? parts.bass ?? parts.drums;
+  if (!first) throw new Error('No score was given.');
+  return { document: { ...document, fromScore: { ...first, parts } }, parts, corrections, ...(extracted ? { extracted } : {}) };
 }

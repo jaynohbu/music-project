@@ -401,3 +401,64 @@ test('chord symbols as printed: their written kind and slash bass, and in a laid
   const chords = align.scoreChords(score, [true, true, true], quarter => quarter, 4, () => null);
   assert.deepEqual(chords.map(c => [c.start, align.chordName(c, 'B')]), [[0, 'G#m7'], [4, 'E'], [8, 'F#/A#']]);
 });
+
+// A drum part: kick on 1 and 3, snare on 2 and 4, hi-hat eighths; `bars` measures of 4/4.
+function drumXml(bars) {
+  const hit = (step, octave, duration, chord, head) => `<note>${chord ? '<chord/>' : ''}<unpitched><display-step>${step}</display-step>`
+    + `<display-octave>${octave}</display-octave></unpitched><duration>${duration}</duration>${head ? `<notehead>${head}</notehead>` : ''}</note>`;
+  let measures = '';
+  for (let bar = 0; bar < bars; bar++) {
+    let body = bar === 0 ? '<attributes><divisions>2</divisions><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>percussion</sign></clef></attributes>' : '';
+    for (let eighth = 0; eighth < 8; eighth++) {
+      body += hit('G', 5, 1, false, 'x');
+      if (eighth % 4 === 0) body += hit('F', 4, 1, true);
+      if (eighth % 4 === 2) body += hit('C', 5, 1, true);
+    }
+    measures += `<measure number="${bar + 1}">${body}</measure>`;
+  }
+  return scoreXml(`<part id="P1">${measures}</part>`, '<score-part id="P1"><part-name>Drums</part-name></score-part>');
+}
+
+test('MusicXML: a drum part\'s unpitched notes are its hits, named by where they are written (or their instrument)', () => {
+  const score = xml.parseMusicXml(drumXml(1));
+  assert.equal(score.notes.length, 0);
+  const at = drum => score.hits.filter(hit => hit.drum === drum).map(hit => hit.start);
+  assert.deepEqual(at('kick'), [0, 2]);
+  assert.deepEqual(at('snare'), [1, 3]);
+  assert.deepEqual(at('hihat'), [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]);
+  // By General MIDI key: midi-unpitched 50 is key 49, a crash.
+  const named = scoreXml('<part id="P1"><measure number="1"><attributes><divisions>1</divisions></attributes>'
+    + '<note><unpitched><display-step>E</display-step><display-octave>4</display-octave></unpitched><duration>4</duration><instrument id="I1"/></note></measure></part>',
+    '<score-part id="P1"><part-name>Drums</part-name><score-instrument id="I1"><instrument-name>Thing</instrument-name></score-instrument>'
+    + '<midi-instrument id="I1"><midi-unpitched>50</midi-unpitched></midi-instrument></score-part>');
+  assert.deepEqual(xml.parseMusicXml(named).hits.map(hit => hit.drum), ['cymbal']);
+});
+
+test('the drum analysis\'s plain mistakes are mended before a score is laid: a lost beat put back, a false one taken out', () => {
+  const even = Array.from({ length: 20 }, (_, index) => index * 0.5);
+  const lost = even.filter((_, index) => index !== 7);
+  assert.deepEqual(align.repairBeats(lost).map(time => +time.toFixed(3)), even);
+  const extra = [...even.slice(0, 12), 5.74, ...even.slice(12)];
+  assert.deepEqual(align.repairBeats(extra), even);
+  assert.deepEqual(align.repairBeats(even), even);
+});
+
+test('a drum score is laid on the drum transcription bar by bar, and a beat the analysis lost is put back where it was', () => {
+  const score = xml.parseMusicXml(drumXml(12));
+  const truth = Array.from({ length: 4 * 14 + 1 }, (_, index) => 0.3 + index * 0.5);
+  // The song's drums: the score's from its second bar (one bar of count-in first), with a beat lost in bar 6.
+  const heard = [];
+  for (let bar = 0; bar < 12; bar++) for (const hit of score.hits.filter(found => found.measure === bar)) {
+    heard.push({ unit: Math.round((4 + bar * 4 + hit.start - score.measures[bar].start) * 4), drum: hit.drum });
+  }
+  const lostAt = 4 + 5 * 4 + 2, beats = truth.filter((_, index) => index !== lostAt);
+  const fit = align.fitDrumScore(score, align.regridHits(heard, truth, beats), beats, 0);
+  assert.equal(fit.beats.length, truth.length);
+  assert.ok(fit.beats.every((time, index) => Math.abs(time - truth[index]) < 1e-6), 'the beats are the true ones again');
+  const laid = fit.placed.filter(place => place.measure !== null);
+  assert.deepEqual(laid.map(place => place.measure), [...Array(12).keys()]);
+  assert.ok(laid.every(place => Math.abs(place.start - truth[4 + place.measure * 4]) < 1e-6));
+  assert.equal(fit.corrections.missingBeats, 1);
+  assert.equal(fit.hits.length, score.hits.length);
+  assert.equal(fit.heard, score.hits.length);
+});

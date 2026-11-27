@@ -1,7 +1,7 @@
 // Plays live accompaniment parts on the mixer's AudioContext, in step with the stems. Each sound is one sampled
 // note every three semitones (public/accompaniment/sounds/<program>.flac); notes are scheduled a little ahead,
 // a quarter second at a time, from the song position the mixer is playing.
-import { type NoteEvent, type StyleLibrary, sampleFor } from './accompaniment';
+import { type NoteEvent, type StyleLibrary, sampleFor, samplesOf } from './accompaniment';
 
 const AHEAD = 0.25;      // Seconds scheduled ahead of the clock.
 const TICK_MS = 60;
@@ -182,7 +182,7 @@ export class AccompanimentVoice {
 // Notes rendered offline into one buffer `seconds` long at `rate`, in a sound of the library (a piano by default),
 // as a voice would play them: for listening to notes against the song without scheduling them live.
 export async function renderNotes(events: NoteEvent[], seconds: number, rate: number, program = 0): Promise<AudioBuffer> {
-  const { samples } = await loadLibrary();
+  const samples = samplesOf(await loadLibrary(), program);
   const context = new OfflineAudioContext(1, Math.max(1, Math.ceil(seconds * rate)), rate);
   const buffer = await loadSound(context, program);
   const sorted = [...events].sort((a, b) => a.time - b.time);

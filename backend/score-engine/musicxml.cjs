@@ -3,8 +3,8 @@
 // A score read from MusicXML (.musicxml, .xml, or compressed .mxl), as what sounds: every note's pitch (as heard,
 // so transposing instruments are moved to concert pitch), its start and length in quarter notes from the score's
 // beginning, its measure, part and staff; the measures' starts and lengths; and the chord symbols. Tied notes are
-// one note; grace notes, cue notes and unpitched (percussion) notes are left out. Repeats are not unrolled: the
-// score is read as printed. Pure functions with its own small XML reader (no DOM), so it can be unit-tested.
+// one note; grace notes and cue notes are left out. Unpitched (percussion) notes are the score's drum hits, named
+// as the drum transcription names drums. Repeats are not unrolled: the score is read as printed. Pure functions with its own small XML reader (no DOM), so it can be unit-tested.
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.parseMusicXml = parseMusicXml;
 exports.unzipMusicXml = unzipMusicXml;
@@ -68,6 +68,37 @@ const KINDS = {
     'minor-ninth': [0, 3, 7, 10, 2], 'suspended-second': [0, 2, 7], 'suspended-fourth': [0, 5, 7], power: [0, 7],
     'dominant-11th': [0, 4, 7, 10, 5], 'dominant-13th': [0, 4, 7, 10, 9], 'major-11th': [0, 4, 7, 11, 5], 'minor-11th': [0, 3, 7, 10, 5],
 };
+// A percussion note's drum: by its instrument's General MIDI key, else its instrument's name, else where it is
+// written on the staff (the usual drum-set positions: kick in the bottom space, snare on the third space, toms
+// around it, hi-hat and cymbals above the staff with cross noteheads).
+const GM_DRUMS = [[[35, 36], 'kick'], [[37, 38, 39, 40], 'snare'], [[41, 43, 45, 47, 48, 50], 'tom'],
+    [[42, 44, 46], 'hihat'], [[49, 51, 52, 53, 55, 57, 59], 'cymbal']];
+function drumOf(key, name, step, octave, cross) {
+    const byKey = key === undefined ? undefined : GM_DRUMS.find(([keys]) => keys.includes(key))?.[1];
+    if (byKey)
+        return byKey;
+    if (/kick|bass ?drum|bd\b/i.test(name))
+        return 'kick';
+    if (/hi-?hat|\bhh\b/i.test(name))
+        return 'hihat';
+    if (/cymbal|crash|ride|china|splash|bell/i.test(name))
+        return 'cymbal';
+    if (/tom/i.test(name))
+        return 'tom';
+    if (/snare|rim|stick|clap/i.test(name))
+        return 'snare';
+    const position = octave * 7 + 'CDEFGAB'.indexOf(step);
+    const at = (written) => Number(written[1]) * 7 + 'CDEFGAB'.indexOf(written[0]);
+    if (cross)
+        return position >= at('A5') || position === at('F5') ? 'cymbal' : 'hihat';
+    if (position <= at('F4'))
+        return 'kick';
+    if (position === at('C5'))
+        return 'snare';
+    if (position >= at('G5'))
+        return position === at('G5') ? 'hihat' : 'cymbal';
+    return 'tom';
+}
 function parseMusicXml(source) {
     const document = parseXml(source);
     const score = document.children.find(element => element.name === 'score-partwise');
@@ -77,11 +108,25 @@ function parseMusicXml(source) {
         throw new Error('This is not a MusicXML score.');
     }
     const title = textOf(child(score, 'work'), 'work-title') ?? textOf(score, 'movement-title') ?? '';
-    const names = new Map(children(child(score, 'part-list'), 'score-part').map(part => [part.attributes['id'], textOf(part, 'part-name') ?? '']));
+    const partList = children(child(score, 'part-list'), 'score-part');
+    const names = new Map(partList.map(part => [part.attributes['id'], textOf(part, 'part-name') ?? '']));
+    // Each percussion instrument's name and General MIDI key (midi-unpitched counts from 1).
+    const instruments = new Map();
+    for (const part of partList) {
+        for (const instrument of children(part, 'score-instrument'))
+            instruments.set(instrument.attributes['id'], { name: textOf(instrument, 'instrument-name') ?? '' });
+        for (const midi of children(part, 'midi-instrument')) {
+            const unpitched = Number(textOf(midi, 'midi-unpitched'));
+            const found = instruments.get(midi.attributes['id']);
+            if (found && unpitched > 0)
+                found.key = unpitched - 1;
+        }
+    }
     const parts = [];
     const measures = [];
     const notes = [];
     const chords = [];
+    const hits = [];
     let tempo;
     const marks = {};
     children(score, 'part').forEach((partElement, part) => {
@@ -159,6 +204,15 @@ function parseMusicXml(source) {
                         at += length;
                     }
                     furthest = Math.max(furthest, at);
+                    const unpitched = child(element, 'unpitched');
+                    if (unpitched && !child(element, 'grace') && !child(element, 'cue') && length > 0
+                        && !children(element, 'tie').some(tie => tie.attributes['type'] === 'stop')) {
+                        const instrument = instruments.get(child(element, 'instrument')?.attributes['id'] ?? '');
+                        const drum = drumOf(instrument?.key, instrument?.name ?? '', textOf(unpitched, 'display-step') ?? 'C', numberOf(unpitched, 'display-octave', 5), /x|cross|circle-x|diamond/.test(textOf(element, 'notehead') ?? ''));
+                        if (drum && !hits.some(hit => hit.drum === drum && Math.abs(hit.start - (start + noteStart)) < 1e-6)) {
+                            hits.push({ start: start + noteStart, measure: index, part, drum });
+                        }
+                    }
                     const pitch = child(element, 'pitch');
                     if (!pitch || child(element, 'grace') || child(element, 'cue') || length <= 0)
                         continue;
@@ -196,7 +250,8 @@ function parseMusicXml(source) {
         throw new Error('The score has no measures.');
     notes.sort((a, b) => a.start - b.start || a.pitch - b.pitch);
     chords.sort((a, b) => a.start - b.start);
-    return { title, parts, measures, notes, chords, tempo, ...(Object.keys(marks).length ? { marks } : {}) };
+    hits.sort((a, b) => a.start - b.start);
+    return { title, parts, measures, notes, chords, ...(hits.length ? { hits } : {}), tempo, ...(Object.keys(marks).length ? { marks } : {}) };
 }
 // The score inside a compressed MusicXML (.mxl) file: a zip whose META-INF/container.xml names the score.
 async function unzipMusicXml(bytes) {
@@ -250,6 +305,7 @@ function scoreExcerpt(score, from, to) {
         notes: score.notes.filter(note => inside(note.start))
             .map(note => ({ ...note, start: note.start - start, length: Math.min(note.length, end - note.start), measure: note.measure - (first - 1) })),
         chords: score.chords.filter(chord => inside(chord.start)).map(chord => ({ ...chord, start: chord.start - start, measure: chord.measure - (first - 1) })),
+        ...(score.hits ? { hits: score.hits.filter(hit => inside(hit.start)).map(hit => ({ ...hit, start: hit.start - start, measure: hit.measure - (first - 1) })) } : {}),
     };
 }
 // The score as played: repeats taken (a backward repeat goes back to the forward one before it, or to the start, as
@@ -323,7 +379,7 @@ function unrollRepeats(score) {
             done = true;
         index++;
     }
-    const measures = [], notes = [], chords = [];
+    const measures = [], notes = [], chords = [], hits = [];
     let at = 0;
     order.forEach((printed, played) => {
         const measure = score.measures[printed], end = measure.start + measure.length;
@@ -336,8 +392,12 @@ function unrollRepeats(score) {
             if (chord.start >= measure.start - 1e-6 && chord.start < end - 1e-6)
                 chords.push({ ...chord, start: chord.start - measure.start + at, measure: played });
         }
+        for (const hit of score.hits ?? []) {
+            if (hit.measure === printed)
+                hits.push({ ...hit, start: hit.start - measure.start + at, measure: played });
+        }
         at += measure.length;
     });
     const { marks: _, ...rest } = score;
-    return { ...rest, measures, notes, chords };
+    return { ...rest, measures, notes, chords, ...(score.hits ? { hits } : {}) };
 }

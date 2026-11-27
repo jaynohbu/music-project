@@ -31,3 +31,39 @@ Sounds 200 and up (sampled instruments)
 Sounds 0 to 127 (General MIDI)
 
   Rendered from MuseScore_General, by S. Christian Collins and MuseScore, MIT licence.
+
+Bass and drum sounds (the parts that play a song's bass and drum scores)
+
+  Meatbass, Pastabass, Fashionbass, Growlybass, Swagbass, Black and Blue basses and Big Little bass, by Karoryfer Samples;
+  Swirly drums and Big Rusty drums, by Karoryfer Samples
+    https://github.com/sfzinstruments/karoryfer.meatbass
+    https://github.com/sfzinstruments/karoryfer.pastabass
+    https://github.com/sfzinstruments/karoryfer.fashionbass
+    https://github.com/sfzinstruments/karoryfer.growlybass
+    https://github.com/sfzinstruments/karoryfer.swagbass
+    https://github.com/sfzinstruments/karoryfer.black-and-blue-basses
+    https://github.com/sfzinstruments/karoryfer.big-little-bass
+    https://github.com/sfzinstruments/karoryfer.swirly-drums
+    https://github.com/sfzinstruments/karoryfer.big-rusty-drums
+    Licence: CC0 1.0 (public domain dedication)
+
+  Double bass (pizzicato), by D. Smolken
+    https://github.com/sfzinstruments/dsmolken.double-bass
+    Licence: CC0 1.0 (public domain dedication)
+
+  Virtuosity Drums, by Versilian Studios and Karoryfer Samples
+    https://github.com/sfzinstruments/virtuosity_drums
+    Licence: CC0 1.0 (public domain dedication)
+
+  Synth Bass 1, Lately Bass and Synthesizer Percussion, by FreePats
+    https://github.com/freepats/synth-bass-1
+    https://github.com/freepats/lately-bass
+    https://github.com/freepats/synthesizer-percussion
+    Licence: CC0 1.0 (public domain dedication)
+
+  DRSKit and MuldjordKit, by DrumGizmo (sfz ports by sfzinstruments)
+    https://github.com/sfzinstruments/DrumGizmo.DRSKit
+    https://github.com/sfzinstruments/DrumGizmo.MuldjordKit
+    Licence: Creative Commons Attribution 4.0 (CC BY 4.0), https://creativecommons.org/licenses/by/4.0/
+
+  The General MIDI basses (32 to 39) and drum kits (128 to 134) are rendered from MuseScore_General, as above (MIT).

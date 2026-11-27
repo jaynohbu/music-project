@@ -1158,7 +1158,8 @@ test('a Harmonic score from an uploaded score must be a whole result on rising b
   assert.equal((await setup().call(`${parentId}/harmony`, { useAnalysis: true })).status, 409);
 });
 
-const scoreXml = '<?xml version="1.0"?><score-partwise version="4.0"><part-list/><part id="P1"/></score-partwise>';
+const scoreXml = '<?xml version="1.0"?><score-partwise version="4.0"><part-list/><part id="P1"><measure number="1"><note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration></note></measure></part></score-partwise>';
+const drumXml = '<?xml version="1.0"?><score-partwise version="4.0"><part-list/><part id="P1"><measure number="1"><note><unpitched><display-step>F</display-step><display-octave>4</display-octave></unpitched><duration>1</duration></note></measure></part></score-partwise>';
 
 test('a song keeps its own score and the sound extracted with it, removed with it', async () => {
   const { call, database, storage } = regeneration();
@@ -1220,6 +1221,54 @@ test('a song\'s score is laid on it by the stem worker: started when saved (once
   assert.deepEqual(JSON.parse(storage.objects.get(child.key)), document);
   assert.equal(storage.objects.get(`users/owner/scores/${parentId}/extracted.wav`).toString(), 'RIFFWAVE');
   assert.equal((await call(parentId, undefined, 'GET')).body.job.harmony.id, child.jobId);
+});
+
+test('a song keeps bass and drum scores too, each by part, and one run lays them all', async () => {
+  const { call, database, storage, started } = regeneration();
+  for (const name of STEM_NAMES) storage.objects.set(stemKey(name), wavFile());
+  storage.objects.set(`users/owner/harmony/${parentId}/${lyricsId}.json`, Buffer.from(JSON.stringify({ beats: [0, 0.5, 1], firstBar: 0 })));
+  // A drum score must have drums, a bass score notes.
+  assert.equal((await call(`${parentId}/score/drums`, { title: 'x', musicxml: scoreXml })).status, 400);
+  assert.equal((await call(`${parentId}/score/bass`, { title: 'x', musicxml: drumXml })).status, 400);
+  const drums = await call(`${parentId}/score/drums`, { title: 'Drums', musicxml: drumXml });
+  assert.equal(drums.status, 201);
+  assert.equal(drums.body.score.url, `https://signed/users/owner/scores/${parentId}/drums.musicxml`);
+  assert.equal(storage.objects.get(`users/owner/scores/${parentId}/drums.musicxml`).toString(), drumXml);
+  const first = database.get('owner', drums.body.harmony.id);
+  assert.deepEqual(Object.keys(first.scores), ['drums']);
+  const bass = await call(`${parentId}/score/bass`, { title: 'Bass', musicxml: scoreXml });
+  assert.equal(bass.status, 201);
+  const job = (await call(parentId, undefined, 'GET')).body.job;
+  assert.deepEqual(Object.keys(job.scores).sort(), ['bass', 'drums']);
+  assert.equal(job.score, undefined, 'no Harmonic score');
+  // The second save lays both; asking for the bass part again gives that run.
+  const child = database.get('owner', bass.body.harmony.id);
+  assert.notEqual(child.jobId, first.jobId);
+  assert.deepEqual(Object.keys(child.scores), ['bass', 'drums']);
+  assert.equal(child.scores.bass.key, `users/owner/scores/${parentId}/bass.musicxml`);
+  assert.equal((await call(`${parentId}/harmony`, { stem: 'bass' })).body.harmony.id, child.jobId);
+  assert.equal(started.length, 2);
+  const document = { beats: [0, 0.5, 1, 1.5], firstBar: 0, ensemble: { chords: [], notes: [] }, stems: {},
+    fromScore: { title: 'Bass', measures: 1, notes: 1, heard: 1, correctedBars: 0, bars: [], parts: { bass: { title: 'Bass', measures: 1, notes: 1, heard: 1, correctedBars: 0, bars: [{ number: '1', start: 0, end: 2 }] } } } };
+  const calls = [];
+  const run = async (program, args) => {
+    calls.push(args);
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(args[1], JSON.stringify(document));
+    await writeFile(args[args.indexOf('--extracted') + 1], Buffer.alloc(0));
+    return { stdout: '' };
+  };
+  await createHarmonyWorker({ database, storage, run })({ userId: 'owner', jobId: child.jobId, kind: 'harmony' });
+  const scores = calls[0].filter((_, index) => calls[0][index - 1] === '--score');
+  assert.deepEqual(scores.map(value => value.split('=')[0]), ['bass', 'drums']);
+  const done = database.get('owner', child.jobId);
+  assert.equal(done.status, 'completed');
+  assert.deepEqual(done.fromScore.parts.bass, { title: 'Bass', measures: 1, notes: 1, heard: 1, correctedBars: 0 });
+  assert.equal(storage.objects.has(`users/owner/scores/${parentId}/extracted.wav`), false, 'no Harmonic score, no extracted sound');
+  // Removing the drum score leaves the bass one.
+  assert.equal((await call(`${parentId}/score/drums`, undefined, 'DELETE')).status, 200);
+  assert.deepEqual(Object.keys(database.get('owner', parentId).partScores), ['bass']);
+  assert.equal(storage.objects.has(`users/owner/scores/${parentId}/drums.musicxml`), false);
 });
 
 test('a score saved before the song is analysed waits for the analysis', async () => {

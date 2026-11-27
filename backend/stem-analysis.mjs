@@ -75,7 +75,10 @@ function checkAccompaniment(value) {
   if (value === undefined) return true;
   const ranked = part => part && Array.isArray(part.styles) && part.styles.every(name => typeof name === 'string')
     && Array.isArray(part.sounds) && part.sounds.every(Number.isInteger);
+  // The bass and drum scores' sounds are ranked without styles.
+  const sounds = part => part === undefined || (Array.isArray(part.sounds) && part.sounds.every(Number.isInteger));
   return typeof value === 'object' && typeof value.genre === 'string' && ranked(value.guitar) && ranked(value.keys)
+    && sounds(value.bass) && sounds(value.drums)
     && (value.closest === undefined || ['guitar', 'keys'].includes(value.closest));
 }
 
@@ -115,15 +118,21 @@ const harmonyStems = child => !child.stem ? HARMONY_STEMS
 // score's notes is saved as the song's extracted sound.
 const SCORED_STEMS = ['other', 'vocals', 'bass', 'drums'];
 // What a record keeps of a result from a score: everything but where each measure is (that stays in the result).
-export const summary = ({ bars, ...rest }) => rest;
+export const summary = ({ bars: _bars, parts, ...rest }) => ({
+  ...rest, ...(parts ? { parts: Object.fromEntries(Object.entries(parts).map(([part, { bars: _, ...kept }]) => [part, kept])) } : {}),
+});
+// A run's scores by part (records from before the bass and drum scores have only the Harmonic one).
+const runScores = child => child.scores ?? (child.scoreKey ? { other: { key: child.scoreKey, title: child.scoreTitle ?? '', savedAt: child.scoreSavedAt } } : {});
 const HARMONY = {
   type: 'harmony', code: 'HARMONY',
   stems: child => child.scoreKey ? SCORED_STEMS : child.stem ? harmonyStems(child) : [...HARMONY_STEMS, 'vocals'],
   check: (value, duration, child) => child.scoreKey ? checkScoreHarmony(value) : checkHarmony(value, duration),
   program: child => child.scoreKey ? process.execPath : undefined,
   command: (files, output, child, parent) => child.scoreKey ? ['score_run.mjs', output,
-    ...SCORED_STEMS.flatMap(name => ['--stem', `${name}=${files[name]}`]), '--base', files.base, '--score', files.score,
-    '--extracted', files.extracted, '--title', child.scoreTitle ?? '', '--saved-at', child.scoreSavedAt ?? ''] : ['analyze_harmony.py', output,
+    ...SCORED_STEMS.flatMap(name => ['--stem', `${name}=${files[name]}`]), '--base', files.base,
+    ...Object.entries(runScores(child)).flatMap(([part, score]) => ['--score', `${part}=${files[`score-${part}`]}`,
+      '--title', `${part}=${score.title}`, '--saved-at', `${part}=${score.savedAt ?? ''}`]),
+    '--extracted', files.extracted] : ['analyze_harmony.py', output,
     ...harmonyStems(child).flatMap(name => ['--stem', `${name}=${files[name]}`]),
     ...(child.stem ? ['--only', child.stem, '--grid', files.base] : ['--vocals', files.vocals, '--title', parent.title ?? ''])],
   messages: {
@@ -186,7 +195,7 @@ function createAnalysisWorker(analysis, {
       }
       if (child.baseKey) await download('base', child.baseKey, 'json');
       if (child.scoreKey) {
-        await download('score', child.scoreKey, 'musicxml');
+        for (const [part, score] of Object.entries(runScores(child))) await download(`score-${part}`, score.key, 'musicxml');
         files.extracted = path.join(directory, 'extracted.wav');
       }
       stage = 'analyze';
@@ -204,17 +213,18 @@ function createAnalysisWorker(analysis, {
         Body: createReadStream(output), ContentLength: Buffer.byteLength(text),
       }));
       uploaded = true;
-      if (child.scoreKey) {
-        // The sound of the score's notes, as the song's extracted sound while this score is still the song's.
+      const harmonic = runScores(child).other;
+      if (harmonic) {
+        // The sound of the Harmonic score's notes, as the song's extracted sound while this score is still the song's.
         const wav = await readFile(files.extracted);
         await storage.send(new PutObjectCommand({
           Bucket: process.env.BUCKET_NAME, Key: extractedKey(child.userId, child.parentJobId), ContentType: 'audio/wav', Body: Readable.from([wav]), ContentLength: wav.length,
         }));
-        if (parent.score?.savedAt === child.scoreSavedAt) {
+        if (parent.score?.savedAt === harmonic.savedAt) {
           await database.send(new UpdateCommand({
             TableName: process.env.TABLE_NAME, Key: { userId: child.userId, jobId: child.parentJobId },
             UpdateExpression: 'SET #score.extractedAt = :at', ConditionExpression: '#score.savedAt = :saved AND attribute_not_exists(deleting)',
-            ExpressionAttributeNames: { '#score': 'score' }, ExpressionAttributeValues: { ':at': new Date().toISOString(), ':saved': child.scoreSavedAt },
+            ExpressionAttributeNames: { '#score': 'score' }, ExpressionAttributeValues: { ':at': new Date().toISOString(), ':saved': harmonic.savedAt },
           })).catch(error => { if (error.name !== 'ConditionalCheckFailedException') throw error; });
         }
       }

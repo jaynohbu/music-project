@@ -238,6 +238,8 @@ export interface Job {
   stems?: Partial<Record<StemName, StemFile>>;
   // The song's own score (an uploaded score's MusicXML) and the sound its notes were extracted as, when it has them.
   score?: { title: string; savedAt: string; url: string; extractedAt?: string; extractedUrl?: string };
+  // Every score the song has, by part: the Harmonic one (also `score`), the bass and the drums.
+  scores?: Partial<Record<ScorePartName, { title: string; savedAt: string; url: string }>>;
   restorations?: Restoration[];
   lyrics?: Lyrics;
   harmony?: Harmony;
@@ -266,7 +268,7 @@ export interface SceneSettings {
   accompaniment?: SceneAccompaniment[];
 }
 export interface SceneAccompaniment {
-  kind: 'guitar-rhythm' | 'keys-rhythm' | 'guitar-melody' | 'keys-melody' | 'guitar-notes' | 'keys-notes';
+  kind: 'guitar-rhythm' | 'keys-rhythm' | 'guitar-melody' | 'keys-melody' | 'guitar-notes' | 'keys-notes' | 'bass-notes' | 'drums-notes';
   style: string; sound: number; volume: number; muted: boolean;
 }
 export interface SceneEntry {
@@ -333,9 +335,12 @@ export interface RegeneratedPart extends Lyrics { resultId?: string }
 // `stale`: from an older analysis version, shown until a new run finishes. `previous`: the last finished result,
 // shown while this one runs.
 // fromScore: the Harmonic score comes from an uploaded score aligned with the stems, not from the analysis.
+export type ScorePartName = 'other' | 'bass' | 'drums';
+export interface ScoreLaid { title: string; measures: number; notes: number; heard?: number; correctedBars: number; family?: 'guitar' | 'keys'; scoreSavedAt?: string }
 export interface Harmony extends Lyrics {
   stems?: Record<string, RegeneratedPart | undefined>; stale?: boolean; previous?: Lyrics;
-  fromScore?: { title: string; measures: number; notes: number; heard?: number; correctedBars: number; family?: 'guitar' | 'keys'; scoreSavedAt?: string };
+  // parts: each score laid (results from before the bass and drum scores have the Harmonic one only, at the top).
+  fromScore?: ScoreLaid & { parts?: Partial<Record<ScorePartName, ScoreLaid>> };
   // Set while (and after) the song's score is laid on it by the server.
   scoring?: boolean;
 }
@@ -492,10 +497,10 @@ export class StemsService {
   }
 
   // The song's own score: its MusicXML saved with it, removed, and the extracted sound uploaded (backend/song-score.mjs).
-  async saveSongScore(jobId: string, title: string, musicxml: string): Promise<{ score: NonNullable<Job['score']> }> {
+  async saveSongScore(jobId: string, title: string, musicxml: string, part: ScorePartName = 'other'): Promise<{ score: NonNullable<Job['score']> }> {
     const token = await this.auth.token();
     return firstValueFrom(this.http.post<{ score: NonNullable<Job['score']> }>(
-      `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/score`, { title, musicxml },
+      `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/score${part === 'other' ? '' : `/${part}`}`, { title, musicxml },
       { headers: { Authorization: `Bearer ${token}` } }));
   }
 

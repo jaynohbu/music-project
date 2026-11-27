@@ -30,6 +30,8 @@ export interface Song {
   harmony?: Harmony;
   // The song's own score (an uploaded score's MusicXML), from which its chords & notes always come.
   score?: { title: string; savedAt: string; url: string; extractedAt?: string; extractedUrl?: string };
+  // Every score the song has, by part: the Harmonic one (also `score`), the bass and the drums.
+  scores?: Partial<Record<ScorePart, { title: string; savedAt: string; url: string }>>;
 }
 
 // Lyrics and the score are found by the API in the background; the results are JSON at signed URLs.
@@ -41,7 +43,8 @@ export interface RegeneratedPart extends Lyrics { resultId?: string }
 // `fromScore`: the result was made from the song's score; `scoring`: a run laying the score on the song.
 export interface Harmony extends Lyrics {
   stems?: Record<string, RegeneratedPart | undefined>; stale?: boolean; previous?: Lyrics;
-  fromScore?: { title: string; measures: number; notes: number; heard?: number; correctedBars: number; family?: 'guitar' | 'keys'; scoreSavedAt?: string };
+  // parts: each score laid (results from before the bass and drum scores have the Harmonic one only, at the top).
+  fromScore?: ScoreLaid & { parts?: Partial<Record<ScorePart, ScoreLaid>> };
   scoring?: boolean;
 }
 export interface LyricWord { start: number; end: number; text: string }
@@ -67,8 +70,10 @@ export const createHarmony = (jobId: string, part?: { stem: string; cleaned: boo
   request('POST', `/stems/jobs/${jobId}/harmony`, part ?? {});
 // A score saved with the song (MusicXML, or a ScoreReader reading by its id); the server lays it on the song at once
 // when the song has its analysis. laySongScore asks for that again (after the analysis, or for a newer score).
-export const saveSongScore = (jobId: string, score: { title: string; musicxml?: string; reading?: string }) =>
-  request<{ score: NonNullable<Song['score']>; harmony?: Harmony }>('POST', `/stems/jobs/${jobId}/score`, score);
+export type ScorePart = 'other' | 'bass' | 'drums';
+export interface ScoreLaid { title: string; measures: number; notes: number; heard?: number; correctedBars: number; family?: 'guitar' | 'keys'; scoreSavedAt?: string }
+export const saveSongScore = (jobId: string, score: { title: string; musicxml?: string; reading?: string }, part: ScorePart = 'other') =>
+  request<{ score: NonNullable<Song['score']>; harmony?: Harmony }>('POST', `/stems/jobs/${jobId}/score${part === 'other' ? '' : `/${part}`}`, score);
 export const laySongScore = (jobId: string) => request<{ harmony: Harmony }>('POST', `/stems/jobs/${jobId}/harmony`, { useScore: true });
 
 // A score PDF (or image) read into MusicXML by the ScoreReader (backend/score-api.mjs): uploaded as the presigned

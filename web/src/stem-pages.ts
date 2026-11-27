@@ -3,14 +3,14 @@ import { NgTemplateOutlet } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
-import { ActivityService, ENSEMBLE_STEMS, HARMONY_STEMS, HarmonyGrid, REGENERATED_STEMS, HarmonyPart, Job, LyricLine, SceneEntry, SceneSettings, STEM_NAMES, StemName, StemsService, errorMessage } from './services';
+import { ActivityService, ENSEMBLE_STEMS, HARMONY_STEMS, HarmonyGrid, REGENERATED_STEMS, HarmonyPart, Job, LyricLine, SceneEntry, SceneSettings, STEM_NAMES, type ScorePartName, StemName, StemsService, errorMessage } from './services';
 import { ConfirmationService } from './confirmation';
 import { captureSceneSettings, restoredSceneInterval } from './scene-settings';
 import { HarmonyStrip, transposeKey, transposePart } from './harmony-strip';
 import { shiftBuffer } from './pitch-shift';
 import { scoreSheet, sheetFileName } from './score-sheet';
 import {
-  type AccompanimentChoices, type Family, type StyleLibrary, accompanimentEvents, offered,
+  type AccompanimentChoices, type Family, type NoteEvent, type SoundFamily, type StyleLibrary, accompanimentEvents, drumEvents, offered, playedNotes, samplesOf,
 } from './accompaniment';
 import { AccompanimentVoice, type PlayClock, loadLibrary, loadSound, matchLoudness } from './accompaniment-player';
 import type { AlignStem, HarmonyDocument } from './score-align';
@@ -354,8 +354,15 @@ function heard(runtime: StemRuntime): { buffer: AudioBuffer; cleaned?: AudioBuff
   return runtime.shifted ?? { buffer: runtime.buffer, cleaned: runtime.cleanedBuffer };
 }
 
-// The voices of the Harmonic track's score parts.
-const SCORE_VOICES: Record<Family, number> = { guitar: 0, keys: -1 };
+// The parts that play the song's scores, each a channel of its own under the stem whose score it plays: the Harmonic
+// score on guitar and on keys, the bass score on a bass, the drum score on a kit; and their voices.
+interface ScoreFamily { name: SoundFamily; channel: string; label: string; stem: 'other' | 'bass' | 'drums' }
+const SCORE_FAMILIES: ScoreFamily[] = [
+  { name: 'guitar', channel: 'guitar', label: 'Guitar', stem: 'other' }, { name: 'keys', channel: 'keys', label: 'Keys', stem: 'other' },
+  { name: 'bass', channel: 'bass-notes', label: 'Bass (score)', stem: 'bass' }, { name: 'drums', channel: 'drums-notes', label: 'Drums (score)', stem: 'drums' },
+];
+const SCORE_VOICES: Record<SoundFamily, number> = { guitar: 0, keys: -1, bass: -2, drums: -3 };
+const familyOfChannel = (channel: string) => SCORE_FAMILIES.find(family => family.channel === channel);
 // About how long a score takes: the reader's time a page, and laying it on the song on the server (a worker
 // starting, the stems fetched, every stem's spectrogram).
 const PAGE_SECONDS = 22, LAYING_SECONDS = 180;
@@ -369,7 +376,7 @@ async function pageCount(file: File): Promise<number> {
 interface ScorePart { sound: number }
 
 // A score part's channel: a mixer like a stem's, muted to begin with.
-function scoreTrack(name: Family, label: string): StemTrack {
+function scoreTrack(name: string, label: string): StemTrack {
   return {
     name, label, ...defaultEffects(), muted: true, solo: false, bypassed: false, status: 'ready',
     peaks: [], cleanedPeaks: [], duration: 0, hasCleaned: false, useCleaned: false,
@@ -462,13 +469,13 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                   @if (track.name === 'other' && job()?.status === 'completed') {
                     <a class="button-link secondary" [routerLink]="['/spectrum', job()!.jobId]"
                       [attr.aria-label]="'See the ' + track.label + ' waveform and spectrogram on their own page'">Waveform & spectrum</a>
-                    @if (harmonyGrid()) {
-                      <label class="button-link secondary score-upload" [class.disabled]="!!scoreImportStatus() || !canPlay()">Upload score
-                        <input type="file" accept=".pdf,.png,.jpg,.jpeg,.musicxml,.xml,.mxl,application/pdf"
-                          (change)="uploadScore($event)" [disabled]="!!scoreImportStatus() || !canPlay()"
-                          aria-label="Upload a score (PDF or MusicXML) to be the Harmonic score">
-                      </label>
-                    }
+                  }
+                  @if (isScored(track.name) && job()?.status === 'completed' && harmonyGrid()) {
+                    <label class="button-link secondary score-upload" [class.disabled]="!!scoreImportStatus() || !canPlay()">Upload score
+                      <input type="file" accept=".pdf,.png,.jpg,.jpeg,.musicxml,.xml,.mxl,application/pdf"
+                        (change)="uploadScore($event, track.name)" [disabled]="!!scoreImportStatus() || !canPlay()"
+                        [attr.aria-label]="'Upload a score (PDF or MusicXML) to be the ' + track.label + ' score'">
+                    </label>
                   }
                   @if (track.name === 'vocals' && !lyricLines()) {
                     @if (findingLyrics()) {
@@ -484,7 +491,7 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                     @if (findingChords()) {
                       <button type="button" class="secondary" disabled>Finding notes...</button>
                     } @else {
-                      <button type="button" class="secondary" (click)="track.name === 'drums' ? findChords() : chordsAndNotes()" [disabled]="!canPlay()"
+                      <button type="button" class="secondary" (click)="chordsAndNotes(track)" [disabled]="!canPlay()"
                         aria-label="Find the chords and notes for the Harmonic and bass stems, and the drum score">{{ track.name === 'drums' ? 'Drum score' : 'Chords & notes' }}</button>
                     }
                   }
@@ -525,7 +532,7 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                 @if (track.name === 'vocals' && lyricsFailure()) { <span class="error">{{ lyricsFailure() }}</span> }
                 @if (isHarmonic(track.name) && chordsFailure()) { <span class="error">{{ chordsFailure() }}</span> }
                 @if (isHarmonic(track.name) && partFailure(track.name)) { <span class="error">{{ partFailure(track.name) }}</span> }
-                @if (track.name === 'other') {
+                @if (track.name === scoreImportPart()) {
                   @if (scoreImportStatus() || scoring()) { <span class="hint" role="status">{{ scoreImportStatus() || 'Processing… about ' + layingMinutes + ' min' }}</span> }
                   @if (scoreImportError()) { <span class="error" role="alert">{{ scoreImportError() }}</span> }
                 }
@@ -547,10 +554,10 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                   <!-- The ensemble (other) is written at concert pitch on a treble staff. -->
                   <app-harmony-strip [part]="parts[track.name]" [stem]="track.name" [grid]="harmonyGrid()!" [time]="position()"
                     [songKey]="heardKey()"></app-harmony-strip>
-                  @if (track.name === 'other') {
-                    <!-- The score played on guitar and on keys: each a channel of its own, with its sound and its mixer. -->
-                    <div class="score-parts" role="group" aria-label="The Harmonic score played">
-                      @for (part of scoreTracks(); track part.name) {
+                  @if (isScored(track.name)) {
+                    <!-- The score played (the Harmonic one on guitar and on keys): each a channel of its own, with its sound and its mixer. -->
+                    <div class="score-parts" role="group" [attr.aria-label]="'The ' + track.label + ' score played'">
+                      @for (part of scoreTracksFor(track.name); track part.name) {
                         <section class="mixing-console score-console" [attr.aria-label]="part.label + ' mixer'">
                           <div class="score-part">
                             <strong>{{ part.label }}</strong>
@@ -879,15 +886,17 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   private readonly voices = new Map<number, AccompanimentVoice>();
   // The Harmonic score played on guitar and on keys (voices SCORE_VOICES): each a channel of its own, with its sound
   // and the same mixer as a stem (scoreTracks, scoreRuntimes), muted until asked for.
-  readonly scoreFamilies: { name: Family; label: string }[] = [{ name: 'guitar', label: 'Guitar' }, { name: 'keys', label: 'Keys' }];
-  readonly scoreParts = signal<Partial<Record<Family, ScorePart>>>({});
+  readonly scoreFamilies = SCORE_FAMILIES;
+  readonly scoreParts = signal<Partial<Record<SoundFamily, ScorePart>>>({});
   readonly scoreTracks = signal<StemTrack[]>([]);
   private readonly scoreRuntimes = new Map<string, StemEffects>();
   readonly scoreImportStatus = signal('');
+  // The stem whose score is being uploaded or laid (its status shows there).
+  readonly scoreImportPart = signal<string>('other');
   readonly scoreImportError = signal('');
   private harmonyDocument?: HarmonyDocument;
   // The score part's level at which it is as loud as the Harmonic stem (matchLoudness): Volume 100% is that.
-  private scoreGains: Partial<Record<Family, number>> = {};
+  private scoreGains: Partial<Record<SoundFamily, number>> = {};
   // Key change in semitones, as in the app: −6 to +6.
   readonly maxTranspose = MAX_TRANSPOSE;
   readonly transpose = signal(0);
@@ -954,9 +963,9 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     // The Harmonic score part, kept as the scene's one played part: its instrument and sound, and (as its style word)
     // whether the track plays the stem, the score or both.
     const parts = this.scoreParts();
-    const accompaniment = this.scoreFamilies.flatMap(({ name }) => {
-      const played = parts[name], channel = this.channel(name);
-      return played && channel ? [{ kind: name === 'guitar' ? 'guitar-notes' as const : 'keys-notes' as const, style: 'score', sound: played.sound, volume: channel.volume, muted: channel.muted }] : [];
+    const accompaniment = this.scoreFamilies.flatMap(({ name, channel: channelName }) => {
+      const played = parts[name], channel = this.channel(channelName);
+      return played && channel ? [{ kind: `${name}-notes` as const, style: 'score', sound: played.sound, volume: channel.volume, muted: channel.muted }] : [];
     });
     return { ...settings, ...(live ? { live } : {}), transpose: this.transpose(), ...(accompaniment.length ? { accompaniment } : {}) };
   }
@@ -1162,27 +1171,37 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
 
   isHarmonic(name: string): boolean { return HARMONY_STEMS.includes(name); }
 
-  scoreSounds(family: string): number[] {
-    if (family !== 'guitar' && family !== 'keys') return [];
-    const library = this.accompanimentLibrary();
-    return library ? offered(library, this.accompanimentChoices(), family).sounds : [];
+  // The stems with a score of their own (uploaded, and played by a part).
+  isScored(name: string): boolean { return name === 'other' || name === 'bass' || name === 'drums'; }
+  scoreTracksFor(stem: string): StemTrack[] {
+    return this.scoreTracks().filter(track => familyOfChannel(track.name)?.stem === stem);
   }
 
-  scoreSound(family: string): number | undefined {
-    return family === 'guitar' || family === 'keys' ? this.scoreParts()[family]?.sound : undefined;
+  scoreSounds(channel: string): number[] {
+    const family = familyOfChannel(channel), library = this.accompanimentLibrary();
+    return family && library ? offered(library, this.accompanimentChoices(), family.name).sounds : [];
   }
 
-  changeScoreSound(family: string, sound: number): void {
-    if (family !== 'guitar' && family !== 'keys') return;
-    this.scoreParts.update(parts => ({ ...parts, [family]: { sound } }));
-    void this.prepareScorePart(family);
+  scoreSound(channel: string): number | undefined {
+    const family = familyOfChannel(channel);
+    return family ? this.scoreParts()[family.name]?.sound : undefined;
   }
 
-  // The score's notes for both parts in the current key, each in its sound (the closest to begin with) and as loud
-  // through the song as the Harmonic stem plays (matchLoudness), handed to its voice in the Harmonic track.
-  private async prepareScorePart(only?: Family): Promise<void> {
-    const score = this.harmonyParts()?.['other'], grid = this.harmonyGrid();
-    if (!score || !grid) return;
+  changeScoreSound(channel: string, sound: number): void {
+    const family = familyOfChannel(channel);
+    if (!family) return;
+    this.scoreParts.update(parts => ({ ...parts, [family.name]: { sound } }));
+    void this.prepareScorePart(family.name);
+  }
+
+  // The notes each score part plays, in the current key, each in its sound (the closest to begin with) and as loud
+  // through the song as its stem plays (matchLoudness), handed to its voice: the Harmonic score on guitar and keys
+  // (its every note, its melody among them), the bass part on a bass, the drum part's hits on a kit.
+  private async prepareScorePart(only?: SoundFamily): Promise<void> {
+    const parts = this.harmonyParts(), grid = this.harmonyGrid();
+    if (!parts || !grid) return;
+    const present = this.scoreFamilies.filter(family => family.stem === 'drums' ? !!parts['drums']?.hits?.length : !!parts[family.stem]?.notes?.length);
+    if (!present.length) return;
     let library = this.accompanimentLibrary();
     if (!library) {
       try { library = await loadLibrary(); } catch (error) {
@@ -1191,38 +1210,46 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
       }
       this.accompanimentLibrary.set(library);
     }
-    for (const { name, label } of this.scoreFamilies) {
+    for (const { name, channel, label } of present) {
       if (!this.scoreParts()[name]) {
         const sound = offered(library, this.accompanimentChoices(), name).sounds[0];
-        this.scoreParts.update(parts => ({ ...parts, [name]: { sound } }));
+        if (sound === undefined) continue;
+        this.scoreParts.update(played => ({ ...played, [name]: { sound } }));
       }
-      if (!this.channel(name)) this.scoreTracks.update(tracks => [...tracks, scoreTrack(name, label)]);
+      if (!this.channel(channel)) this.scoreTracks.update(tracks => [...tracks, scoreTrack(channel, label)]);
     }
-    // The choices show as soon as the score is here; the sounds load once the Harmonic stem is here to match.
-    const harmonic = this.runtimes.get('other');
-    if (!this.context || !this.master || !harmonic) return;
-    for (const { name } of this.scoreFamilies) {
-      if (this.scoreRuntimes.has(name)) continue;
+    // The choices show as soon as the score is here; the sounds load once the stems are here to match.
+    if (!this.context || !this.master) return;
+    for (const { name, channel } of present) {
+      if (!this.scoreParts()[name] || this.scoreRuntimes.has(channel)) continue;
       const effects = createStemEffects(this.context, this.master);
       effects.transport.gain.value = this.playing() ? 1 : 0;
-      this.scoreRuntimes.set(name, effects);
-      this.applyTrackSettings(this.channel(name)!, effects);
+      this.scoreRuntimes.set(channel, effects);
+      this.applyTrackSettings(this.channel(channel)!, effects);
     }
-    const families = only ? [only] : this.scoreFamilies.map(family => family.name);
-    await Promise.all(families.map(async family => {
-      const played = this.scoreParts()[family]!;
-      if (!this.voices.has(SCORE_VOICES[family])) this.voices.set(SCORE_VOICES[family], new AccompanimentVoice(this.context!, this.scoreRuntimes.get(family)!.input));
+    const families = present.filter(family => (!only || family.name === only) && this.scoreParts()[family.name] && this.runtimes.get(family.stem));
+    await Promise.all(families.map(async ({ name: family, channel, stem }) => {
+      const played = this.scoreParts()[family]!, reference = this.runtimes.get(stem)!;
+      if (!this.voices.has(SCORE_VOICES[family])) this.voices.set(SCORE_VOICES[family], new AccompanimentVoice(this.context!, this.scoreRuntimes.get(channel)!.input));
       const voice = this.voices.get(SCORE_VOICES[family])!;
       try {
         const buffer = await loadSound(this.context!, played.sound);
-        // Every note of the score, its melody among them, as written and played; the melody (which the stem does
-        // not have) moves with the notes the stem plays.
-        const kind = `${family}-notes` as const;
-        const all = accompanimentEvents(kind, score, grid, [], this.transpose());
-        const matched = await matchLoudness(all, accompanimentEvents(kind, { ...score, melody: undefined }, grid, [], this.transpose()), harmonic.buffer, played.sound);
+        let all: NoteEvent[], measured: NoteEvent[];
+        if (stem === 'other') {
+          // Every note of the score, its melody among them, as written and played; the melody (which the stem does
+          // not have) moves with the notes the stem plays.
+          const kind = `${family as Family}-notes` as const, score = parts['other'];
+          all = accompanimentEvents(kind, score, grid, [], this.transpose());
+          measured = accompanimentEvents(kind, { ...score, melody: undefined }, grid, [], this.transpose());
+        } else if (stem === 'bass') {
+          all = measured = playedNotes(parts['bass'].notes).map(event => ({ ...event, pitch: event.pitch + this.transpose() })).sort((a, b) => a.time - b.time);
+        } else {
+          all = measured = drumEvents(parts['drums'].hits ?? [], grid);
+        }
+        const matched = await matchLoudness(all, measured, reference.buffer, played.sound);
         if (this.scoreParts()[family]?.sound !== played.sound) return;
         this.scoreGains[family] = matched.gain;
-        voice.setNotes(matched.events, buffer, library!.samples, this.playing() ? this.playClock() : undefined);
+        voice.setNotes(matched.events, buffer, samplesOf(library!, played.sound), this.playing() ? this.playClock() : undefined);
         this.applyAccompanimentLevels();
       } catch (error) {
         this.scoreImportError.set(`Could not load the sound: ${errorMessage(error)}`);
@@ -1230,31 +1257,38 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     }));
   }
 
-  // Chords & notes for the Harmonic part. A song with its own score always takes them from it; otherwise the page
-  // asks whether there is a score: one is uploaded and used, or they are found from the audio as before.
+  // A part's notes (chords & notes for the Harmonic and bass stems, the drum score for the drums). A song with its
+  // own score for the part always takes them from it; otherwise the page asks whether there is a score: one is
+  // uploaded and used, or they are found from the audio as before.
   async chordsAndNotes(track?: StemTrack): Promise<void> {
     if (this.scoreBusy) return;
-    if (this.job()?.score) { void this.applySavedScore(true); return; }
-    const choice = await this.confirm.choose('Chords & notes',
-      'Do you have a score of this song (a PDF, or MusicXML)? With one, the chords and notes are taken from it, laid on the song and checked against the stems; notes it does not have are left out. Without one, they are found from the audio.',
+    const part = (track && this.isScored(track.name) ? track.name : 'other') as ScorePartName;
+    if (this.job()?.scores?.[part] || (part === 'other' && this.job()?.score)) { void this.applySavedScore(true); return; }
+    const what = part === 'drums' ? 'the drum score is' : 'the chords and notes are';
+    const choice = await this.confirm.choose(part === 'drums' ? 'Drum score' : 'Chords & notes',
+      `Do you have a score of this ${part === 'drums' ? 'drum part' : part === 'bass' ? 'bass part' : 'song'} (a PDF, or MusicXML)? With one, ${what} taken from it, laid on the song and checked against the stems; what it does not have is left out. Without one, ${part === 'drums' ? 'it is' : 'they are'} found from the audio.`,
       'Upload a score', 'Find them from the audio');
-    if (choice === 'action') this.scoreFile?.nativeElement.click();
+    if (choice === 'action') { this.scoreFilePart = part; this.scoreFile?.nativeElement.click(); }
     else if (choice === 'alternative') {
       if (!this.harmonyParts()) await this.findChords();
       else if (track) await this.regenerateFromAudio(track);
     }
   }
+  private scoreFilePart: ScorePartName = 'other';
 
   @ViewChild('scoreFile') private scoreFile?: ElementRef<HTMLInputElement>;
 
   // An uploaded score becomes the song's own score (saved with it), and its chords & notes are made from it at once,
   // or, when the song has no beats yet, as soon as its chords and beats have been found.
-  async uploadScore(event: Event): Promise<void> {
+  async uploadScore(event: Event, stem?: string): Promise<void> {
     const input = event.target as HTMLInputElement, file = input.files?.[0];
     input.value = '';
     if (!file || this.scoreBusy) return;
+    const part = (stem && this.isScored(stem) ? stem : this.scoreFilePart) as ScorePartName;
+    this.scoreFilePart = 'other';
     const generation = this.generation;
     this.scoreBusy = true;
+    this.scoreImportPart.set(part);
     this.scoreImportError.set('');
     // Only that it is working, and about how long: reading takes about PAGE_SECONDS a page, laying it on the song
     // on the server about LAYING_SECONDS.
@@ -1266,7 +1300,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
       if (scores > 1) this.scoreImportError.set(`The score was read as ${scores} separate pieces; the first is used.`);
       const title = /<work-title>([^<]*)<\/work-title>/.exec(text)?.[1]?.trim() || file.name.replace(/\.[^.]+$/, '');
       // Saved with the song; the server lays it on the song at once (or right after the song's analysis).
-      await this.stems.saveSongScore(this.jobId, title, text);
+      await this.stems.saveSongScore(this.jobId, title, text, part);
       if (this.destroyed || generation !== this.generation) return;
       if (!this.harmonyDocument && !this.findingChords()) await this.findChords();
       await this.refreshJob(generation);
@@ -1295,10 +1329,16 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   private appliedScore?: string;
   private scoreBusy = false;
   async applySavedScore(force = false): Promise<void> {
-    const job = this.job(), score = job?.score, harmony = job?.harmony;
-    if (!score || !harmony || harmony.status !== 'completed' || this.scoreBusy) return;
-    if (!force && (this.appliedScore === score.savedAt || harmony.fromScore?.scoreSavedAt === score.savedAt)) return;
-    this.appliedScore = score.savedAt;
+    const job = this.job(), harmony = job?.harmony;
+    const scores = { ...(job?.score ? { other: job.score } : {}), ...job?.scores };
+    const names = Object.keys(scores) as ScorePartName[];
+    if (!names.length || !harmony || harmony.status !== 'completed' || this.scoreBusy) return;
+    // Laid already: each score's saving time is in the result (an older result names the Harmonic one at its top).
+    const laid = (part: ScorePartName) => (harmony.fromScore?.parts?.[part]?.scoreSavedAt
+      ?? (part === 'other' ? harmony.fromScore?.scoreSavedAt : undefined)) === scores[part]!.savedAt;
+    const signature = names.map(part => `${part}:${scores[part]!.savedAt}`).join(' ');
+    if (!force && (this.appliedScore === signature || names.every(laid))) return;
+    this.appliedScore = signature;
     const generation = this.generation;
     try {
       await this.stems.useSongScore(this.jobId);
@@ -1513,7 +1553,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   // Regenerating the Harmonic part asks for a score first (or uses the song's own); the bass and drums are found
   // from the audio again.
   async regenerate(track: StemTrack): Promise<void> {
-    if (track.name === 'other') return this.chordsAndNotes(track);
+    if (this.isScored(track.name)) return this.chordsAndNotes(track);
     return this.regenerateFromAudio(track);
   }
 
@@ -1550,7 +1590,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
         const { stems } = await response.json() as { stems: Record<string, HarmonyPart> };
         if (!this.destroyed && generation === this.generation) {
           this.harmonyParts.update(current => current && { ...current, [name]: stems[name] });
-          if (name === 'other') void this.prepareScorePart();
+          if (this.isScored(name)) void this.prepareScorePart();
         }
       } catch (error) {
         this.loadedParts.delete(name);
@@ -2086,12 +2126,12 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
       // another kind start the score part on their instrument).
       const savedParts = this.sceneEntry?.settings?.accompaniment ?? [];
       if (savedParts.length) {
-        const parts: Partial<Record<Family, ScorePart>> = {}, channels: StemTrack[] = [];
+        const parts: Partial<Record<SoundFamily, ScorePart>> = {}, channels: StemTrack[] = [];
         for (const saved of savedParts) {
-          const family: Family = saved.kind.startsWith('guitar') ? 'guitar' : 'keys';
-          if (parts[family]) continue;
-          parts[family] = { sound: saved.sound };
-          channels.push({ ...scoreTrack(family, family === 'guitar' ? 'Guitar' : 'Keys'), volume: saved.volume, muted: saved.muted });
+          const family = SCORE_FAMILIES.find(found => saved.kind.startsWith(found.name))!;
+          if (parts[family.name]) continue;
+          parts[family.name] = { sound: saved.sound };
+          channels.push({ ...scoreTrack(family.channel, family.label), volume: saved.volume, muted: saved.muted });
         }
         this.scoreParts.set(parts);
         this.scoreTracks.set(channels);

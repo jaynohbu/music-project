@@ -1,26 +1,35 @@
-// The Harmonic score played on guitar and on keys, as the website's mixer plays it (web/src/accompaniment-player.ts):
-// every note of the score (its sung line among them) in a sampled sound from the website's library — one note every
-// three semitones, read faster or slower for the notes between — started early by the sound's own attack, and as
-// loud through the song as the Harmonic stem (whose loudness comes with a result made from a score). Each part is
-// rendered whole and played as one source with the stems (player.ts).
+// The song's scores played, as the website's mixer plays them (web/src/accompaniment-player.ts): the Harmonic score
+// on guitar and on keys (every note, its sung line among them), the bass part on a bass, the drum part on a kit, each
+// in a sampled sound from the website's library — one note every three semitones, read faster or slower for the
+// notes between (a kit: one hit of each drum) — started early by the sound's own attack, and as loud through the song
+// as its stem (whose loudness comes with a result made from a score). Each part is rendered whole and played as one
+// source with the stems (player.ts).
 import { Directory, File, Paths } from 'expo-file-system';
 import type { AudioBuffer, AudioContext } from 'react-native-audio-api';
-import type { HarmonyNote, HarmonyPart } from './api';
+import type { HarmonyGrid, HarmonyNote, HarmonyPart } from './api';
 
-export type Family = 'guitar' | 'keys';
-export const SCORE_FAMILIES: readonly Family[] = ['guitar', 'keys'];
+export type Family = 'guitar' | 'keys' | 'bass' | 'drums';
+export const SCORE_FAMILIES: readonly Family[] = ['guitar', 'keys', 'bass', 'drums'];
+// The stem whose score each family plays.
+export const FAMILY_STEM: Record<Family, 'other' | 'bass' | 'drums'> = { guitar: 'other', keys: 'other', bass: 'bass', drums: 'drums' };
 const LIBRARY_URL = 'https://tunesbasis.com/accompaniment';
 
 export interface Samples { rate: number; pitches: number[]; slot: number; length: number }
 export interface SoundLibrary {
-  groups: Record<string, { styles: string[]; guitar: number[]; keys: number[] }>;
+  groups: Record<string, Partial<Record<Family, number[]>> & { styles: string[] }>;
   sounds: Record<string, { name: string; family: Family }>;
   samples: Samples;
+  // The basses' notes are on lower pitches; a kit's slots are its drums (DRUM_ORDER), pitch i being drum i.
+  layouts?: Partial<Record<'bass' | 'drums', Samples>>;
 }
+// Where a family's notes are in its sounds' samples.
+export const samplesFor = (library: SoundLibrary, family: Family): Samples =>
+  (family === 'bass' || family === 'drums' ? library.layouts?.[family] : undefined) ?? library.samples;
 // The song's analysis's choice of sounds for it, closest first (backend/accompaniment.py).
-export interface SoundChoices { genre: string; closest?: Family; guitar?: { sounds: number[] }; keys?: { sounds: number[] } }
+export type SoundChoices = { genre: string; closest?: 'guitar' | 'keys' } & Partial<Record<Family, { sounds: number[] }>>;
 export interface NoteEvent { time: number; duration: number; pitch: number; velocity: number }
-export interface Loudness { window: number; other: number[] }
+// The stems' loudness every `window` seconds (the bass and drums with results from 2026-11-28 on).
+export interface Loudness { window: number; other: number[]; bass?: number[]; drums?: number[] }
 
 let library: Promise<SoundLibrary> | undefined;
 export function loadLibrary(): Promise<SoundLibrary> {
@@ -61,6 +70,38 @@ export function scoreEvents(part: HarmonyPart, semitones: number, melody = true)
   return [...part.notes, ...(melody ? part.melody ?? [] : [])].map(note => ({
     time: note.start, duration: Math.max(0.05, note.end - note.start), pitch: note.pitch + semitones, velocity: velocityOf(note),
   })).sort((a, b) => a.time - b.time);
+}
+
+// A drum part's hits as notes for a kit: each drum is its slot, held as its sound rings (a cymbal longest), as loud
+// as a drummer plays it (as the website's drumEvents).
+export const DRUM_ORDER = ['kick', 'snare', 'tom', 'hihat', 'cymbal'] as const;
+const DRUM_PLAY: Record<string, { duration: number; velocity: number }> = {
+  kick: { duration: 0.6, velocity: 110 }, snare: { duration: 0.6, velocity: 105 }, tom: { duration: 0.8, velocity: 100 },
+  hihat: { duration: 0.3, velocity: 80 }, cymbal: { duration: 2.5, velocity: 100 },
+};
+const beatTime = (beats: number[], beat: number) => {
+  const index = Math.max(0, Math.min(beats.length - 2, Math.floor(beat)));
+  return beats[index] + (beat - index) * (beats[index + 1] - beats[index]);
+};
+export function drumEvents(part: HarmonyPart, grid: HarmonyGrid): NoteEvent[] {
+  return (part.hits ?? []).filter(hit => DRUM_PLAY[hit.drum]).map(hit => ({
+    time: beatTime(grid.beats, hit.unit / 4), duration: DRUM_PLAY[hit.drum].duration,
+    pitch: DRUM_ORDER.indexOf(hit.drum as typeof DRUM_ORDER[number]), velocity: DRUM_PLAY[hit.drum].velocity,
+  })).sort((a, b) => a.time - b.time);
+}
+// The notes a family plays from the song's parts (none when its part is missing), and the ones its stem has, for
+// matching its loudness (the Harmonic stem does not have the sung line).
+export function familyEvents(family: Family, parts: Partial<Record<string, HarmonyPart>>, grid: HarmonyGrid, semitones: number):
+  { events: NoteEvent[]; measured: NoteEvent[] } | null {
+  const part = parts[FAMILY_STEM[family]];
+  if (!part) return null;
+  if (family === 'drums') {
+    const events = drumEvents(part, grid);
+    return events.length ? { events, measured: events } : null;
+  }
+  if (!part.notes.length) return null;
+  return family === 'bass' ? { events: scoreEvents(part, semitones, false), measured: scoreEvents(part, semitones, false) }
+    : { events: scoreEvents(part, semitones), measured: scoreEvents(part, semitones, false) };
 }
 
 // Per sample: seconds until it is heard (its level, a 10 ms running mean, first reaches half its peak in its first
@@ -115,7 +156,7 @@ const LEVEL = 0.5, MOST_LEAD = 0.25;
 // The part's level at which it is as loud as the Harmonic stem, and its notes' velocities moved to follow the
 // stem's loudness: the part's loudness is reckoned from its samples' levels (the notes the stem has, not the sung
 // line), each note sounding its sample's level curve from its start for its length.
-export function matchLoudness(events: NoteEvent[], measured: NoteEvent[], loudness: Loudness, samples: Samples, levels: number[][]):
+export function matchLoudness(events: NoteEvent[], measured: NoteEvent[], loudness: { window: number; other: number[] }, samples: Samples, levels: number[][]):
   { events: NoteEvent[]; gain: number } {
   const window = loudness.window, energy = new Array(loudness.other.length).fill(0);
   for (const event of measured) {

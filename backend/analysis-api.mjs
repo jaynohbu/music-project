@@ -6,7 +6,7 @@ import { StartExecutionCommand } from '@aws-sdk/client-sfn';
 import { failedHistoryExpired, failureRetention, visibleJob } from './shared.mjs';
 import { childRecords } from './restoration-api.mjs';
 import { checkLyrics, checkScoreHarmony, summary } from './stem-analysis.mjs';
-import { scoreKey } from './song-score.mjs';
+import { SCORE_PARTS, scoreKey, songScores } from './song-score.mjs';
 
 export { checkScoreHarmony };
 import { STEM_WINDOW_MS } from './stem-shared.mjs';
@@ -161,19 +161,25 @@ export function createAnalysisRoutes({ database, storage, orchestrator, signer }
   // The song's chords & notes from its own score, laid on its stems by the stem worker (score_run.mjs) over its
   // last analysed result; null when there is none yet (the analysis comes first, then this). A run for the same
   // score already going is returned instead of a second; so is the result when it is already from this score.
+  // Every score the song has is laid in the one run (score_run.mjs: drums, then Harmonic, then bass); a run is the
+  // same as another when it lays the same saved scores (scoreSavedAt names them all).
   async function startScored({ userId, parent }) {
+    const owned = songScores(parent), parts = SCORE_PARTS.filter(part => owned[part]);
+    if (!parts.length) return null;
     const records = await visibleRecords('harmony', parent, database);
     const whole = records.filter(record => !record.stem);
     const analysed = whole.find(record => record.status === 'completed' && !record.fromScore && !record.scoreKey && record.key);
     if (!analysed) return null;
-    const same = whole.find(record => record.scoreSavedAt === parent.score.savedAt && record.status !== 'failed');
+    const savedAt = parts.length === 1 && parts[0] === 'other' ? owned.other.savedAt : parts.map(part => `${part}:${owned[part].savedAt}`).join(' ');
+    const same = whole.find(record => record.scoreSavedAt === savedAt && record.status !== 'failed');
     if (same) return publicAnalysis(same, signer, storage);
     const now = Date.now(), id = randomUUID();
     const newest = whole[0]?.generatedAt;
     const child = {
       userId, jobId: id, type: 'harmony', parentJobId: parent.jobId, status: 'queued', version: ANALYSES.harmony.version,
       title: ANALYSES.harmony.label, key: `users/${userId}/${ANALYSES.harmony.folder}/${parent.jobId}/${id}.json`,
-      scoreKey: scoreKey(userId, parent.jobId), scoreSavedAt: parent.score.savedAt, scoreTitle: parent.score.title ?? '', baseKey: analysed.key,
+      scoreKey: scoreKey(userId, parent.jobId, parts[0]), scoreSavedAt: savedAt, scoreTitle: owned[parts[0]].title ?? '', baseKey: analysed.key,
+      scores: Object.fromEntries(parts.map(part => [part, { key: scoreKey(userId, parent.jobId, part), title: owned[part].title ?? '', savedAt: owned[part].savedAt }])),
       generatedAt: new Date(Math.max(now, newest ? Date.parse(newest) + 1 : 0)).toISOString(), startedAt: new Date(now).toISOString(),
       expiresAt: Math.ceil((now + STEM_WINDOW_MS + 600000) / 1000),
     };
@@ -222,8 +228,9 @@ export function createAnalysisRoutes({ database, storage, orchestrator, signer }
     if (type === 'lyrics' && input.lines !== undefined) return saveEdit({ userId, parent, lines: input.lines, reply });
     if (type === 'harmony' && input.fromScore !== undefined) return saveScoreHarmony({ userId, parent, input, reply });
     if (type === 'harmony' && input.useAnalysis === true) return useAnalysisAgain({ userId, parent, reply });
-    // A song with its own score has its chords & notes from it: the whole result, or Harmonic regenerated.
-    if (type === 'harmony' && parent.score && (input.useScore === true || input.stem === undefined || input.stem === 'other')) {
+    // A song with its own scores has its parts from them: the whole result, or a part with a score regenerated.
+    const owned = songScores(parent);
+    if (type === 'harmony' && Object.keys(owned).length && (input.useScore === true || input.stem === undefined || owned[input.stem])) {
       const started = await startScored({ userId, parent });
       if (started) return reply(started.status === 'queued' ? 202 : 200, { harmony: started });
     }
@@ -234,8 +241,9 @@ export function createAnalysisRoutes({ database, storage, orchestrator, signer }
     const sources = {};
     if (stem) {
       if (whole?.status !== 'completed') return reply(409, { message: 'Find chords for this song before regenerating a stem.' });
-      if (stem === 'other' && whole.fromScore) {
-        return reply(409, { message: 'The Harmonic score comes from the uploaded score. Go back to the analysis to regenerate it.' });
+      // A part laid from a score (the Harmonic one in results from before the bass and drum scores) is not redone.
+      if (whole.fromScore && (whole.fromScore.parts ? whole.fromScore.parts[stem] : stem === 'other')) {
+        return reply(409, { message: 'This part comes from the uploaded score. Go back to the analysis to regenerate it.' });
       }
       const working = records.find(record => record.stem === stem);
       if (working && RUNNING.includes(working.status)) {

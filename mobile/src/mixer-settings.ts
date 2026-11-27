@@ -26,7 +26,7 @@ export function restore(mixer: Mixer, settings: SceneSettings) {
   mixer.setTranspose(settings.transpose ?? 0);
   // A scene's score parts (older ones of another kind take their instrument's channel).
   for (const part of settings.accompaniment ?? []) {
-    const family = part.kind.startsWith('guitar') ? 'guitar' : 'keys';
+    const family = SCORE_FAMILIES.find(found => part.kind.startsWith(found)) ?? 'keys';
     if (mixer.scoreSound(family) !== undefined) continue;
     mixer.setScoreSound(family, part.sound);
     mixer.setScoreChannel(family, { volume: part.volume / 100, muted: part.muted });

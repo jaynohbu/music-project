@@ -5,6 +5,9 @@ exports.scoreText = scoreText;
 exports.scoreFamily = scoreFamily;
 exports.wavFile = wavFile;
 exports.importScore = importScore;
+exports.importDrumScore = importDrumScore;
+exports.importBassScore = importBassScore;
+exports.importScores = importScores;
 // An uploaded score made into the song's harmony result, from the stems the mixer has decoded: the score read (a
 // PDF by the ScoreReader through `readPdf`, MusicXML here, or the song's saved score), every stem's spectrogram
 // drawn, the score aligned with all of them (score-align.ts alignScore) for its key and the stem each part sounds
@@ -48,7 +51,7 @@ function wavFile(signal, rate) {
         data.setInt16(44 + index * 2, Math.max(-32768, Math.min(32767, Math.round(signal[index] * 32767))), true);
     return new Blob([data.buffer], { type: 'audio/wav' });
 }
-async function importScore({ source, stems, analysis, readPdf, progress }) {
+async function importScore({ source, stems, analysis, readPdf, progress, fixed = false }) {
     let text, scores = 1;
     if ('file' in source) {
         progress(/\.(pdf|png|jpe?g)$/i.test(source.file.name) ? 'Reading the score…' : 'Opening the score…');
@@ -83,7 +86,7 @@ async function importScore({ source, stems, analysis, readPdf, progress }) {
     const base = (0, score_align_1.alignScore)({ score: (0, musicxml_1.unrollRepeats)(printed), spectrograms, seconds, beats: analysis.beats, intro: true, target });
     progress('Laying the score on the song measure by measure…');
     await new Promise(resolve => setTimeout(resolve, 30));
-    const fit = (0, score_align_1.fitMeasures)({ score: printed, spectrograms, seconds, beats: analysis.beats, target }, base, analysis.firstBar);
+    const fit = (0, score_align_1.fitMeasures)({ score: printed, spectrograms, seconds, beats: analysis.beats, target }, base, analysis.firstBar, fixed);
     const title = 'file' in source ? printed.title || source.file.name.replace(/\.[^.]+$/, '') : source.title || printed.title;
     const document = (0, score_align_1.harmonyFromScore)(analysis, fit.alignment, fit, {
         title, correctedBars: fit.corrections.bars, family: scoreFamily(printed), ...('savedAt' in source ? { scoreSavedAt: source.savedAt } : {}),
@@ -91,4 +94,64 @@ async function importScore({ source, stems, analysis, readPdf, progress }) {
     progress('Extracting the score\'s notes from the Harmonic and bass stems…');
     const extracted = await (0, spectrogram_1.maskedSignal)(mixedSignal, rate, (0, score_align_1.scoreMask)(fit.alignment.notes, mixed.frames, rate), mixed.frames);
     return { document, fit, title, scores, musicxml: text, extracted: wavFile(extracted, rate) };
+}
+async function sourceText(source, readPdf) {
+    return 'file' in source ? (await scoreText(source.file, source.pages, readPdf)).text : source.musicxml;
+}
+const titleOf = (source, score) => 'file' in source ? score.title || source.file.name.replace(/\.[^.]+$/, '') : source.title || score.title;
+// A drum score laid on the song's drum transcription (fitDrumScore): the song's drums become the score's.
+async function importDrumScore({ source, analysis, readPdf, progress, fixed = false }) {
+    const printed = (0, musicxml_1.parseMusicXml)(await sourceText(source, readPdf));
+    const heard = analysis.stems?.drums?.hits;
+    if (!heard?.length)
+        throw new Error('The song\'s drums have not been found yet.');
+    progress('Laying the drum score on the song measure by measure…');
+    const fit = (0, score_align_1.fitDrumScore)(printed, heard, analysis.beats, analysis.firstBar, fixed);
+    return { ...(0, score_align_1.drumsFromScore)(analysis, fit, titleOf(source, printed), 'savedAt' in source ? source.savedAt : undefined), fit };
+}
+// A bass score laid on the bass stem: aligned and fitted as the Harmonic score is, with the bass stem in its place.
+async function importBassScore({ source, stems, analysis, readPdf, progress, fixed = false }) {
+    const printed = (0, musicxml_1.parseMusicXml)(await sourceText(source, readPdf));
+    if (!printed.notes.length)
+        throw new Error('No notes were found in the bass score.');
+    if (!stems.bass)
+        throw new Error('The bass stem is not loaded yet.');
+    const buffer = stems.bass;
+    const { signal, rate } = (0, spectrogram_1.monoSignal)(Array.from({ length: buffer.numberOfChannels }, (_, index) => buffer.getChannelData(index)), buffer.sampleRate);
+    const spectrogram = await (0, spectrogram_1.spectrogramOf)(signal, rate, share => progress(`Listening to the bass stem… ${(share * 100).toFixed(0)}%`));
+    const spectrograms = { other: spectrogram }, target = { spectrogram, stems: ['other'] };
+    const seconds = spectrogram.frames * spectrogram_1.HOP / rate;
+    progress('Finding the bass score in the song…');
+    const base = (0, score_align_1.alignScore)({ score: (0, musicxml_1.unrollRepeats)(printed), spectrograms, seconds, beats: analysis.beats, intro: true, target });
+    progress('Laying the bass score on the song measure by measure…');
+    const fit = (0, score_align_1.fitMeasures)({ score: printed, spectrograms, seconds, beats: analysis.beats, target }, base, analysis.firstBar, fixed);
+    return { ...(0, score_align_1.bassFromScore)(analysis, fit, titleOf(source, printed), 'savedAt' in source ? source.savedAt : undefined), fit };
+}
+async function importScores({ sources, stems, analysis, readPdf, progress }) {
+    let document = analysis, extracted;
+    const parts = {}, corrections = {};
+    if (sources.drums) {
+        const laid = await importDrumScore({ source: sources.drums, analysis: document, readPdf, progress });
+        ({ document } = laid);
+        parts.drums = laid.summary;
+        corrections.drums = laid.fit.corrections.bars;
+    }
+    if (sources.other) {
+        const laid = await importScore({ source: sources.other, stems, analysis: document, readPdf, progress, fixed: !!parts.drums });
+        const { fromScore, ...rest } = laid.document;
+        document = rest;
+        parts.other = fromScore;
+        corrections.other = laid.fit.corrections.bars;
+        extracted = laid.extracted;
+    }
+    if (sources.bass) {
+        const laid = await importBassScore({ source: sources.bass, stems, analysis: document, readPdf, progress, fixed: !!(parts.drums || parts.other) });
+        ({ document } = laid);
+        parts.bass = laid.summary;
+        corrections.bass = laid.fit.corrections.bars;
+    }
+    const first = parts.other ?? parts.bass ?? parts.drums;
+    if (!first)
+        throw new Error('No score was given.');
+    return { document: { ...document, fromScore: { ...first, parts } }, parts, corrections, ...(extracted ? { extracted } : {}) };
 }

@@ -1,6 +1,7 @@
 import { useIsFocused } from 'expo-router';
-import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ComponentRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import Svg, { Path } from 'react-native-svg';
 import { HARMONY_STEMS, REGENERATED_STEMS, STEM_NAMES, getSong, type LyricLine, type SceneEntry, type SceneSettings, type Song, type StemName } from './api';
 import { addCleanedFile, holdSong, songFiles, stemPaths } from './cache';
 import { EFFECT_CONTROLS } from './effects';
@@ -8,10 +9,9 @@ import { t as text } from './i18n';
 import { useT } from './language';
 import { LivePanel } from './live-panel';
 import { MAX_TRANSPOSE, Mixer, defaultChannel, defaultScoreChannel, type Channel } from './player';
-import { SCORE_FAMILIES, loadLibrary, matchLoudness, offered, renderPartAsync, scoreEvents, type Family, type SoundLibrary } from './score-parts';
+import { FAMILY_STEM, SCORE_FAMILIES, familyEvents, loadLibrary, matchLoudness, offered, renderPartAsync, samplesFor, type Family, type SoundLibrary } from './score-parts';
 import { ChannelStrip, IconButton, LampSwitch, MasterFader, Timeline } from './mixer-console';
-import { EDGE, useStemScroll } from './stem-scroll';
-import { focusedStem } from './stem-focus';
+import { EDGE } from './stem-scroll';
 import { stemPeaks } from './waveform';
 import { Button, Centered, errorText, useConfirm } from './ui';
 
@@ -108,42 +108,13 @@ export function MixerControls({ mixer, song = null, peaks, inScene = false }: { 
   const styles = useStyles(makeStyles), theme = useTheme(), t = useT();
   const [, refresh] = useReducer(count => count + 1, 0);
   const [position, setPosition] = useState(0);
-  const [open, setOpen] = useState<StemName>('vocals');
-  const stems = useRef<Partial<Record<StemName, ComponentRef<typeof View> | null>>>({});
-  const anchor = useRef<{ name: StemName; top: number } | null>(null);
-  const scroll = useStemScroll();
-  // Opening one stem closes the others; keep the newly opened stem where it was so content above shrinking does not jump.
-  const openStem = (name: StemName) => {
-    const view = stems.current[name];
-    if (!view) { setOpen(name); return; }
-    view.measureInWindow((_x, top) => { anchor.current = { name, top }; setOpen(name); });
-  };
-  // While a stem is being measured or swapped open, further scroll events wait so the page cannot flicker between stems.
-  const switching = useRef(false);
-  const current = useRef(open);
-  useLayoutEffect(() => {
-    current.current = open;
-    const held = anchor.current;
-    anchor.current = null;
-    const done = () => requestAnimationFrame(() => { switching.current = false; });
-    if (held && held.name === open) stems.current[open]?.measureInWindow((_x, top) => { scroll?.scrollBy(top - held.top); done(); });
-    else done();
-  }, [open, scroll]);
-  useEffect(() => scroll?.onScroll(viewport => {
-    if (switching.current) return;
-    const names = STEM_NAMES.filter(name => stems.current[name]);
-    if (!names.length) return;
-    switching.current = true;
-    Promise.all(names.map(name => new Promise<{ name: StemName; top: number; bottom: number }>(resolve =>
-      stems.current[name]!.measureInWindow((_x, top, _width, height) => resolve({ name, top, bottom: top + height })))))
-      .then(frames => {
-        const found = focusedStem(frames, viewport);
-        if (found && found !== current.current) {
-          anchor.current = { name: found, top: frames.find(frame => frame.name === found)!.top };
-          setOpen(found);
-        } else switching.current = false;
-      });
-  }), [scroll]);
+  // Every stem's mixer starts folded; each opens and closes on its own.
+  const [open, setOpen] = useState<ReadonlySet<StemName>>(() => new Set());
+  const toggleStem = (name: StemName) => setOpen(current => {
+    const next = new Set(current);
+    if (!next.delete(name)) next.add(name);
+    return next;
+  });
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
   const [liveOpen, setLiveOpen] = useState(liveShown);
@@ -233,10 +204,10 @@ export function MixerControls({ mixer, song = null, peaks, inScene = false }: { 
     {STEM_NAMES.map(name => {
       const channel = mixer.channel(name);
       const label = t(`stem.${name}`);
-      const expanded = open === name;
+      const expanded = open.has(name);
       const replaced = mixer.replacedStem === name;
       const live = mixer.isPlaying && !channel.muted && !replaced && !(soloing && !channel.solo);
-      return <View key={name} style={styles.stem} ref={view => { stems.current[name] = view; }}>
+      return <View key={name} style={styles.stem}>
         <View style={styles.stemHeader}>
           <Text style={styles.stemTitle}>{label}</Text>
           {mixer.hasCleaned(name) && <View style={styles.versions} accessibilityRole="radiogroup" accessibilityLabel={t('mixer.version', { stem: label })}>
@@ -268,12 +239,12 @@ export function MixerControls({ mixer, song = null, peaks, inScene = false }: { 
           onSeek={time => void run(() => mixer.seek(time))}
           onReset={() => mixer.setSection(0, mixer.duration)} />
         <ChannelConsole {...{ mixer, locked, inside, position, allMuted, soloing, run: operation => void run(operation), onReset: inScene ? () => void reset() : undefined, songKey: tasks.parts?.other?.key }} label={label} channel={channel} expanded={expanded} live={live} replaced={replaced}
-          onToggle={() => { if (!expanded) openStem(name); }} setChannel={change => mixer.setChannel(name, change)}
+          onToggle={() => toggleStem(name)} setChannel={change => mixer.setChannel(name, change)}
           resetChannel={() => {
             mixer.setChannel(name, { ...defaultChannel(), useCleaned: channel.useCleaned });
             if (replaced) mixer.releaseReplacedStem();
           }} />
-        {name === 'other' && <ScoreParts mixer={mixer} tasks={tasks}
+        {(name === 'other' || name === 'bass' || name === 'drums') && <ScoreParts mixer={mixer} tasks={tasks} stem={name}
           console={(family, label, expanded, onToggle) => {
             const part = mixer.scoreChannel(family);
             return <ChannelConsole {...{ mixer, locked, inside, position, allMuted, soloing, run: operation => void run(operation), onReset: inScene ? () => void reset() : undefined, songKey: tasks.parts?.other?.key }}
@@ -299,14 +270,20 @@ interface ConsoleProps {
 }
 function ChannelConsole({ songKey, mixer, label, channel, expanded, live, replaced = false, locked, inside, position, allMuted, soloing,
   onToggle, setChannel, resetChannel, run, onReset }: ConsoleProps) {
-  const styles = useStyles(makeStyles), t = useT();
+  const styles = useStyles(makeStyles), theme = useTheme(), t = useT();
   return <>
     <Pressable onPress={onToggle} style={styles.consoleHeading}
       accessibilityRole="button" accessibilityLabel={t('mixer.controlsFor', { stem: label })} accessibilityState={{ expanded }}>
       <View style={styles.consoleTitleRow}>
-        <Text style={styles.consoleChevron}>{expanded ? '▾' : '▸'}</Text>
+        {/* A round key with a chevron, so a folded mixer reads as one that opens. */}
+        <View style={[styles.expandKey, expanded && styles.expandKeyOpen]}>
+          <Svg width={18} height={18} viewBox="0 0 24 24">
+            <Path d={expanded ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6'} stroke={expanded ? theme.onAccent : theme.accent} strokeWidth={2.8}
+              strokeLinecap="round" strokeLinejoin="round" fill="none" />
+          </Svg>
+        </View>
         <Text style={styles.consoleTitle} numberOfLines={1}>{t('mixer.mixerFor', { stem: label })}</Text>
-        {!expanded && <Text style={styles.consoleAction}>{t('mixer.showControls')}</Text>}
+        <Text style={styles.consoleAction}>{t(expanded ? 'mixer.hideControls' : 'mixer.showControls')}</Text>
       </View>
       <View style={styles.consoleStatus}>
         <Text style={styles.statusText}>{Math.round(channel.volume * 100)}%</Text>
@@ -364,11 +341,12 @@ function ChannelConsole({ songKey, mixer, label, channel, expanded, live, replac
   </>;
 }
 
-// The Harmonic score played on guitar and on keys: for each, its sound (the song's closest to begin with) and a
-// console like a stem's. The notes are made again when the score, the sound or the key changes, as loud through the
-// song as the Harmonic stem when its loudness came with the score.
-function ScoreParts({ mixer, tasks, console }: {
-  mixer: Mixer; tasks: ReturnType<typeof useSongTasks>;
+// The scores played under their stems: the Harmonic score on guitar and on keys, the bass part on a bass, the drum
+// part on a kit. For each, its sound (the song's closest to begin with) and a console like a stem's. The notes are
+// made again when the part, the sound or the key changes, as loud through the song as the stem when its loudness came
+// with the result.
+function ScoreParts({ mixer, tasks, stem, console }: {
+  mixer: Mixer; tasks: ReturnType<typeof useSongTasks>; stem: 'other' | 'bass' | 'drums';
   console: (family: Family, label: string, expanded: boolean, onToggle: () => void) => React.ReactNode;
 }) {
   const styles = useStyles(makeStyles), theme = useTheme(), t = useT();
@@ -376,36 +354,43 @@ function ScoreParts({ mixer, tasks, console }: {
   const [failure, setFailure] = useState('');
   const [picking, setPicking] = useState<Family | null>(null);
   const [expanded, setExpanded] = useState<Family | null>(null);
-  const part = tasks.parts?.other, choices = tasks.soundChoices, loudness = tasks.loudness, transpose = mixer.transpose;
+  const parts = tasks.parts, grid = tasks.grid, choices = tasks.soundChoices, loudness = tasks.loudness, transpose = mixer.transpose;
+  const part = parts?.[stem];
+  const families = SCORE_FAMILIES.filter(family => FAMILY_STEM[family] === stem);
   useEffect(() => { loadLibrary().then(setLibrary, error => setFailure(errorText(error))); }, []);
   const sounds = (family: Family) => library ? offered(library, choices, family) : [];
-  const guitarSound = mixer.scoreSound('guitar'), keysSound = mixer.scoreSound('keys');
+  const chosen = families.map(family => mixer.scoreSound(family)).join();
   useEffect(() => {
-    if (!library || !part) return;
+    if (!library || !part || !grid || !parts) return;
     let cancelled = false;
-    for (const family of SCORE_FAMILIES) {
+    for (const family of families) {
+      const played = familyEvents(family, parts, grid, family === 'drums' ? 0 : transpose);
       const sound = mixer.scoreSound(family) ?? offered(library, choices, family)[0];
-      if (sound === undefined) continue;
+      if (!played || sound === undefined) continue;
       if (mixer.scoreSound(family) === undefined) mixer.setScoreSound(family, sound);
-      mixer.decodeSound(sound, library.samples).then(async ({ buffer, attacks, levels }) => {
+      const samples = samplesFor(library, family), levels = loudness?.[stem];
+      mixer.decodeSound(sound, samples).then(async ({ buffer, attacks, levels: shape }) => {
         if (cancelled || mixer.scoreSound(family) !== sound) return;
-        const events = scoreEvents(part, transpose);
-        const matched = loudness ? matchLoudness(events, scoreEvents(part, transpose, false), loudness, library.samples, levels) : { events, gain: 1 };
-        // Rendered whole, the part's level at which it is as loud as the Harmonic stem included.
-        const signal = await renderPartAsync(matched.events, buffer.getChannelData(0), buffer.sampleRate, library.samples, attacks, mixer.duration + 1, () => cancelled);
+        const matched = loudness && levels ? matchLoudness(played.events, played.measured, { window: loudness.window, other: levels }, samples, shape)
+          : { events: played.events, gain: 1 };
+        // Rendered whole, the part's level at which it is as loud as its stem included.
+        const signal = await renderPartAsync(matched.events, buffer.getChannelData(0), buffer.sampleRate, samples, attacks, mixer.duration + 1, () => cancelled);
         if (!signal) return;
         if (matched.gain !== 1) for (let index = 0; index < signal.length; index++) signal[index] *= matched.gain;
         if (!cancelled && mixer.scoreSound(family) === sound) mixer.setScoreRender(family, signal);
       }, error => { if (!cancelled) setFailure(errorText(error)); });
     }
     return () => { cancelled = true; };
-  }, [mixer, library, part, choices, loudness, transpose, guitarSound, keysSound]);
-  if (!part || !library) return failure ? <Text accessibilityRole="alert" style={[styles.error, styles.taskError]}>{failure}</Text> : null;
+    // families follows stem.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mixer, library, part, grid, choices, loudness, transpose, chosen, stem]);
+  const shown = families.filter(family => parts && grid && familyEvents(family, parts, grid, 0));
+  if (!part || !library || !shown.length) return failure ? <Text accessibilityRole="alert" style={[styles.error, styles.taskError]}>{failure}</Text> : null;
   const name = (sound?: number) => sound === undefined ? '' : library.sounds[String(sound)]?.name ?? String(sound);
   return <View style={styles.scoreParts}>
     {!!failure && <Text accessibilityRole="alert" style={[styles.error, styles.taskError]}>{failure}</Text>}
-    {SCORE_FAMILIES.map(family => {
-      const label = t(family === 'guitar' ? 'score.guitar' : 'score.keys');
+    {shown.map(family => {
+      const label = t(`score.${family}`);
       return <View key={family} style={styles.scorePart}>
         <View style={styles.scorePartRow}>
           <Text style={styles.scorePartName}>{label}</Text>
@@ -499,7 +484,7 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
     ? tasks.lyrics ? { label: t('tasks.editLyrics'), onPress: onEditLyrics }
       : tasks.findingLyrics ? { label: t('tasks.findingLyrics') } : { label: t('tasks.lyrics'), onPress: tasks.findLyrics }
     : !parts ? tasks.findingChords ? { label: t('tasks.findingNotes') }
-      : { label: t(name === 'drums' ? 'tasks.drumScore' : 'tasks.chordsMelody'), onPress: name === 'drums' ? tasks.findDrums : tasks.findChords, hint: t('tasks.findHint') }
+      : { label: t(name === 'drums' ? 'tasks.drumScore' : 'tasks.chordsMelody'), onPress: name === 'drums' ? tasks.findDrums : name === 'bass' ? tasks.findBass : tasks.findChords, hint: t('tasks.findHint') }
       : tasks.updatingChords ? { label: t('tasks.updatingNotes') }
       : regenerating ? { label: t('tasks.regenerating') }
         : !REGENERATED_STEMS.includes(name) ? null
@@ -508,10 +493,10 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
   const failure = vocals ? tasks.lyricsFailure : tasks.chordsFailure ?? tasks.partFailure(name);
   // While a score is read or laid on the song, only that it is working and about how long.
   const note = vocals ? !tasks.lyrics && tasks.findingLyrics && t('tasks.lyricsNote')
-    : name !== 'drums' && tasks.processing ? t('tasks.processing', { minutes: tasks.processing })
+    : tasks.processingFor(name) ? t('tasks.processing', { minutes: tasks.processingFor(name) })
       : (parts ? regenerating || tasks.updatingChords : tasks.findingChords) && t('tasks.chordsNote');
   return <View>
-    {(action || printable) && <View style={styles.taskRow}>
+    {(action || printable || harmonic) && <View style={styles.taskRow}>
       {action && <Pressable onPress={action.onPress} disabled={!action.onPress || disabled || (!vocals && !!tasks.processing)} accessibilityRole="button"
         accessibilityLabel={action.hint ?? action.label} accessibilityState={{ disabled: !action.onPress || disabled }}
         style={[styles.taskButton, (!action.onPress || disabled) && { opacity: 0.5 }]}>
@@ -520,6 +505,12 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
       {printable && <Pressable onPress={() => setPreviewing(true)} accessibilityRole="button"
         accessibilityLabel={t('tasks.previewFor', { stem: label })} style={styles.taskButton}>
         <Text style={styles.taskButtonText}>{t('tasks.preview')}</Text>
+      </Pressable>}
+      {/* The stem's own score (a PDF or MusicXML): its notes are taken from it from then on. */}
+      {harmonic && <Pressable onPress={() => tasks.uploadScore(name)} disabled={disabled || !!tasks.processing} accessibilityRole="button"
+        accessibilityLabel={t('tasks.uploadScoreFor', { stem: label })} accessibilityState={{ disabled: disabled || !!tasks.processing }}
+        style={[styles.taskButton, (disabled || !!tasks.processing) && { opacity: 0.5 }]}>
+        <Text style={styles.taskButtonText}>{t(tasks.hasScore(name) ? 'tasks.replaceScore' : 'tasks.uploadScore')}</Text>
       </Pressable>}
     </View>}
     {!!saveFailure && <Text accessibilityRole="alert" style={[styles.error, styles.taskError]}>{saveFailure}</Text>}
@@ -562,8 +553,10 @@ const makeStyles = (t: Theme) => StyleSheet.create({
   stemError: { marginHorizontal: EDGE },
   consoleHeading: { marginTop: 12, paddingHorizontal: EDGE, paddingVertical: 8, minHeight: 52, flexDirection: 'row', alignItems: 'center',
     alignContent: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, backgroundImage: t.metal, borderTopWidth: 1, borderTopColor: t.consoleLine },
-  consoleTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  consoleChevron: { fontSize: 13, lineHeight: 20, color: t.consoleInk },
+  consoleTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  expandKey: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: t.accent,
+    backgroundColor: t.surface },
+  expandKeyOpen: { backgroundColor: t.accent, ...(t.accentImage && { backgroundImage: t.accentImage }) },
   consoleTitle: { fontSize: 15, lineHeight: 20, fontWeight: '800', color: t.consoleInk },
   consoleAction: { fontSize: 13, lineHeight: 20, fontWeight: '600', color: t.consoleAccent },
   liveToggle: { flexDirection: 'row', alignItems: 'center', gap: 10 },
