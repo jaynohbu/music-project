@@ -227,3 +227,18 @@ test('the restored notes separated from the stem: a scored note and its overtone
   for (let i = Math.round(0.7 * rate); i < Math.round(1.1 * rate); i++) error += (separated[i] - scored[i]) ** 2;
   assert.ok(Math.sqrt(error / (0.4 * rate)) < 0.35 * rms(other, 0.7, 1.1));
 });
+
+test('restored from the bass and other stems together: the bass line comes back with the chords, the melody stays the singer\'s', async () => {
+  const score = songScore(), offset = 3.1, beat = 0.52, seconds = 24;
+  const stems = synthesize(score, { offset, beat, seconds });
+  const spectrograms = await spectrogramsOf(stems);
+  const mixed = await spectrogram.spectrogramOf(stems.other.map((value, i) => value + stems.bass[i]), 22050, undefined, 1e9);
+  const beats = Array.from({ length: Math.floor(seconds / beat) }, (_, k) => offset - 5 * beat + k * beat).filter(time => time >= 0);
+  const result = align.alignScore({ score, spectrograms, seconds, beats, target: { spectrogram: mixed, stems: ['other', 'bass'] } });
+  const roots = score.notes.filter(n => n.part === 2), chordTones = score.notes.filter(n => n.part === 0);
+  for (const n of [...roots, ...chordTones]) {
+    assert.ok(result.notes.some(r => r.pitch === n.pitch && Math.abs(r.start - (offset + n.start * beat)) < 0.06), `note ${n.pitch} at quarter ${n.start}`);
+  }
+  assert.equal(result.notes.length, roots.length + chordTones.length);
+  assert.ok(result.missing.filter(m => m.stems.includes('vocals')).length >= 12);
+});

@@ -88,6 +88,12 @@ function blockPeaks(signal: Float32Array, block: number) {
             <input type="text" class="spectrum-pages" inputmode="numeric" placeholder="all" [value]="pages()" (change)="pages.set($any($event.target).value.trim())"
               [disabled]="aligning()" title="Page numbers and ranges, such as 2 or 2-3; each page takes the score reader ten seconds or more">
           </label>
+          <label>Extract from
+            <select (change)="setExtractFrom($any($event.target).value)" [disabled]="aligning()">
+              <option value="other+bass" [selected]="extractFrom() === 'other+bass'">the Harmonic and bass stems</option>
+              <option value="other" [selected]="extractFrom() === 'other'">the Harmonic stem</option>
+            </select>
+          </label>
           <label>The score is
             <select (change)="setIntro($any($event.target).value === 'intro')" [disabled]="aligning()">
               <option value="intro" [selected]="intro()">the song's beginning (intro)</option>
@@ -171,7 +177,17 @@ function blockPeaks(signal: Float32Array, block: number) {
       </div>
       <p class="hint">Only peaks along the pitch axis that stand above that pitch's usual level, are not far below the loudest
         sound at that moment, and last at least about 90 ms. Brighter is further above the floor.</p>
-      <canvas #energy class="spectrum-canvas" [class.listening]="listen() !== 'all'" [style.height.px]="spectrumHeight" role="img" aria-label="The energy that stands out in the Harmonic stem around the moment playing"></canvas>
+      <canvas #energy class="spectrum-canvas" [class.listening]="listen() !== 'all' && listen() !== 'separated'" [style.height.px]="spectrumHeight" role="img" aria-label="The energy that stands out in the Harmonic stem around the moment playing"></canvas>
+      @if (alignment()) {
+        <div class="spectrum-heading">
+          <h2 class="spectrum-label">Extracted by the score ({{ extractFrom() === 'other+bass' ? 'Harmonic + bass' : 'Harmonic' }})</h2>
+          <button type="button" [class.secondary]="listen() !== 'separated'" [attr.aria-pressed]="listen() === 'separated'"
+            (click)="hear('separated')" [disabled]="!ready()">Listen</button>
+        </div>
+        <p class="hint">The spectrogram where the restored notes and their overtones are: what "Score notes" plays.</p>
+      }
+      <canvas #extracted class="spectrum-canvas" [hidden]="!alignment()" [class.listening]="listen() === 'separated'" [style.height.px]="spectrumHeight"
+        role="img" aria-label="What the score extracted, around the moment playing"></canvas>
     </section>
   `,
 })
@@ -208,6 +224,7 @@ export class SpectrumPage implements OnInit, OnDestroy {
   readonly showNotes = signal(true);
   readonly intro = signal(true);
   readonly separating = signal(false);
+  readonly extractFrom = signal<'other' | 'other+bass'>('other+bass');
   readonly separatedShare = signal<number | null>(null);
   readonly layerOn = signal({ score: true, rest: true });
   private scorePart?: AudioBuffer;
@@ -220,12 +237,16 @@ export class SpectrumPage implements OnInit, OnDestroy {
   readonly toMeasure = signal(1);
   private restored?: AudioBuffer;
   private both?: AudioBuffer;
-  private compared = new Map<AlignStem, Promise<Spectrogram>>();
+  private compared = new Map<AlignStem, Promise<{ spectrogram: Spectrogram; signal: Float32Array }>>();
+  // The other and bass stems together, restored and separated from when chosen.
+  private mixed?: { signal: Float32Array; spectrogram: Spectrogram };
+  private extracted?: { levels: Float32Array; kept: Uint8Array };
   private spectrumReady?: Promise<Spectrogram>;
   private readonly overview = viewChild.required<ElementRef<HTMLCanvasElement>>('overview');
   private readonly wave = viewChild.required<ElementRef<HTMLCanvasElement>>('wave');
   private readonly spectrum = viewChild.required<ElementRef<HTMLCanvasElement>>('spectrum');
   private readonly energy = viewChild.required<ElementRef<HTMLCanvasElement>>('energy');
+  private readonly extractedCanvas = viewChild.required<ElementRef<HTMLCanvasElement>>('extracted');
   private kept?: Uint8Array;
   private mono?: Float32Array;
   private masked?: AudioBuffer;
@@ -520,7 +541,7 @@ export class SpectrumPage implements OnInit, OnDestroy {
     return Math.min(this.duration(), Math.max(120, (last.start + last.length) * beat * 2.5 + 20));
   }
 
-  private comparedSpectrogram(stem: AlignStem, progress: (share: number) => void): Promise<Spectrogram> {
+  private comparedSpectrogram(stem: AlignStem, progress: (share: number) => void): Promise<{ spectrogram: Spectrogram; signal: Float32Array }> {
     let found = this.compared.get(stem);
     if (!found) {
       found = (async () => {
@@ -532,7 +553,7 @@ export class SpectrumPage implements OnInit, OnDestroy {
         // The whole stem, so a later search elsewhere needs no second pass.
         const channels = Array.from({ length: decoded.numberOfChannels }, (_, index) => decoded.getChannelData(index));
         const { signal } = monoSignal(channels, decoded.sampleRate);
-        return spectrogramOf(signal, this.rate, progress);
+        return { spectrogram: await spectrogramOf(signal, this.rate, progress), signal };
       })();
       found.catch(() => this.compared.delete(stem));
       this.compared.set(stem, found);
@@ -547,34 +568,61 @@ export class SpectrumPage implements OnInit, OnDestroy {
     const spectrograms: Partial<Record<AlignStem, Spectrogram>> = { other };
     for (const [index, stem] of COMPARED.entries()) {
       try {
-        spectrograms[stem] = await this.comparedSpectrogram(stem, share =>
-          this.scoreStatus.set(`Looking at the ${stem} stem (${index + 1} of ${COMPARED.length})… ${(share * 100).toFixed(0)}%`));
+        spectrograms[stem] = (await this.comparedSpectrogram(stem, share =>
+          this.scoreStatus.set(`Looking at the ${stem} stem (${index + 1} of ${COMPARED.length})… ${(share * 100).toFixed(0)}%`))).spectrogram;
       } catch (error) {
         // Alignment works with fewer stems.
         console.warn(`Score alignment without the ${stem} stem: ${errorMessage(error)}`);
       }
       if (this.destroyed) return;
     }
+    const mixed = this.extractFrom() === 'other+bass' ? await this.mixedStems() : undefined;
+    if (this.destroyed) return;
     this.scoreStatus.set('Finding the score in the song…');
     await new Promise(resolve => setTimeout(resolve, 30));
-    const found = alignScore({ score, spectrograms, seconds: Math.min(seconds, ...Object.values(spectrograms).map(one => one!.frames * HOP / one!.rate)), beats: this.grid()?.beats, intro: this.intro() });
+    const found = alignScore({
+      score, spectrograms, seconds: Math.min(seconds, ...Object.values(spectrograms).map(one => one!.frames * HOP / one!.rate)),
+      beats: this.grid()?.beats, intro: this.intro(),
+      target: mixed ? { spectrogram: mixed.spectrogram, stems: ['other', 'bass'] } : undefined,
+    });
     this.alignment.set(found);
-    this.restored = this.both = this.scorePart = this.scoreRest = undefined;
+    this.restored = this.both = this.scorePart = this.scoreRest = this.extracted = undefined;
     this.separatedShare.set(null);
     void this.separate(found);
     this.seekTo(Math.max(0, found.measures[0].start - 1));
     void this.renderRestored(found);
   }
 
-  // The stem split by the score: its own sound where the restored notes and their overtones are, and the rest.
+  // The other and bass stems as one signal (the other stem's length) and its spectrogram, made once.
+  private async mixedStems(): Promise<{ signal: Float32Array; spectrogram: Spectrogram } | undefined> {
+    if (this.mixed) return this.mixed;
+    if (!this.mono) return undefined;
+    try {
+      const bass = await this.comparedSpectrogram('bass', () => undefined);
+      const signal = Float32Array.from(this.mono, (value, index) => value + (bass.signal[index] ?? 0));
+      this.scoreStatus.set('Drawing the Harmonic and bass stems together… 0%');
+      const spectrogram = await spectrogramOf(signal, this.rate, share =>
+        this.scoreStatus.set(`Drawing the Harmonic and bass stems together… ${(share * 100).toFixed(0)}%`));
+      return this.mixed = { signal, spectrogram };
+    } catch (error) {
+      this.scoreError.set(`Without the bass stem, only the Harmonic stem is used: ${errorMessage(error)}`);
+      return undefined;
+    }
+  }
+
+  // The stem (or the Harmonic and bass stems together) split by the score: its own sound where the restored notes
+  // and their overtones are, and the rest; and what was kept, for drawing.
   private async separate(found: Alignment): Promise<void> {
     if (!this.mono || !this.context || !this.spectrogram) return;
     this.separating.set(true);
     try {
-      const kept = scoreMask(found.notes, this.spectrogram.frames, this.rate);
-      const part = await maskedSignal(this.mono, this.rate, kept, this.spectrogram.frames);
+      const source = this.extractFrom() === 'other+bass' && this.mixed ? this.mixed : { signal: this.mono, spectrogram: this.spectrogram };
+      const kept = scoreMask(found.notes, source.spectrogram.frames, this.rate);
+      this.extracted = { levels: source.spectrogram.levels, kept };
+      this.draw();
+      const part = await maskedSignal(source.signal, this.rate, kept, source.spectrogram.frames);
       if (this.alignment() !== found || this.destroyed) return;
-      const mono = this.mono, rest = new Float32Array(part.length);
+      const mono = source.signal, rest = new Float32Array(part.length);
       // The share is taken over the aligned passage.
       const from = Math.floor(found.measures[0].start * this.rate), to = Math.ceil(found.measures[found.measures.length - 1].end * this.rate);
       let inPart = 0, total = 0;
@@ -648,6 +696,11 @@ export class SpectrumPage implements OnInit, OnDestroy {
     this.scoreError.set('');
     void this.alignRange().catch(error => this.scoreError.set(`Could not use the score: ${errorMessage(error)}`))
       .finally(() => { this.scoreStatus.set(''); this.aligning.set(false); });
+  }
+
+  setExtractFrom(value: 'other' | 'other+bass'): void {
+    this.extractFrom.set(value);
+    this.realign();
   }
 
   setIntro(value: boolean): void {
@@ -729,6 +782,13 @@ export class SpectrumPage implements OnInit, OnDestroy {
       const above = this.kept?.[frame * ROWS + row] ?? 0;
       return above ? Math.min(255, 80 + above * 6) : 0;
     });
+    const extracted = this.extracted;
+    if (this.alignment()) {
+      this.drawSpectrum(this.extractedCanvas().nativeElement, time, (frame, row) => {
+        const index = frame * ROWS + row;
+        return extracted?.kept[index] ? Math.round((extracted.levels[index] + RANGE_DB) / RANGE_DB * 255) : 0;
+      });
+    }
   }
 
   // Seconds at each pixel column of a flowing view, the moment playing at the middle.

@@ -293,9 +293,11 @@ export interface AlignInput {
   beats?: number[];
   // The score is the song's beginning (its intro): it starts within INTRO_SECONDS of the song's first sound.
   intro?: boolean;
+  // What is restored from (the other stem unless given), at the other stem's rate and frames.
+  target?: RestoreTarget;
 }
 
-export function alignScore({ score, spectrograms, seconds, beats, intro }: AlignInput): Alignment {
+export function alignScore({ score, spectrograms, seconds, beats, intro, target }: AlignInput): Alignment {
   // Measures after the last note (rests to the end of a page) match anything; they are left out.
   const lastSound = Math.max(...score.notes.map(note => note.start + note.length));
   const kept = score.measures.filter((measure, index) => index === 0 || measure.start < lastSound - 1e-6);
@@ -489,7 +491,7 @@ export function alignScore({ score, spectrograms, seconds, beats, intro }: Align
   // A melody is the singer's, though the other stem's overtones sound at its pitches; a bass line the other stem
   // also plays (a piano's left hand, a guitar's low strings) is restored where it has it.
   const stemOf = (note: ScoreNote) => parts.find(part => part.part === note.part && part.staff === note.staff)?.stem ?? null;
-  const { notes, missing } = restore(score, spectrograms, timeAt, best.shift, beatGap, stemOf);
+  const { notes, missing } = restore(score, spectrograms, target ?? { spectrogram: other, stems: ['other'] }, timeAt, best.shift, beatGap, stemOf);
   return { measures, shift: best.shift, secondsPerQuarter, likeness, parts, notes, missing, timeAt };
 }
 
@@ -512,24 +514,31 @@ function floorsOf(spectrogram: Spectrogram, frames: number): Float32Array {
   return floors;
 }
 
-function restore(score: Score, spectrograms: Partial<Record<AlignStem, Spectrogram>>, timeAt: (quarter: number) => number,
+// The stems restored from: the spectrogram of their sound together (one stem's own, or a mix of them) and which they are.
+export interface RestoreTarget { spectrogram: Spectrogram; stems: AlignStem[] }
+
+function restore(score: Score, spectrograms: Partial<Record<AlignStem, Spectrogram>>, target: RestoreTarget, timeAt: (quarter: number) => number,
   shift: number, beatGap: (time: number) => number, stemOf: (note: ScoreNote) => AlignStem | null): { notes: RestoredNote[]; missing: MissingNote[] } {
-  const other = spectrograms.other!;
+  // Named for the usual target, the other stem.
+  const other = target.spectrogram;
   const perSecond = other.rate / HOP;
   const frameAt = (time: number) => Math.round(time * perSecond);
   const lastNote = Math.max(...score.notes.map(note => timeAt(note.start + note.length)));
   const lookFrames = Math.min(other.frames, frameAt(lastNote + 2));
   const stems = (Object.keys(spectrograms) as AlignStem[]).filter(stem => stem !== 'drums' && spectrograms[stem]!.rate === other.rate);
   // Floors over the whole stretch the stems were searched in, so a pitch the score holds throughout still stands out.
-  const floors = Object.fromEntries(stems.map(stem => [stem, floorsOf(spectrograms[stem]!, Math.min(spectrograms[stem]!.frames, Math.max(lookFrames, frameAt(60))))])) as Record<AlignStem, Float32Array>;
-  // How far above its usual level a stem has a pitch over a note's first moments, dB (mean over the frames).
-  const above = (stem: AlignStem, pitch: number, from: number, to: number) => {
-    const spectrogram = spectrograms[stem]!;
+  const floorsFor = (spectrogram: Spectrogram) => floorsOf(spectrogram, Math.min(spectrogram.frames, Math.max(lookFrames, frameAt(60))));
+  const floors = Object.fromEntries(stems.map(stem => [stem, floorsFor(spectrograms[stem]!)])) as Record<AlignStem, Float32Array>;
+  const targetFloors = target.stems.length === 1 && target.spectrogram === spectrograms[target.stems[0]] ? floors[target.stems[0]] : floorsFor(other);
+  // How far above its usual level a spectrogram has a pitch over a note's first moments, dB (mean over the frames).
+  const aboveIn = (spectrogram: Spectrogram, usual: Float32Array, pitch: number, from: number, to: number) => {
     if (pitch < LOWEST_PITCH || pitch > 108) return -Infinity;
     let sum = 0, count = 0;
-    for (let frame = Math.max(0, from); frame < Math.min(to, spectrogram.frames); frame++) { sum += levelAt(spectrogram, frame, pitch) - floors[stem][pitch]; count++; }
+    for (let frame = Math.max(0, from); frame < Math.min(to, spectrogram.frames); frame++) { sum += levelAt(spectrogram, frame, pitch) - usual[pitch]; count++; }
     return count ? sum / count : -Infinity;
   };
+  const above = (stem: AlignStem, pitch: number, from: number, to: number) => aboveIn(spectrograms[stem]!, floors[stem], pitch, from, to);
+  const inTarget = (pitch: number, from: number, to: number) => aboveIn(other, targetFloors, pitch, from, to);
   const notes: RestoredNote[] = [], missing: MissingNote[] = [];
   // Notes whose pitch the score has sounding up to their start (struck again).
   const struck = new Set(score.notes.filter(note => score.notes.some(before => before !== note && before.pitch === note.pitch
@@ -540,17 +549,17 @@ function restore(score: Score, spectrograms: Partial<Record<AlignStem, Spectrogr
     const from = frameAt(start), to = Math.max(from + 2, frameAt(Math.min(end, start + LOOK)));
     const heard: Partial<Record<AlignStem, number>> = {};
     for (const stem of stems) heard[stem] = Math.round(above(stem, pitch, from, to) * 10) / 10;
-    // The octave the other stem plays it in, when it does not have the written one.
-    let octave = 0, level = heard.other ?? -Infinity;
+    // The octave the target plays it in, when it does not have the written one.
+    let octave = 0, level = inTarget(pitch, from, to);
     for (const moved of level < PRESENT_DB ? [-12, 12] : []) {
-      const there = above('other', pitch + moved, from, to);
+      const there = inTarget(pitch + moved, from, to);
       if (there > level + OCTAVE_BETTER_DB && there >= PRESENT_DB) { octave = moved; level = there; }
     }
-    // A part given to another stem: the vocals' is theirs (the other stem's overtones sound at a melody's pitches);
-    // another's (a piano's left hand, given to the bass) is restored where the other stem has it, not where what it
-    // has is only the other stem's faint spill of that stem.
+    // A part given to a stem outside the target: the vocals' is theirs (the target's overtones sound at a melody's
+    // pitches); another's (a piano's left hand, given to the bass, when only the other stem is the target) is
+    // restored where the target has it, not where what it has is only its faint spill of that stem.
     const own = stemOf(note);
-    const spill = !!own && own !== 'other' && (heard[own] ?? -Infinity) - level > SPILL_DB;
+    const spill = !!own && !target.stems.includes(own) && (heard[own] ?? -Infinity) - level > SPILL_DB;
     if (level < PRESENT_DB || own === 'vocals' || spill) {
       missing.push({ pitch, start, end, measure: note.measure, stems: stems.filter(stem => (heard[stem] ?? -Infinity) >= PRESENT_DB) });
       continue;
@@ -566,7 +575,7 @@ function restore(score: Score, spectrograms: Partial<Record<AlignStem, Spectrogr
     if (rise < ATTACK_RISE_DB) {
       // The same pitch sounding on from the note before it is not this note unless the stem strikes it again.
       if (struck.has(note)) {
-        missing.push({ pitch, start, end, measure: note.measure, stems: stems.filter(stem => stem !== 'other' && (heard[stem] ?? -Infinity) >= PRESENT_DB) });
+        missing.push({ pitch, start, end, measure: note.measure, stems: stems.filter(stem => !target.stems.includes(stem) && (heard[stem] ?? -Infinity) >= PRESENT_DB) });
         continue;
       }
       attack = from;
@@ -576,7 +585,7 @@ function restore(score: Score, spectrograms: Partial<Record<AlignStem, Spectrogr
     for (let frame = attack; frame <= Math.min(other.frames - 1, attack + Math.round(0.15 * perSecond)); frame++) peak = Math.max(peak, levelAt(other, frame, played));
     // The end: where the sound sinks to near its usual level or DECAY_DB below its attack (what is left there is
     // the next notes' spill), no later than a little past the written end.
-    const floor = floors.other[played] ?? 0, gone = Math.max(floor + PRESENT_DB / 2, peak - DECAY_DB);
+    const floor = targetFloors[played] ?? 0, gone = Math.max(floor + PRESENT_DB / 2, peak - DECAY_DB);
     const latest = Math.min(other.frames - 1, frameAt(end + beatGap(end) / 2));
     let last = attack + 1, quiet = 0;
     for (let frame = attack + 1; frame <= latest; frame++) {
