@@ -416,17 +416,20 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
     ? tasks.lyrics ? { label: t('tasks.editLyrics'), onPress: onEditLyrics }
       : tasks.findingLyrics ? { label: t('tasks.findingLyrics') } : { label: t('tasks.lyrics'), onPress: tasks.findLyrics }
     : !parts ? tasks.findingChords ? { label: t('tasks.findingNotes') }
-      : { label: t(name === 'drums' ? 'tasks.drumScore' : 'tasks.chordsMelody'), onPress: tasks.findChords, hint: t('tasks.findHint') }
+      : { label: t(name === 'drums' ? 'tasks.drumScore' : 'tasks.chordsMelody'), onPress: name === 'drums' ? tasks.findDrums : tasks.findChords, hint: t('tasks.findHint') }
       : tasks.updatingChords ? { label: t('tasks.updatingNotes') }
       : regenerating ? { label: t('tasks.regenerating') }
         : !REGENERATED_STEMS.includes(name) ? null
           : { label: regenerateLabel(name), onPress: () => tasks.regenerate(name, cleaned),
             hint: t('tasks.regenerateFor', { action: regenerateLabel(name), stem: label }) };
   const failure = vocals ? tasks.lyricsFailure : tasks.chordsFailure ?? tasks.partFailure(name);
-  const note = vocals ? !tasks.lyrics && tasks.findingLyrics && t('tasks.lyricsNote') : (parts ? regenerating || tasks.updatingChords : tasks.findingChords) && t('tasks.chordsNote');
+  // While a score is read or laid on the song, only that it is working and about how long.
+  const note = vocals ? !tasks.lyrics && tasks.findingLyrics && t('tasks.lyricsNote')
+    : name !== 'drums' && tasks.processing ? t('tasks.processing', { minutes: tasks.processing })
+      : (parts ? regenerating || tasks.updatingChords : tasks.findingChords) && t('tasks.chordsNote');
   return <View>
     {(action || printable) && <View style={styles.taskRow}>
-      {action && <Pressable onPress={action.onPress} disabled={!action.onPress || disabled} accessibilityRole="button"
+      {action && <Pressable onPress={action.onPress} disabled={!action.onPress || disabled || (!vocals && !!tasks.processing)} accessibilityRole="button"
         accessibilityLabel={action.hint ?? action.label} accessibilityState={{ disabled: !action.onPress || disabled }}
         style={[styles.taskButton, (!action.onPress || disabled) && { opacity: 0.5 }]}>
         <Text style={styles.taskButtonText}>{action.label}</Text>
@@ -434,11 +437,6 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
       {printable && <Pressable onPress={() => setPreviewing(true)} accessibilityRole="button"
         accessibilityLabel={t('tasks.previewFor', { stem: label })} style={styles.taskButton}>
         <Text style={styles.taskButtonText}>{t('tasks.preview')}</Text>
-      </Pressable>}
-      {printable && <Pressable onPress={() => void savePdf()} disabled={saving} accessibilityRole="button"
-        accessibilityLabel={t('tasks.pdfFor', { stem: label })} accessibilityState={{ disabled: saving }}
-        style={[styles.taskButton, saving && { opacity: 0.5 }]}>
-        <Text style={styles.taskButtonText}>{saving ? t('tasks.pdfMaking') : t('tasks.pdf')}</Text>
       </Pressable>}
     </View>}
     {!!saveFailure && <Text accessibilityRole="alert" style={[styles.error, styles.taskError]}>{saveFailure}</Text>}

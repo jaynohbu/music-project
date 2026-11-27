@@ -28,6 +28,8 @@ export interface Song {
   restorations?: { id: string; stem: StemName; status: SongStatus; playUrl?: string; playVersion?: string; error?: string }[];
   lyrics?: Lyrics;
   harmony?: Harmony;
+  // The song's own score (an uploaded score's MusicXML), from which its chords & notes always come.
+  score?: { title: string; savedAt: string; url: string; extractedAt?: string; extractedUrl?: string };
 }
 
 // Lyrics and the score are found by the API in the background; the results are JSON at signed URLs.
@@ -36,16 +38,22 @@ export interface Lyrics { id: string; status: TaskStatus; url?: string; error?: 
 export interface RegeneratedPart extends Lyrics { resultId?: string }
 // `stale`: from an older analysis version, shown until a new run finishes. `previous`: the last finished result,
 // shown while this one runs.
-export interface Harmony extends Lyrics { stems?: Record<string, RegeneratedPart | undefined>; stale?: boolean; previous?: Lyrics }
+// `fromScore`: the result was made from the song's score; `scoring`: a run laying the score on the song.
+export interface Harmony extends Lyrics {
+  stems?: Record<string, RegeneratedPart | undefined>; stale?: boolean; previous?: Lyrics;
+  fromScore?: { title: string; measures: number; notes: number; heard?: number; correctedBars: number; family?: 'guitar' | 'keys'; scoreSavedAt?: string };
+  scoring?: boolean;
+}
 export interface LyricWord { start: number; end: number; text: string }
 export interface LyricLine { start: number; end: number; words: LyricWord[] }
 // Units are sixteenth notes from the song's first beat.
-export interface HarmonyNote { start: number; end: number; pitch: number; unit: number; length: number }
+export interface HarmonyNote { start: number; end: number; pitch: number; unit: number; length: number; velocity?: number }
 export type DrumName = 'kick' | 'snare' | 'tom' | 'hihat' | 'cymbal';
 export interface DrumHit { unit: number; drum: DrumName }
 // `key` is set on the ensemble part: the other stem (guitars, keys and the rest) heard as one.
 // `second` is the ensemble's line under the melody (a counter-melody or the top of the accompaniment).
-export interface HarmonyPart { chords: { start: number; name: string }[]; notes: HarmonyNote[]; hits?: DrumHit[]; key?: string; second?: HarmonyNote[] }
+// `melody`: on a part made from a score, its sung line (the part given to the vocals).
+export interface HarmonyPart { chords: { start: number; name: string }[]; notes: HarmonyNote[]; hits?: DrumHit[]; key?: string; second?: HarmonyNote[]; melody?: HarmonyNote[] }
 export interface HarmonyGrid { beats: number[]; firstBar: number }
 export const HARMONY_STEMS: readonly string[] = ['other', 'bass', 'drums'];
 export const ENSEMBLE_STEMS: readonly string[] = ['other'];
@@ -57,6 +65,32 @@ export const saveLyrics = (jobId: string, lines: LyricLine[]) => request('POST',
 // Without a part, finds every harmonic stem; with one, regenerates that stem from the version being heard.
 export const createHarmony = (jobId: string, part?: { stem: string; cleaned: boolean }) =>
   request('POST', `/stems/jobs/${jobId}/harmony`, part ?? {});
+// A score saved with the song (MusicXML, or a ScoreReader reading by its id); the server lays it on the song at once
+// when the song has its analysis. laySongScore asks for that again (after the analysis, or for a newer score).
+export const saveSongScore = (jobId: string, score: { title: string; musicxml?: string; reading?: string }) =>
+  request<{ score: NonNullable<Song['score']>; harmony?: Harmony }>('POST', `/stems/jobs/${jobId}/score`, score);
+export const laySongScore = (jobId: string) => request<{ harmony: Harmony }>('POST', `/stems/jobs/${jobId}/harmony`, { useScore: true });
+
+// A score PDF (or image) read into MusicXML by the ScoreReader (backend/score-api.mjs): uploaded as the presigned
+// form post the API returns, read, and polled until done; returns the reading's id, for saveSongScore.
+export async function readScore(file: File): Promise<string> {
+  const { id, upload } = await request<{ id: string; upload: { url: string; fields: Record<string, string> } }>(
+    'POST', '/scores', { bytes: toNumber(file.size) });
+  const sent = await file.createUploadTask(upload.url, {
+    httpMethod: 'POST', uploadType: UploadType.MULTIPART, fieldName: 'file', parameters: upload.fields, mimeType: 'application/octet-stream',
+  }).uploadAsync();
+  if (sent.status < 200 || sent.status >= 300) throw new Error(t('upload.failed'));
+  await request('POST', `/scores/${id}/read`, { pages: '' });
+  // Audiveris takes ten seconds or more a page, and a while to start.
+  for (let waited = 0; waited < 16 * 60; waited += 3) {
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    const status = await request<{ status: string; message?: string }>('GET', `/scores/${id}`);
+    if (status.status === 'failed') throw new Error(status.message ?? t('tasks.scoreFailed'));
+    if (status.status === 'completed') return id;
+  }
+  throw new Error(t('tasks.scoreFailed'));
+}
+
 // Cleans one stem, using the other five as references, as the website does.
 export const createRestoration = (jobId: string, stem: StemName) =>
   request('POST', `/stems/jobs/${jobId}/restorations`, { stem, references: STEM_NAMES.filter(name => name !== stem) });

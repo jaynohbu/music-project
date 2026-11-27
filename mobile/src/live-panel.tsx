@@ -131,7 +131,7 @@ export function LivePanel({ open, mixer, song, tasks, position, onRecording, con
         <Text style={[styles.note, styles.grow]}>
           {t(tasks.findingChords ? 'live.findingBeats' : 'live.needBeats')}
         </Text>
-        {!tasks.findingChords && <Pressable onPress={tasks.findChords} accessibilityRole="button" style={styles.chip}>
+        {!tasks.findingChords && <Pressable onPress={tasks.findDrums} accessibilityRole="button" style={styles.chip}>
           <Text style={styles.chipText}>{t('live.findBeats')}</Text>
         </Pressable>}
       </View>}

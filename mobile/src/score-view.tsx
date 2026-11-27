@@ -219,10 +219,13 @@ function StrokeMark({ stroke, color }: { stroke: Score['strokes'][number]; color
 }
 
 // One chunk of the score; its neighbours' marks that reach into it are drawn by their own chunk.
-const Chunk = memo(function Chunk({ score, chunk, activeChord, activeNote }: {
-  score: Score; chunk: number; activeChord: number; activeNote: number;
+// `lit`: the notes sounding now in this chunk, as their indices joined (n for the notes, s for the second line), so
+// a chunk is drawn again only when they change.
+const Chunk = memo(function Chunk({ score, chunk, activeChord, activeNote, lit }: {
+  score: Score; chunk: number; activeChord: number; activeNote: number; lit: string;
 }) {
   const theme = useTheme();
+  const on = new Set(lit ? lit.split(',') : []);
   const inside = (x: number) => chunkOf(x) === chunk;
   const left = chunk * CHUNK - MARGIN, width = CHUNK + 2 * MARGIN;
   return <Svg width={width} height={score.height} viewBox={`${left} ${score.top} ${width} ${score.height}`} style={{ position: 'absolute', left, top: 0 }}>
@@ -234,8 +237,8 @@ const Chunk = memo(function Chunk({ score, chunk, activeChord, activeNote }: {
     {score.strokes.map((stroke, index) => inside(stroke.x) && <StrokeMark key={stroke.unit} stroke={stroke} color={index === activeNote ? theme.accent : theme.note} />)}
     {score.noteBeams.map((beam, index) => inside(beam.x1) && <Path key={`beam-${index}`} fill={beam.second ? theme.staff : theme.note}
       d={`M${beam.x1} ${beam.y1} L${beam.x2} ${beam.y2} L${beam.x2} ${beam.y2 + BEAM_HEIGHT} L${beam.x1} ${beam.y1 + BEAM_HEIGHT} Z`} />)}
-    {score.second.map((pieces, index) => inside(pieces[0].x) && <NoteMark key={`second-${index}`} pieces={pieces} color={theme.staff} />)}
-    {score.notes.map((pieces, index) => inside(pieces[0].x) && <NoteMark key={index} pieces={pieces} color={index === activeNote ? theme.accent : theme.note} />)}
+    {score.second.map((pieces, index) => inside(pieces[0].x) && <NoteMark key={`second-${index}`} pieces={pieces} color={on.has(`s${index}`) ? theme.accent : theme.staff} />)}
+    {score.notes.map((pieces, index) => inside(pieces[0].x) && <NoteMark key={index} pieces={pieces} color={on.has(`n${index}`) ? theme.accent : theme.note} />)}
   </Svg>;
 });
 
@@ -254,8 +257,28 @@ export function HarmonyStrip({ part, stem, grid, time, songKey }: {
   const middle = width / 2;
   useEffect(() => { if (width) glide(offset, middle - position * UNIT_WIDTH); }, [width, middle, position, offset]);
   const chord = reachedIndex(score.chords.map(item => item.unit), position);
-  const note = reachedIndex(score.spans.map(item => item.unit), position);
+  // Drum strokes have no length: the one just struck.
+  const note = score.drums ? reachedIndex(score.spans.map(item => item.unit), position) : -1;
   const activeNote = note >= 0 && position < score.spans[note].unit + score.spans[note].length ? note : -1;
+  // Notes sound from their start to their end as played (song seconds): every note of a chord, the second line too.
+  const sounding = useMemo(() => {
+    const prepare = (notes: { start: number; end: number }[], prefix: string) => {
+      const order = notes.map((_, index) => index).sort((a, b) => notes[a].start - notes[b].start);
+      return { prefix, order, starts: order.map(index => notes[index].start), ends: order.map(index => notes[index].end),
+        longest: notes.reduce((most, item) => Math.max(most, item.end - item.start), 0) };
+    };
+    return score.drums ? [] : [prepare(part.notes, 'n'), prepare(part.second ?? [], 's')];
+  }, [score.drums, part]);
+  const litByChunk = new Map<number, string[]>();
+  for (const list of sounding) {
+    for (let at = reachedIndex(list.starts, time); at >= 0 && list.starts[at] >= time - list.longest; at--) {
+      if (time >= list.ends[at]) continue;
+      const index = list.order[at], pieces = list.prefix === 'n' ? score.notes[index] : score.second[index];
+      if (!pieces?.length) continue;
+      const chunk = chunkOf(pieces[0].x);
+      litByChunk.set(chunk, [...(litByChunk.get(chunk) ?? []), `${list.prefix}${index}`]);
+    }
+  }
   const noteX = (index: number) => score.drums ? score.strokes[index].x : score.notes[index][0].x;
   const here = position * UNIT_WIDTH;
   const first = chunkOf(Math.max(0, here - middle - MARGIN)), last = chunkOf(here + middle + MARGIN);
@@ -274,7 +297,8 @@ export function HarmonyStrip({ part, stem, grid, time, songKey }: {
       <Animated.View style={[styles.flow, { left: -start, height: score.height, opacity: width ? 1 : 0, transform: [{ translateX: offset }] }]}>
         {chunks.map(chunk => <Chunk key={chunk} score={score} chunk={chunk}
           activeChord={chord >= 0 && chunkOf(score.chords[chord].x) === chunk ? chord : -1}
-          activeNote={activeNote >= 0 && chunkOf(noteX(activeNote)) === chunk ? activeNote : -1} />)}
+          activeNote={activeNote >= 0 && chunkOf(noteX(activeNote)) === chunk ? activeNote : -1}
+          lit={(litByChunk.get(chunk) ?? []).sort().join(',')} />)}
       </Animated.View>
     </View>
     {score.drums ? <View style={[styles.drumClef, { top: staffTop + 8 }]} />
