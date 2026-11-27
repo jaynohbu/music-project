@@ -29,3 +29,14 @@ test('a part follows the recording\'s loudness: louder where it is louder, its t
   assert.ok(Math.max(...loud.change) <= 20 * Math.log10(4) + 1e-9);
   assert.deepEqual(player.levelChanges([0, 0], [0, 0]), { change: [0, 0], typical: 0 });
 });
+
+test('a sound that swells in is started early by its attack: the time it takes to reach half its level', () => {
+  const rate = 8000, samples = { rate, pitches: [60, 63], slot: 2, length: 1.5 };
+  const data = new Float32Array(rate * 4);
+  // Sample 0 strikes at once; sample 1 swells over 0.4 s.
+  for (let i = 0; i < rate; i++) data[i] = Math.sin(i / 3) * Math.exp(-i / rate * 3);
+  for (let i = 0; i < rate; i++) data[2 * rate + i] = Math.sin(i / 3) * Math.min(1, i / (0.4 * rate));
+  const [struck, swelling] = player.sampleAttacks({ sampleRate: rate, length: data.length, getChannelData: () => data }, samples);
+  assert.ok(struck < 0.02, `struck at once: ${struck}`);
+  assert.ok(Math.abs(swelling - 0.2) < 0.03, `heard at half its level, 0.2 s in: ${swelling}`);
+});

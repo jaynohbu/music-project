@@ -11,6 +11,33 @@ const ATTACK = 0.004, RELEASE = 0.12;
 const TOGETHER = 0.05;
 
 const sounds = new Map<string, Promise<AudioBuffer>>();
+
+// How long each sample takes to be heard: seconds from its start until its level (a 10 ms running mean) first reaches
+// half its peak in its first LOOK_ATTACK seconds. A note is started that much earlier (at the speed it is played, at
+// most MOST_LEAD), so a sound that swells in (strings, pads, organ) is heard on its beat.
+const LOOK_ATTACK = 1, MOST_LEAD = 0.25;
+const attacks = new WeakMap<AudioBuffer, number[]>();
+export function sampleAttacks(buffer: { sampleRate: number; length: number; getChannelData(channel: number): Float32Array },
+  samples: StyleLibrary['samples']): number[] {
+  const data = buffer.getChannelData(0), rate = buffer.sampleRate, smooth = Math.max(1, Math.round(0.01 * rate));
+  return samples.pitches.map((_, index) => {
+    const from = Math.round(index * samples.slot * rate), to = Math.min(data.length, from + Math.round(LOOK_ATTACK * rate));
+    const level = new Float32Array(Math.max(0, to - from));
+    let sum = 0, peak = 0;
+    for (let at = from; at < to; at++) {
+      sum += Math.abs(data[at]) - (at - smooth >= from ? Math.abs(data[at - smooth]) : 0);
+      level[at - from] = sum / smooth;
+      peak = Math.max(peak, level[at - from]);
+    }
+    const heard = level.findIndex(value => value >= peak / 2);
+    return peak > 0 && heard > 0 ? heard / rate : 0;
+  });
+}
+function leadOf(buffer: AudioBuffer, samples: StyleLibrary['samples'], index: number, speed: number): number {
+  let found = attacks.get(buffer);
+  if (!found) attacks.set(buffer, found = sampleAttacks(buffer, samples));
+  return Math.min(MOST_LEAD, (found[index] ?? 0) / speed);
+}
 let library: Promise<StyleLibrary> | undefined;
 
 export function loadLibrary(): Promise<StyleLibrary> {
@@ -134,9 +161,11 @@ export class AccompanimentVoice {
     source.playbackRate.value = rate;
     const envelope = this.context.createGain();
     const level = (event.velocity / 127) ** 1.5 * 0.5 * share;
-    const at = Math.max(when, this.context.currentTime);
+    // Started early by the sound's attack, so it is heard on time (and held as much longer).
+    const lead = leadOf(buffer, samples, index, rate);
+    const at = Math.max(when - lead, this.context.currentTime);
     // The sample lasts samples.length seconds at its own pitch; held notes end with it.
-    const held = Math.min(duration, samples.length / rate - RELEASE);
+    const held = Math.min(duration + lead, samples.length / rate - RELEASE);
     envelope.gain.setValueAtTime(0, at);
     envelope.gain.linearRampToValueAtTime(level, at + ATTACK);
     envelope.gain.setValueAtTime(level, at + Math.max(ATTACK, held));
@@ -167,8 +196,9 @@ export async function renderNotes(events: NoteEvent[], seconds: number, rate: nu
     source.buffer = buffer;
     source.playbackRate.value = speed;
     const envelope = context.createGain();
-    const level = (event.velocity / 127) ** 1.5 * 0.5 * share, at = Math.max(0, event.time);
-    const held = Math.max(ATTACK, Math.min(event.duration, samples.length / speed - RELEASE));
+    const lead = leadOf(buffer, samples, index, speed);
+    const level = (event.velocity / 127) ** 1.5 * 0.5 * share, at = Math.max(0, event.time - lead);
+    const held = Math.max(ATTACK, Math.min(event.duration + lead, samples.length / speed - RELEASE));
     envelope.gain.setValueAtTime(0, at);
     envelope.gain.linearRampToValueAtTime(level, at + ATTACK);
     envelope.gain.setValueAtTime(level, at + held);
