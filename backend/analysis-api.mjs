@@ -15,6 +15,25 @@ export const ANALYSES = {
 };
 
 const RUNNING = ['queued', 'processing'];
+const LARGEST_SCORE_HARMONY = 4 * 1024 * 1024;
+const finite = value => typeof value === 'number' && Number.isFinite(value);
+
+// What the page sends as the Harmonic score from an uploaded score: the song's harmony result in its usual form
+// (beats, firstBar, the ensemble part and the other parts), and a short account of the score it came from.
+export function checkScoreHarmony(document) {
+  const invalid = message => { throw new Error(message ?? 'This score result could not be saved.'); };
+  if (!document || typeof document !== 'object') invalid();
+  if (Buffer.byteLength(JSON.stringify(document)) > LARGEST_SCORE_HARMONY) invalid('This score result is too large to save.');
+  const { beats, firstBar, ensemble, stems, fromScore } = document;
+  if (!Array.isArray(beats) || beats.length < 2 || !beats.every(finite) || beats.some((beat, index) => index && beat <= beats[index - 1])) invalid();
+  if (!Number.isInteger(firstBar) || firstBar < 0 || firstBar >= beats.length) invalid();
+  const notes = list => Array.isArray(list) && list.every(note => note && finite(note.start) && finite(note.end) && note.end >= note.start
+    && Number.isInteger(note.pitch) && note.pitch >= 0 && note.pitch <= 127 && Number.isInteger(note.unit) && Number.isInteger(note.length));
+  if (!ensemble || !notes(ensemble.notes) || !Array.isArray(ensemble.chords)) invalid();
+  if (stems && (typeof stems !== 'object' || Object.values(stems).some(part => part && (!notes(part.notes ?? []) || (part.hits && !Array.isArray(part.hits)))))) invalid();
+  if (!fromScore || typeof fromScore.title !== 'string' || !Number.isInteger(fromScore.measures) || !Number.isInteger(fromScore.notes)) invalid();
+  return document;
+}
 const INVALID_LYRICS = 'These lyrics could not be saved. Check that each line has words, then try again.';
 const MOST_LYRIC_WORDS = 20000;
 const LONGEST_LYRIC_WORD = 200;
@@ -64,8 +83,10 @@ async function regeneratedParts(records, signer, storage) {
 // finished, the last finished result of any version is still shown: as `previous` while one runs, or, when
 // none has run yet, as the result itself marked `stale` (older apps show it; newer ones start a new run).
 export async function currentAnalysis(type, parent, { database, signer, storage }) {
-  const records = await visibleRecords(type, parent, database);
+  let records = await visibleRecords(type, parent, database);
   const item = newestWorking(records.filter(record => !record.stem));
+  // A result from an uploaded score is on its own beats: parts regenerated before it do not belong to it.
+  if (item?.fromScore) records = records.filter(record => !record.stem || record.generatedAt > item.generatedAt);
   const finished = item?.status === 'completed' ? undefined : (await visibleRecords(type, parent, database, false))
     .find(record => !record.stem && record.status === 'completed' && record.key);
   if (!item) return finished && { ...(await publicAnalysis(finished, signer, storage)), stale: true };
@@ -76,7 +97,10 @@ export async function currentAnalysis(type, parent, { database, signer, storage 
 }
 
 async function publicAnalysis(item, signer, storage) {
-  const fields = { id: item.jobId, status: item.status, ...(item.error ? { error: item.error } : {}) };
+  const fields = {
+    id: item.jobId, status: item.status, ...(item.error ? { error: item.error } : {}),
+    ...(item.fromScore ? { fromScore: item.fromScore } : {}),
+  };
   if (item.status !== 'completed') return fields;
   return {
     ...fields,
@@ -114,6 +138,49 @@ export function createAnalysisRoutes({ database, storage, orchestrator, signer }
     return reply(201, { lyrics: await publicAnalysis(child, signer, storage) });
   }
 
+  // A finished result as the song's current one: a new record, earlier ones stay stored.
+  async function saveHarmony({ userId, parent, key, fromScore }) {
+    // Always after the newest result, so it is the current one even when saved in the same millisecond.
+    const newest = (await visibleRecords('harmony', parent, database, false))[0]?.generatedAt;
+    const now = new Date(Math.max(Date.now(), newest ? Date.parse(newest) + 1 : 0)).toISOString();
+    const child = {
+      userId, jobId: key.id, type: 'harmony', parentJobId: parent.jobId, status: 'completed', version: ANALYSES.harmony.version,
+      title: ANALYSES.harmony.label, key: key.path, generatedAt: now, startedAt: now, completedAt: now,
+      ...(fromScore ? { fromScore } : {}),
+    };
+    await database.send(new PutCommand({ TableName: table(), Item: child, ConditionExpression: 'attribute_not_exists(jobId)' }));
+    return child;
+  }
+
+  // The Harmonic score from an uploaded score aligned with the stems (built by the page): saved as the song's
+  // harmony result, so the mixer, accompaniment and exports use it.
+  async function saveScoreHarmony({ userId, parent, input, reply }) {
+    let document;
+    try {
+      document = checkScoreHarmony(input.fromScore);
+    } catch (error) {
+      return reply(400, { message: error.message });
+    }
+    const id = randomUUID();
+    const key = `users/${userId}/${ANALYSES.harmony.folder}/${parent.jobId}/${id}.json`;
+    const body = Buffer.from(JSON.stringify(document));
+    await storage.send(new PutObjectCommand({
+      Bucket: process.env.BUCKET_NAME, Key: key, ContentType: 'application/json',
+      Body: Readable.from([body]), ContentLength: body.length,
+    }));
+    const child = await saveHarmony({ userId, parent, key: { id, path: key }, fromScore: document.fromScore });
+    return reply(201, { harmony: await publicAnalysis(child, signer, storage) });
+  }
+
+  // Back to the analysis: its last finished result made current again.
+  async function useAnalysisAgain({ userId, parent, reply }) {
+    const analysed = (await visibleRecords('harmony', parent, database))
+      .find(record => !record.stem && record.status === 'completed' && !record.fromScore && record.key);
+    if (!analysed) return reply(409, { message: 'This song has no chord analysis to go back to.' });
+    const child = await saveHarmony({ userId, parent, key: { id: randomUUID(), path: analysed.key } });
+    return reply(201, { harmony: await publicAnalysis(child, signer, storage) });
+  }
+
   async function create({ type, userId, parentJobId, reply, body }) {
     const analysis = ANALYSES[type];
     const parent = (await database.send(new GetCommand({
@@ -130,6 +197,8 @@ export function createAnalysisRoutes({ database, storage, orchestrator, signer }
       return reply(400, { message: type === 'harmony' ? NOT_REGENERABLE : INVALID_LYRICS });
     }
     if (type === 'lyrics' && input.lines !== undefined) return saveEdit({ userId, parent, lines: input.lines, reply });
+    if (type === 'harmony' && input.fromScore !== undefined) return saveScoreHarmony({ userId, parent, input, reply });
+    if (type === 'harmony' && input.useAnalysis === true) return useAnalysisAgain({ userId, parent, reply });
     const { stem, cleaned } = type === 'harmony' ? input : {};
     if (stem !== undefined && !REGENERATED_STEMS.includes(stem)) return reply(400, { message: NOT_REGENERABLE });
     const records = await visibleRecords(type, parent, database);
@@ -137,6 +206,9 @@ export function createAnalysisRoutes({ database, storage, orchestrator, signer }
     const sources = {};
     if (stem) {
       if (whole?.status !== 'completed') return reply(409, { message: 'Find chords for this song before regenerating a stem.' });
+      if (stem === 'other' && whole.fromScore) {
+        return reply(409, { message: 'The Harmonic score comes from the uploaded score. Go back to the analysis to regenerate it.' });
+      }
       const working = records.find(record => record.stem === stem);
       if (working && RUNNING.includes(working.status)) {
         return reply(200, { [type]: (await regeneratedParts(records, signer, storage)).stems[stem] });

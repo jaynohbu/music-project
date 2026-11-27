@@ -12,7 +12,7 @@ import { ChangeDetectionStrategy, Component, ElementRef, OnDestroy, OnInit, inje
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { StemsService, errorMessage, type HarmonyGrid, type Job } from './services';
 import { type Score, parseMusicXml, scoreExcerpt, unrollRepeats, unzipMusicXml } from './musicxml';
-import { type AlignStem, type Alignment, type MeasureFit, alignScore, fitMeasures, regridHits, restoredScore, scoreMask } from './score-align';
+import { type AlignStem, type Alignment, type HarmonyDocument, type MeasureFit, alignScore, fitMeasures, harmonyFromScore, regridHits, restoredScore, scoreMask } from './score-align';
 import { scoreSheet } from './score-sheet';
 import type { DrumHit } from './services';
 import { harmonyMidi } from './score-export';
@@ -112,6 +112,15 @@ function blockPeaks(signal: Float32Array, block: number) {
             <button type="button" class="secondary" (click)="download('json')">Restored JSON</button>
           }
         </div>
+        @if (savingHarmony()) { <p class="hint" role="status">Saving the song's Harmonic score…</p> }
+        @else if (harmonySource()?.fromScore; as used) {
+          <p role="status"><strong>The song's Harmonic score comes from the uploaded score</strong> ({{ used.title || 'score' }}:
+            {{ used.notes }} notes over {{ used.measures }} measures{{ used.correctedBars ? ', ' + used.correctedBars + ' drum bars corrected' : '' }}).
+            The mixer, accompaniment and exports use it; notes the score does not have are left out.
+            <button type="button" class="secondary" (click)="useAnalysis()">Use the analysis again</button></p>
+        } @else if (harmonySource()) {
+          <p class="hint">The song's Harmonic score comes from the analysis. Upload a score to use it instead.</p>
+        }
         <p class="hint">A passage of the song (the intro, say) as a PDF or MusicXML (.musicxml, .mxl). It is found in the song by
           comparing it with every stem; the Harmonic stem is then restored from it: the score's notes the stem plays, as it plays them.</p>
         @if (scoreError()) { <p class="error" role="alert">{{ scoreError() }}</p> }
@@ -252,6 +261,10 @@ export class SpectrumPage implements OnInit, OnDestroy {
   readonly fit = signal<MeasureFit | null>(null);
   private printedScore?: Score;
   private drumHits: DrumHit[] = [];
+  private harmonyDocument?: HarmonyDocument;
+  // Where the song's Harmonic score comes from: the saved state shown on the page.
+  readonly harmonySource = signal<{ fromScore?: { title: string; measures: number; notes: number; correctedBars: number } } | null>(null);
+  readonly savingHarmony = signal(false);
   readonly fromMeasure = signal(1);
   readonly toMeasure = signal(1);
   private restored?: AudioBuffer;
@@ -306,6 +319,7 @@ export class SpectrumPage implements OnInit, OnDestroy {
     try {
       const { job } = await this.stems.getJob(this.jobId);
       this.job.set(job);
+      this.harmonySource.set(job.harmony ? { fromScore: job.harmony.fromScore } : null);
       const url = job.stems?.[STEM]?.playUrl;
       if (!url) throw new Error('This song has no Harmonic stem yet.');
       void this.loadGrid(job);
@@ -346,8 +360,10 @@ export class SpectrumPage implements OnInit, OnDestroy {
     try {
       const response = await fetch(shown.url);
       if (!response.ok) return;
-      const { beats, firstBar, stems } = await response.json() as HarmonyGrid & { stems?: Record<string, { hits?: DrumHit[] } | undefined> };
+      const document = await response.json() as HarmonyDocument;
+      const { beats, firstBar, stems } = document;
       if (!this.destroyed && beats?.length > 1) {
+        this.harmonyDocument = document;
         this.grid.set({ beats, firstBar });
         this.drumHits = stems?.['drums']?.hits ?? [];
         this.draw();
@@ -624,6 +640,7 @@ export class SpectrumPage implements OnInit, OnDestroy {
     this.restored = this.both = this.scorePart = this.scoreRest = this.extracted = undefined;
     this.separatedShare.set(null);
     const shown = this.alignment()!;
+    void this.saveHarmony(shown, fit, score);
     void this.separate(shown);
     this.seekTo(Math.max(0, shown.measures[0].start - 1));
     void this.renderRestored(shown);
@@ -732,6 +749,38 @@ export class SpectrumPage implements OnInit, OnDestroy {
     this.scoreError.set('');
     void this.alignRange().catch(error => this.scoreError.set(`Could not use the score: ${errorMessage(error)}`))
       .finally(() => { this.scoreStatus.set(''); this.aligning.set(false); });
+  }
+
+  // An aligned score is the song's Harmonic score from now on: saved as its harmony result, which the mixer, the
+  // accompaniment and the exports use; the analysis's own is used again only when asked.
+  private async saveHarmony(found: Alignment, fit: MeasureFit | null, score: Score): Promise<void> {
+    const analysis = this.harmonyDocument;
+    if (!analysis) return;
+    this.savingHarmony.set(true);
+    try {
+      const document = harmonyFromScore(analysis, found, fit, {
+        title: this.printedScore?.title || score.title || this.scoreName(), correctedBars: fit?.corrections.bars ?? 0,
+      });
+      const { harmony } = await this.stems.saveScoreHarmony(this.jobId, document);
+      if (this.alignment() !== found || this.destroyed) return;
+      this.harmonySource.set({ fromScore: harmony.fromScore });
+    } catch (error) {
+      this.scoreError.set(`Could not save the score as the song's Harmonic score: ${errorMessage(error)}`);
+    } finally {
+      this.savingHarmony.set(false);
+    }
+  }
+
+  async useAnalysis(): Promise<void> {
+    this.savingHarmony.set(true);
+    try {
+      await this.stems.useAnalysedHarmony(this.jobId);
+      this.harmonySource.set({});
+    } catch (error) {
+      this.scoreError.set(`Could not go back to the analysis: ${errorMessage(error)}`);
+    } finally {
+      this.savingHarmony.set(false);
+    }
   }
 
   setPlacement(value: 'bars' | 'warp'): void {

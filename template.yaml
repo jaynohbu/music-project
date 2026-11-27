@@ -301,10 +301,12 @@ Resources:
             - Effect: Allow
               Action: s3:GetObject
               Resource: !Sub '${AudioBucket.Arn}/users/*'
-            # Edited lyrics are saved here; original stems stay out of reach.
+            # Edited lyrics and harmony from an uploaded score are saved here; original stems stay out of reach.
             - Effect: Allow
               Action: s3:PutObject
-              Resource: !Sub '${AudioBucket.Arn}/users/*/lyrics/*'
+              Resource:
+                - !Sub '${AudioBucket.Arn}/users/*/lyrics/*'
+                - !Sub '${AudioBucket.Arn}/users/*/harmony/*'
             # Deliberately excludes users/*/stems/*: original stems cannot be deleted here.
             # Lyrics: an edit saved while its song is being deleted is removed again.
             - Effect: Allow

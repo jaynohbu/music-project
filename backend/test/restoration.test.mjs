@@ -886,7 +886,7 @@ test('the template lets the task write lyrics and routes them', () => {
   const taskPolicy = template.slice(template.indexOf('StemTaskRole:'), template.indexOf('StemTask:\n'));
   assert.ok(taskPolicy.includes('users/*/lyrics/*'));
   assert.ok(taskPolicy.includes('users/*/harmony/*'));
-  assert.ok(template.includes("Action: s3:PutObject\n              Resource: !Sub '${AudioBucket.Arn}/users/*/lyrics/*'"), 'the API can save edited lyrics');
+  assert.ok(template.includes("Action: s3:PutObject\n              Resource:\n                - !Sub '${AudioBucket.Arn}/users/*/lyrics/*'\n                - !Sub '${AudioBucket.Arn}/users/*/harmony/*'"), 'the API can save edited lyrics and harmony from a score');
   assert.match(taskPolicy, /Action: s3:GetObject[\s\S]*?users\/\*\/restored\/\*[\s\S]*?users\/\*\/harmony\/\*[\s\S]*?Action: \[s3:PutObject/, 'can read cleaned stems and saved results');
   assert.ok(template.includes('/api/stems/jobs/{jobId}/lyrics'));
   assert.ok(template.includes('/api/stems/jobs/{jobId}/harmony'));
@@ -1111,4 +1111,48 @@ print(json.dumps({'reps': reps, 'voted': [(x['unit'], x['pitch'], x['velocity'])
   assert.deepEqual(found.reps, [{ family: 0, bars: 2, members: [0, 4, 8, 12], shifts: [0, 0, 5, 0] }]);
   assert.deepEqual(found.voted, [[8 * 16 + 16 + 6, 60, 90]], 'The G missed in the moved playing comes back as its C, at the others\' velocity');
   assert.deepEqual(found.lined, [[0, 0], [4, 4], [7, 6], [10, 8]], 'Late onsets meet their counterparts');
+});
+
+const scoreHarmony = (fields = {}) => ({
+  beats: [0, 0.5, 1, 1.5, 2], firstBar: 0, accompaniment: { genre: 'rock' },
+  ensemble: { key: 'B', chords: [{ start: 0, name: 'B' }], notes: [{ start: 0.5, end: 1, pitch: 71, unit: 4, length: 4, velocity: 90, confidence: 1 }] },
+  stems: { bass: { chords: [], notes: [] }, drums: { chords: [], notes: [], hits: [{ unit: 0, drum: 'kick' }] } },
+  fromScore: { title: 'Our God', measures: 124, notes: 1464, correctedBars: 0 }, ...fields,
+});
+
+test('a Harmonic score from an uploaded score becomes the song\'s result, the analysis stays to go back to', async () => {
+  const { call, database, storage, started, finished } = regeneration();
+  // A bass part regenerated before the score: on the old beats, so not shown with it.
+  finished(otherId, { stem: 'bass', generatedAt: new Date(Date.now() - 30000).toISOString() });
+  const made = await call(`${parentId}/harmony`, { fromScore: scoreHarmony() });
+  assert.equal(made.status, 201);
+  assert.deepEqual(made.body.harmony.fromScore, { title: 'Our God', measures: 124, notes: 1464, correctedBars: 0 });
+  const child = database.get('owner', made.body.harmony.id);
+  assert.equal(child.key, `users/owner/harmony/${parentId}/${child.jobId}.json`);
+  assert.equal(child.version, 16);
+  assert.deepEqual(JSON.parse(storage.objects.get(child.key)), scoreHarmony());
+  const shown = (await call(parentId, undefined, 'GET')).body.job.harmony;
+  assert.equal(shown.id, child.jobId);
+  assert.equal(shown.stems, undefined, 'the older regenerated part is left out');
+  assert.equal(started.length, 0);
+  // The analysis no longer redoes the Harmonic part while the score is used; going back makes it current again.
+  assert.equal((await call(`${parentId}/harmony`, { stem: 'other' })).status, 409);
+  const back = await call(`${parentId}/harmony`, { useAnalysis: true });
+  assert.equal(back.status, 201);
+  assert.equal(back.body.harmony.fromScore, undefined);
+  assert.equal(database.get('owner', back.body.harmony.id).key, `users/owner/harmony/${parentId}/${lyricsId}.json`);
+  assert.equal((await call(parentId, undefined, 'GET')).body.job.harmony.id, back.body.harmony.id);
+});
+
+test('a Harmonic score from an uploaded score must be a whole result on rising beats', async () => {
+  const { call, storage } = regeneration();
+  const before = storage.objects.size;
+  for (const bad of [null, 'text', scoreHarmony({ beats: [0, 1, 1] }), scoreHarmony({ firstBar: 9 }), scoreHarmony({ ensemble: { chords: [] } }),
+    scoreHarmony({ ensemble: { chords: [], notes: [{ start: 1, end: 0.5, pitch: 60, unit: 0, length: 1 }] } }),
+    scoreHarmony({ ensemble: { chords: [], notes: [{ start: 0, end: 1, pitch: 200, unit: 0, length: 1 }] } }),
+    scoreHarmony({ fromScore: undefined }), scoreHarmony({ ensemble: { chords: [], notes: Array.from({ length: 80000 }, () => ({ start: 0, end: 1, pitch: 60, unit: 0, length: 4, velocity: 90 })) } })]) {
+    assert.equal((await call(`${parentId}/harmony`, { fromScore: bad })).status, 400, JSON.stringify(bad)?.slice(0, 60));
+  }
+  assert.equal(storage.objects.size, before);
+  assert.equal((await setup().call(`${parentId}/harmony`, { useAnalysis: true })).status, 409);
 });

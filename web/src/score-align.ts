@@ -20,7 +20,7 @@
 // stems that do. Pure functions only (no DOM), so they can be unit-tested.
 import { HOP, LOWEST_PITCH, ROWS, ROWS_PER_SEMITONE, type Spectrogram } from './spectrogram';
 import type { Score, ScoreMeasure, ScoreNote } from './musicxml';
-import type { HarmonyGrid, HarmonyNote } from './services';
+import type { HarmonyGrid, HarmonyNote, HarmonyPart } from './services';
 
 export type AlignStem = 'vocals' | 'bass' | 'drums' | 'other';
 export const PITCHED_STEMS: readonly AlignStem[] = ['vocals', 'bass', 'other'];
@@ -906,4 +906,39 @@ export function fitMeasures({ score, spectrograms, beats, target }: AlignInput &
 // beats, as a sixteenth of the new.
 export function regridHits<Hit extends { unit: number }>(hits: Hit[], from: number[], to: number[]): Hit[] {
   return hits.map(hit => ({ ...hit, unit: Math.max(0, Math.round(beatPosition(to, timeAtBeat(from, hit.unit / 4)) * 4)) }));
+}
+
+// The song's harmony result made from the aligned score: the Harmonic (ensemble) part is the restored notes only,
+// on the beats the score was laid on (each at its written place on that grid, played as the stem plays it); the
+// analysis's chord names, bass notes and drum hits are kept, moved onto those beats. What the score does not have
+// is not in it.
+export interface HarmonyDocument {
+  beats: number[]; firstBar: number;
+  ensemble?: HarmonyPart; stems?: Record<string, HarmonyPart | undefined>;
+  [field: string]: unknown;
+}
+export function harmonyFromScore(analysis: HarmonyDocument, alignment: Alignment, fit: MeasureFit | null,
+  fromScore: { title: string; correctedBars: number }): HarmonyDocument {
+  const beats = fit?.beats ?? analysis.beats, firstBar = fit?.firstBar ?? analysis.firstBar;
+  const unitAt = (time: number) => Math.round(beatPosition(beats, time) * 4);
+  const moved = (part: HarmonyPart | undefined): HarmonyPart | undefined => part && {
+    ...part,
+    notes: part.notes.map(note => {
+      const unit = Math.max(0, unitAt(note.start));
+      return { ...note, unit, length: Math.max(1, unitAt(note.end) - unit) };
+    }),
+    ...(part.hits ? { hits: regridHits(part.hits, analysis.beats, beats) } : {}),
+  };
+  const notes: HarmonyNote[] = alignment.notes.map(note => {
+    const unit = Math.max(0, unitAt(alignment.timeAt(note.written.start)));
+    const end = unitAt(alignment.timeAt(note.written.start + note.written.length));
+    return { start: note.start, end: note.end, pitch: note.pitch, unit, length: Math.max(1, end - unit), velocity: note.velocity, confidence: 1 };
+  }).sort((a, b) => a.start - b.start || a.pitch - b.pitch);
+  const { second: _second, repeats: _repeats, corrections: _corrections, ...ensemble } = analysis.ensemble ?? { chords: [], notes: [] };
+  return {
+    ...analysis, beats, firstBar,
+    ensemble: { ...ensemble, chords: ensemble.chords ?? [], notes },
+    stems: Object.fromEntries(Object.entries(analysis.stems ?? {}).map(([name, part]) => [name, moved(part)])),
+    fromScore: { title: fromScore.title, measures: alignment.measures.length, notes: notes.length, correctedBars: fromScore.correctedBars },
+  };
 }

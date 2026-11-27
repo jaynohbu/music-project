@@ -330,7 +330,11 @@ export interface Lyrics {
 export interface RegeneratedPart extends Lyrics { resultId?: string }
 // `stale`: from an older analysis version, shown until a new run finishes. `previous`: the last finished result,
 // shown while this one runs.
-export interface Harmony extends Lyrics { stems?: Record<string, RegeneratedPart | undefined>; stale?: boolean; previous?: Lyrics }
+// fromScore: the Harmonic score comes from an uploaded score aligned with the stems, not from the analysis.
+export interface Harmony extends Lyrics {
+  stems?: Record<string, RegeneratedPart | undefined>; stale?: boolean; previous?: Lyrics;
+  fromScore?: { title: string; measures: number; notes: number; correctedBars: number };
+}
 export interface LyricWord { start: number; end: number; text: string }
 export interface LyricLine { start: number; end: number; words: LyricWord[] }
 export type DrumName = 'kick' | 'snare' | 'tom' | 'hihat' | 'cymbal';
@@ -479,6 +483,21 @@ export class StemsService {
       if (seconds > 16 * 60) throw new Error('Reading the score took too long.');
       progress(`Reading the score… ${seconds} s (about ten seconds a page)`);
     }
+  }
+
+  // The song's harmony result made from an uploaded score (score-align.ts harmonyFromScore), or back to the analysis.
+  async saveScoreHarmony(jobId: string, document: object): Promise<{ harmony: Harmony }> {
+    const token = await this.auth.token();
+    return firstValueFrom(this.http.post<{ harmony: Harmony }>(
+      `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/harmony`, { fromScore: document },
+      { headers: { Authorization: `Bearer ${token}` } }));
+  }
+
+  async useAnalysedHarmony(jobId: string): Promise<{ harmony: Harmony }> {
+    const token = await this.auth.token();
+    return firstValueFrom(this.http.post<{ harmony: Harmony }>(
+      `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/harmony`, { useAnalysis: true },
+      { headers: { Authorization: `Bearer ${token}` } }));
   }
 
   // With a part, redoes only that stem, from its cleaned version if asked.
