@@ -1101,12 +1101,14 @@ export class SpectrumPage implements OnInit, OnDestroy {
         if (x(note.end) < 0 || x(note.start) > width) continue;
         context.strokeRect(Math.round(x(note.start)) + 0.5, Math.round(y(note.pitch) - tall / 2) + 0.5, Math.max(2, x(note.end) - x(note.start)), tall);
       }
-      context.setLineDash([]);
       context.strokeStyle = '#3df2ff';
       for (const note of found.notes) {
         if (x(note.end) < 0 || x(note.start) > width) continue;
+        // A score note the stems were not heard playing, filled in where written: dashed.
+        context.setLineDash(note.found === false ? [4, 3] : []);
         context.strokeRect(Math.round(x(note.start)) + 0.5, Math.round(y(note.pitch) - tall / 2) + 0.5, Math.max(2, x(note.end) - x(note.start)), tall);
       }
+      context.setLineDash([]);
     }
     context.font = '12px system-ui, sans-serif';
     for (const measure of found.measures) {

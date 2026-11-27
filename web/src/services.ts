@@ -335,7 +335,7 @@ export interface RegeneratedPart extends Lyrics { resultId?: string }
 // fromScore: the Harmonic score comes from an uploaded score aligned with the stems, not from the analysis.
 export interface Harmony extends Lyrics {
   stems?: Record<string, RegeneratedPart | undefined>; stale?: boolean; previous?: Lyrics;
-  fromScore?: { title: string; measures: number; notes: number; correctedBars: number; family?: 'guitar' | 'keys'; scoreSavedAt?: string };
+  fromScore?: { title: string; measures: number; notes: number; heard?: number; correctedBars: number; family?: 'guitar' | 'keys'; scoreSavedAt?: string };
 }
 export interface LyricWord { start: number; end: number; text: string }
 export interface LyricLine { start: number; end: number; words: LyricWord[] }

@@ -352,7 +352,7 @@ test('the harmony result from a score: only the restored notes, on the corrected
   assert.deepEqual(made.stems.bass.notes, [{ start: 0.5, end: 1, pitch: 33, unit: 4, length: 4, velocity: 70, confidence: 1 }]);
   assert.deepEqual(made.stems.drums.hits.map(h => h.unit), [12]);
   assert.deepEqual(made.accompaniment, { genre: 'rock' });
-  assert.deepEqual(made.fromScore, { title: 'Song', measures: 1, notes: 1, correctedBars: 1, family: 'keys', bars: [{ number: '1', start: 0, end: 2 }] });
+  assert.deepEqual(made.fromScore, { title: 'Song', measures: 1, notes: 1, heard: 1, correctedBars: 1, family: 'keys', bars: [{ number: '1', start: 0, end: 2 }] });
 });
 
 test('chords named from a score\'s notes: the shape that fits, on the lowest note when two fit alike, a slash for another bass', () => {
@@ -365,4 +365,22 @@ test('chords named from a score\'s notes: the shape that fits, on the lowest not
   assert.equal(name([[2, 1], [6, 2], [9, 1]], 6), 'D/F#');
   assert.equal(align.chordName({ root: 3, quality: '', bass: 3 }, 'Eb'), 'Eb');
   assert.equal(align.nameChord(new Array(12).fill(0), null), null);
+});
+
+test('with the score aligned, every score note is kept: one the stem leaves out is filled in where written, as loud as its neighbours', async () => {
+  const score = songScore(), offset = 3.1, beat = 0.52, seconds = 24;
+  const dropped = score.notes.find(n => n.part === 0 && n.start === 10 && n.pitch === 57);
+  const spectrograms = await spectrogramsOf(synthesize(score, { offset, beat, seconds, skip: n => n === dropped }));
+  const beats = Array.from({ length: Math.floor(seconds / beat) }, (_, k) => offset - 5 * beat + k * beat).filter(time => time >= 0);
+  const result = align.alignScore({ score, spectrograms, seconds, beats, fill: true });
+  // Every guitar and bass note of the score; the melody stays the singer's.
+  assert.equal(result.notes.length, score.notes.filter(n => n.part !== 1).length);
+  const filled = result.notes.filter(n => n.found === false);
+  assert.ok(filled.some(n => n.pitch === 57 && Math.abs(n.start - (offset + 10 * beat)) < 0.05), 'the left-out note, where written');
+  assert.ok(filled.every(n => n.velocity >= 12 && n.velocity <= 127));
+  assert.ok(result.notes.filter(n => n.part === undefined && n.found !== false).length > 40);
+  assert.ok(result.missing.every(m => m.part === 'vocals'));
+  // Nothing is extracted for a note that was not heard.
+  const kept = align.scoreMask(filled, spectrograms.other.frames, 22050);
+  assert.equal(kept.some(value => value), false);
 });

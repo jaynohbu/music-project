@@ -69,6 +69,8 @@ export interface RestoredNote {
   written: { pitch: number; start: number; length: number };
   heard: Partial<Record<AlignStem, number>>;
   octave: number;                         // Semitones moved to the octave the stem plays: -12, 0 or 12.
+  // False for a score note the stem was not heard playing, filled in where the score writes it.
+  found?: false;
 }
 // part: the stem the note's part was given to (a melody: the vocals).
 export interface MissingNote { pitch: number; start: number; end: number; measure: number; stems: AlignStem[]; part?: AlignStem | null }
@@ -301,9 +303,11 @@ export interface AlignInput {
   intro?: boolean;
   // What is restored from (the other stem unless given), at the other stem's rate and frames.
   target?: RestoreTarget;
+  // Every score note kept, those not heard filled in where written (alignScore; fitMeasures always does).
+  fill?: boolean;
 }
 
-export function alignScore({ score, spectrograms, seconds, beats, intro, target }: AlignInput): Alignment {
+export function alignScore({ score, spectrograms, seconds, beats, intro, target, fill }: AlignInput): Alignment {
   // Measures after the last note (rests to the end of a page) match anything; they are left out.
   const lastSound = Math.max(...score.notes.map(note => note.start + note.length));
   const kept = score.measures.filter((measure, index) => index === 0 || measure.start < lastSound - 1e-6);
@@ -504,7 +508,7 @@ export function alignScore({ score, spectrograms, seconds, beats, intro, target 
   // A melody is the singer's, though the other stem's overtones sound at its pitches; a bass line the other stem
   // also plays (a piano's left hand, a guitar's low strings) is restored where it has it.
   const stemOf = (note: ScoreNote) => parts.find(part => part.part === note.part && part.staff === note.staff)?.stem ?? null;
-  const { notes, missing } = restore(score, spectrograms, target ?? { spectrogram: other, stems: ['other'] }, timeAt, best.shift, beatGap, stemOf);
+  const { notes, missing } = restore(score, spectrograms, target ?? { spectrogram: other, stems: ['other'] }, timeAt, best.shift, beatGap, stemOf, undefined, false, fill);
   return { measures, shift: best.shift, secondsPerQuarter, likeness, parts, notes, missing, timeAt };
 }
 
@@ -532,7 +536,7 @@ export interface RestoreTarget { spectrogram: Spectrogram; stems: AlignStem[] }
 
 function restore(score: Score, spectrograms: Partial<Record<AlignStem, Spectrogram>>, target: RestoreTarget, timeAt: (quarter: number) => number,
   shift: number, beatGap: (time: number) => number, stemOf: (note: ScoreNote) => AlignStem | null,
-  octaves: number[] = [-12, 12], lowestOctave = false): { notes: RestoredNote[]; missing: MissingNote[] } {
+  octaves: number[] = [-12, 12], lowestOctave = false, fill = false): { notes: RestoredNote[]; missing: MissingNote[] } {
   // Named for the usual target, the other stem.
   const other = target.spectrogram;
   const perSecond = other.rate / HOP;
@@ -554,6 +558,11 @@ function restore(score: Score, spectrograms: Partial<Record<AlignStem, Spectrogr
   const above = (stem: AlignStem, pitch: number, from: number, to: number) => aboveIn(spectrograms[stem]!, floors[stem], pitch, from, to);
   const inTarget = (pitch: number, from: number, to: number) => aboveIn(other, targetFloors, pitch, from, to);
   const notes: RestoredNote[] = [], missing: MissingNote[] = [];
+  // With `fill`, a score note the stem is not heard playing is still the score's: it goes where the score writes it
+  // (its velocity set from the notes heard around it, below); only the vocals' parts are left out.
+  const filled: RestoredNote[] = [];
+  const fillIn = (note: ScoreNote, pitch: number, start: number, end: number, heard: Partial<Record<AlignStem, number>>) =>
+    filled.push({ pitch, start, end, velocity: 0, measure: note.measure, written: { pitch, start: note.start, length: note.length }, heard, octave: 0, found: false });
   // Notes whose pitch the score has sounding up to their start (struck again).
   const struck = new Set(score.notes.filter(note => score.notes.some(before => before !== note && before.pitch === note.pitch
     && before.start < note.start && before.start + before.length > note.start - 1e-6)));
@@ -582,7 +591,8 @@ function restore(score: Score, spectrograms: Partial<Record<AlignStem, Spectrogr
     const own = stemOf(note);
     const spill = !!own && !target.stems.includes(own) && (heard[own] ?? -Infinity) - level > SPILL_DB;
     if (level < PRESENT_DB || own === 'vocals' || spill) {
-      missing.push({ pitch, start, end, measure: note.measure, stems: stems.filter(stem => (heard[stem] ?? -Infinity) >= PRESENT_DB), part: own });
+      if (fill && own !== 'vocals') fillIn(note, pitch, start, end, heard);
+      else missing.push({ pitch, start, end, measure: note.measure, stems: stems.filter(stem => (heard[stem] ?? -Infinity) >= PRESENT_DB), part: own });
       continue;
     }
     const played = pitch + octave;
@@ -596,6 +606,7 @@ function restore(score: Score, spectrograms: Partial<Record<AlignStem, Spectrogr
     if (rise < ATTACK_RISE_DB) {
       // The same pitch sounding on from the note before it is not this note unless the stem strikes it again.
       if (struck.has(note)) {
+        if (fill) { fillIn(note, pitch, start, end, heard); continue; }
         missing.push({ pitch, start, end, measure: note.measure, stems: stems.filter(stem => !target.stems.includes(stem) && (heard[stem] ?? -Infinity) >= PRESENT_DB), part: own });
         continue;
       }
@@ -617,6 +628,16 @@ function restore(score: Score, spectrograms: Partial<Record<AlignStem, Spectrogr
       velocity: Math.round(Math.max(VELOCITY_LEAST, Math.min(127, 127 * 10 ** (peak / 30)))), measure: note.measure,
       written: { pitch, start: note.start, length: note.length }, heard, octave,
     });
+  }
+  // Filled notes are as loud as the notes heard in their measure (or in the song).
+  const typical = (list: RestoredNote[]) => {
+    const sorted = list.map(note => note.velocity).sort((a, b) => a - b);
+    return sorted.length ? sorted[sorted.length >> 1] : 80;
+  };
+  const songVelocity = typical(notes);
+  for (const note of filled) {
+    const near = notes.filter(other => other.measure === note.measure);
+    notes.push({ ...note, velocity: near.length ? typical(near) : songVelocity });
   }
   // A restored note ends where the next one on its pitch starts.
   notes.sort((a, b) => a.start - b.start || a.pitch - b.pitch);
@@ -649,6 +670,8 @@ const MASK_TAIL = 0.05;
 export function scoreMask(notes: RestoredNote[], frames: number, rate: number): Uint8Array {
   const kept = new Uint8Array(frames * ROWS), perSecond = rate / HOP;
   for (const note of notes) {
+    // A filled-in note was not heard: there is nothing of it to keep.
+    if (note.found === false) continue;
     const from = Math.max(0, Math.floor(note.start * perSecond)), to = Math.min(frames - 1, Math.ceil((note.end + MASK_TAIL) * perSecond));
     for (let partial = 1; partial <= PARTIALS; partial++) {
       const row = Math.round(rowOf(note.pitch + 12 * Math.log2(partial)));
@@ -906,7 +929,8 @@ export function fitMeasures({ score, spectrograms, beats, target }: AlignInput &
     const position = beatPosition(newBeats, time), index = Math.max(0, Math.min(newBeats.length - 2, Math.floor(position)));
     return newBeats[index + 1] - newBeats[index];
   };
-  const restored = restore(laid, spectrograms, target ?? { spectrogram: other, stems: ['other'] }, timeAt, base.shift, beatGap, stemOf);
+  // The score's notes, every one (it was laid on the song): as played where the stems are heard playing them.
+  const restored = restore(laid, spectrograms, target ?? { spectrogram: other, stems: ['other'] }, timeAt, base.shift, beatGap, stemOf, undefined, false, true);
   // The bass line: the score's lowest note at each moment (the parts given to the vocals left out), as the bass
   // stem plays it, an octave or two lower where it does.
   const lowest = new Map<string, ScoreNote>();
@@ -984,6 +1008,7 @@ export function harmonyFromScore(analysis: HarmonyDocument, alignment: Alignment
       name === 'bass' && part && bassNotes ? { ...part, chords, notes: bassNotes, second: undefined, repeats: undefined, corrections: undefined } : moved(part)])),
     fromScore: {
       title: fromScore.title, measures: alignment.measures.length, notes: notes.length, correctedBars: fromScore.correctedBars,
+      heard: alignment.notes.filter(note => note.found !== false).length,
       ...(fromScore.family ? { family: fromScore.family } : {}),
       ...(fromScore.scoreSavedAt ? { scoreSavedAt: fromScore.scoreSavedAt } : {}),
       // Where each of the score's measures is in the song (– for a bar it does not have), for the spectrum page.

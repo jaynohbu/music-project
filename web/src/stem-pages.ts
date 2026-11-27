@@ -521,7 +521,7 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                   @if (scoreImportStatus()) { <span class="hint" role="status">{{ scoreImportStatus() }}</span> }
                   @if (scoreImportError()) { <span class="error" role="alert">{{ scoreImportError() }}</span> }
                   @if (job()?.harmony?.fromScore; as used) {
-                    <span class="hint">Chords & notes from the score {{ used.title }} · {{ used.notes }} notes over {{ used.measures }} measures{{ used.correctedBars ? ' · ' + used.correctedBars + ' drum bars corrected' : '' }}.
+                    <span class="hint">Chords & notes from the score {{ used.title }} · every one of its {{ used.notes }} notes over {{ used.measures }} measures{{ used.heard !== undefined ? ' (' + used.heard + ' heard in the stems, played as played; the rest where the score writes them)' : '' }}{{ used.correctedBars ? ' · ' + used.correctedBars + ' drum bars corrected' : '' }}.
                       Notes the score does not have are left out.</span>
                   }
                   @if (job()?.score; as saved) {
