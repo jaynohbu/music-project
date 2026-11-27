@@ -537,8 +537,8 @@ footer { text-align: center; color: #64748b; padding: 20px var(--page-gutter); f
 .score-upload.disabled { opacity: .55; cursor: default; }
 .score-upload input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .score-upload:focus-within { outline: 2px solid #3459c9; outline-offset: 2px; }
-.score-pages { display: inline-flex; align-items: center; gap: 6px; font-size: .85rem; }
-.score-pages input { width: 5.5em; }
-.score-part { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 10px 0 4px; font-size: .9rem; }
+.score-parts { display: grid; gap: 6px; margin: 10px 0 4px; }
+.score-part { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; font-size: .9rem; }
+.score-part strong { min-width: 4.5em; }
 .score-part label { display: inline-flex; align-items: center; gap: 6px; }
 .score-part select { max-width: 16em; }
