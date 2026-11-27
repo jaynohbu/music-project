@@ -450,6 +450,37 @@ export class StemsService {
     ));
   }
 
+  // A score PDF (or image) read into MusicXML by the ScoreReader (backend/score-api.mjs): uploaded, read (only the
+  // pages asked for, or all), and waited for; returns the compressed MusicXML and how many scores it was read as.
+  async readScore(file: File, pages: string, progress: (message: string) => void): Promise<{ mxl: Uint8Array; scores: number }> {
+    const headers = async () => ({ Authorization: `Bearer ${await this.auth.token()}` });
+    const { id, upload } = await firstValueFrom(this.http.post<{ id: string; upload: { url: string; fields: Record<string, string> } }>(
+      `${this.config.apiBaseUrl}/scores`, { bytes: file.size }, { headers: await headers() }));
+    progress('Uploading the score…');
+    const form = new FormData();
+    for (const [key, value] of Object.entries(upload.fields)) form.append(key, value);
+    form.append('file', file, file.name);
+    const sent = await fetch(upload.url, { method: 'POST', body: form });
+    if (!sent.ok) throw new Error(`The upload failed (HTTP ${sent.status}).`);
+    await firstValueFrom(this.http.post(`${this.config.apiBaseUrl}/scores/${id}/read`, { pages }, { headers: await headers() }));
+    const started = Date.now();
+    // Audiveris takes ten seconds or more a page, and a while to start.
+    for (;;) {
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      const status = await firstValueFrom(this.http.get<{ status: string; message?: string; scores?: number; url?: string }>(
+        `${this.config.apiBaseUrl}/scores/${id}`, { headers: await headers() }));
+      if (status.status === 'failed') throw new Error(status.message ?? 'The score could not be read.');
+      if (status.status === 'completed' && status.url) {
+        const response = await fetch(status.url);
+        if (!response.ok) throw new Error(`The read score could not be fetched (HTTP ${response.status}).`);
+        return { mxl: new Uint8Array(await response.arrayBuffer()), scores: status.scores ?? 1 };
+      }
+      const seconds = Math.round((Date.now() - started) / 1000);
+      if (seconds > 16 * 60) throw new Error('Reading the score took too long.');
+      progress(`Reading the score… ${seconds} s (about ten seconds a page)`);
+    }
+  }
+
   // With a part, redoes only that stem, from its cleaned version if asked.
   async createHarmony(jobId: string, part?: { stem: string; cleaned: boolean }): Promise<{ harmony: Lyrics }> {
     const token = await this.auth.token();

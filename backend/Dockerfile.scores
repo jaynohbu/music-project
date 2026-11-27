@@ -1,0 +1,25 @@
+# The ScoreReader Lambda: Audiveris (https://github.com/Audiveris/audiveris, AGPL-3.0, run as a separate program)
+# reading score PDFs into MusicXML, called through the Lambda runtime interface client (backend/read_score.py).
+FROM debian:bookworm-slim AS audiveris
+ARG AUDIVERIS_VERSION=5.11.0
+ARG AUDIVERIS_SHA256=ae714594f40e54b1a4951fc3f914f08ae38fe5d07b7f2283b1a904fdb6e0a318
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL -o /audiveris.deb \
+      "https://github.com/Audiveris/audiveris/releases/download/${AUDIVERIS_VERSION}/Audiveris-${AUDIVERIS_VERSION}-ubuntu22.04-x86_64.deb" \
+    && if [ -n "$AUDIVERIS_SHA256" ]; then echo "$AUDIVERIS_SHA256  /audiveris.deb" | sha256sum -c -; fi \
+    && dpkg-deb -x /audiveris.deb /extracted && rm /audiveris.deb
+
+FROM python:3.12-slim-bookworm
+# Java's font and image libraries, which Audiveris's bundled runtime loads; it also loads GTK 3 at start, even in
+# batch mode (it asks the desktop for its scale).
+RUN apt-get update && apt-get install -y --no-install-recommends libfreetype6 fontconfig fonts-dejavu-core \
+      libxext6 libxrender1 libxtst6 libxi6 libasound2 libgtk-3-0 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=audiveris /extracted/opt/audiveris /opt/audiveris
+RUN pip install --no-cache-dir awslambdaric==3.1.1 boto3==1.35.99
+WORKDIR /function
+COPY read_score.py .
+ENV AUDIVERIS=/opt/audiveris/bin/Audiveris
+ENTRYPOINT ["/usr/local/bin/python", "-m", "awslambdaric"]
+CMD ["read_score.handler"]

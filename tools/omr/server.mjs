@@ -1,5 +1,5 @@
-// Reads a score PDF (or image) into MusicXML with Audiveris, for the spectrum page's score alignment while it runs
-// locally: `npm run omr` in web/, next to `npm run start` or `npm run start:aws` (the dev proxy sends /omr here).
+// Reads a score PDF (or image) into MusicXML with a local Audiveris, for trying score reading without AWS:
+// `npm run omr` in web/. The site itself uses the ScoreReader Lambda (backend/score-api.mjs, read_score.py).
 //   POST /omr?pages=2-3  body: the PDF  ->  the compressed MusicXML (.mxl) Audiveris exports
 // pages (optional): which pages to read, as numbers and ranges ("2", "2-3 5"); every page takes Audiveris about
 // ten seconds or more.

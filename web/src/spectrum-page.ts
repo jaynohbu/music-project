@@ -4,8 +4,8 @@
 // stem's own sound in those cells, the rest silenced: spectrogram.ts maskedSignal), or only what it leaves out. The song's beats (from its
 // chord analysis, when there is one) are drawn on both, bar lines brighter.
 //
-// A score of a passage (the intro, say) can be given: a PDF, read into MusicXML by the local score reader
-// (tools/omr, Audiveris; only while running locally), or MusicXML itself. It is aligned with the song through all
+// A score of a passage (the intro, say) can be given: a PDF, read into MusicXML by the score reader
+// (backend/score-api.mjs, Audiveris), or MusicXML itself. It is aligned with the song through all
 // the stems (score-align.ts), its measures drawn on both views, and the Harmonic stem restored from it: the score's
 // notes the stem plays, when and as loud as it plays them, drawn over the spectrogram and heard alone or with the stem.
 import { ChangeDetectionStrategy, Component, ElementRef, OnDestroy, OnInit, inject, signal, viewChild } from '@angular/core';
@@ -476,7 +476,7 @@ export class SpectrumPage implements OnInit, OnDestroy {
     else if (changed) this.seekTo(this.now());
   }
 
-  // A score file chosen: read (a PDF by the local score reader), aligned with the song, the Harmonic stem restored.
+  // A score file chosen: read (a PDF by the score reader), aligned with the song, the Harmonic stem restored.
   async chooseScore(event: Event): Promise<void> {
     const input = event.target as HTMLInputElement, file = input.files?.[0];
     input.value = '';
@@ -505,21 +505,9 @@ export class SpectrumPage implements OnInit, OnDestroy {
   private async scoreText(file: File): Promise<string> {
     if (/\.mxl$/i.test(file.name)) return unzipMusicXml(new Uint8Array(await file.arrayBuffer()));
     if (!/\.(pdf|png|jpe?g)$/i.test(file.name)) return file.text();
-    let response: Response;
-    try {
-      const pages = this.pages();
-      response = await fetch(`/omr${pages ? `?pages=${encodeURIComponent(pages)}` : ''}`, { method: 'POST', body: file, headers: { 'content-type': 'application/octet-stream' } });
-    } catch {
-      throw new Error('the score reader could not be reached.');
-    }
-    const type = response.headers.get('content-type') ?? '';
-    if (!response.ok || !type.includes('musicxml')) {
-      const message = type.includes('json') ? (await response.json() as { message?: string }).message : undefined;
-      throw new Error(message ?? 'PDFs are read by the score reader, which runs only locally for now (npm run omr in web/). Upload MusicXML (.musicxml or .mxl) instead.');
-    }
-    const parts = Number(response.headers.get('x-omr-scores') ?? 1);
-    if (parts > 1) this.scoreError.set(`The score was read as ${parts} separate pieces; the first is used.`);
-    return unzipMusicXml(new Uint8Array(await response.arrayBuffer()));
+    const { mxl, scores } = await this.stems.readScore(file, this.pages(), message => this.scoreStatus.set(message));
+    if (scores > 1) this.scoreError.set(`The score was read as ${scores} separate pieces; the first is used.`);
+    return unzipMusicXml(mxl);
   }
 
   // How much of the song to search: for an intro two and a half times the score at the song's tempo, at least

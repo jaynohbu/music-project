@@ -6,6 +6,9 @@ Parameters:
   StemImageUri:
     Type: String
     Description: ECR URI of the separately built CPU Demucs image
+  ScoreImageUri:
+    Type: String
+    Description: ECR URI of the separately built score reading (Audiveris) image, from build-score-image.sh
   InitialPasswordSecretName:
     Type: String
     Default: youtube-audio-library/registration-password
@@ -188,6 +191,11 @@ Resources:
             Status: Enabled
             Prefix: stem-inputs/
             ExpirationInDays: 1
+          # Score PDFs and the MusicXML read from them (backend/score-api.mjs).
+          - Id: ExpireScoreReadings
+            Status: Enabled
+            Prefix: score-readings/
+            ExpirationInDays: 1
   AudioBucketPolicy:
     Type: AWS::S3::BucketPolicy
     Properties:
@@ -363,6 +371,61 @@ Resources:
             ApiId: !Ref HttpApi
             Path: /api/stems/jobs/{jobId}/harmony
             Method: POST
+  # Reads score PDFs into MusicXML with Audiveris (backend/read_score.py, backend/Dockerfile.scores).
+  ScoreReader:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ScoreImageUri
+      Architectures: [x86_64]
+      MemorySize: 6144
+      Timeout: 900
+      EphemeralStorage:
+        Size: 2048
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [s3:GetObject, s3:PutObject]
+              Resource: !Sub '${AudioBucket.Arn}/score-readings/*'
+  ScoreApi:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend
+      Handler: score-api.handler
+      Runtime: nodejs22.x
+      MemorySize: 256
+      Timeout: 20
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref AudioBucket
+          SCORE_READER: !Ref ScoreReader
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [s3:GetObject, s3:PutObject]
+              Resource: !Sub '${AudioBucket.Arn}/score-readings/*'
+            # So a missing status or upload reads as missing, not as forbidden.
+            - Effect: Allow
+              Action: s3:ListBucket
+              Resource: !GetAtt AudioBucket.Arn
+              Condition:
+                StringLike:
+                  s3:prefix: score-readings/*
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !GetAtt ScoreReader.Arn
+      Events:
+        CreateScore:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: /api/scores, Method: POST }
+        ReadScore:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/api/scores/{id}/read', Method: POST }
+        ScoreStatus:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/api/scores/{id}', Method: GET }
   # Only this function may delete original stems; it serves only DELETE /api/stems/jobs/{jobId}.
   SongDeletion:
     Type: AWS::Serverless::Function
