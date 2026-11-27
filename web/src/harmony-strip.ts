@@ -597,27 +597,51 @@ export class HarmonyStrip {
 
   constructor() {
     // Written directly, because this runs on every playback tick over every note.
-    afterRenderEffect(() => this.place(this.spans(), this.chords(), this.grid(), this.time()));
+    afterRenderEffect(() => this.place(this.chords(), this.grid(), this.time()));
   }
 
-  private readonly spans = computed<{ unit: number; length: number }[]>(() => this.isDrums() ? this.drums().strokes : this.part().notes);
+  // The notes sounding at a moment, by when they are played (start to end, in song seconds): every one of a chord.
+  // Each list is sorted by start; `longest` bounds how far back a note can still be sounding.
+  private readonly sounding = computed(() => {
+    const prepare = (notes: { start: number; end: number }[]) => {
+      const order = notes.map((_, index) => index).sort((a, b) => notes[a].start - notes[b].start);
+      return {
+        count: notes.length, order, starts: order.map(index => notes[index].start), ends: order.map(index => notes[index].end),
+        longest: notes.reduce((most, note) => Math.max(most, note.end - note.start), 0),
+      };
+    };
+    return { main: prepare(this.part().notes), second: prepare(this.part().second ?? []) };
+  });
 
-  private place(spans: { unit: number; length: number }[], chordUnits: { unit: number }[], grid: HarmonyGrid, time: number): void {
+  private place(chordUnits: { unit: number }[], grid: HarmonyGrid, time: number): void {
     const flow = this.flow().nativeElement;
     const position = positionAt(grid.beats, time);
     const middle = this.strip().nativeElement.clientWidth / 2;
     flow.style.transform = `translateX(${middle - position * UNIT_WIDTH}px)`;
     const chords = flow.getElementsByClassName('score-chord');
-    const notes = flow.getElementsByClassName('score-note');
-    if (chords.length !== chordUnits.length || notes.length !== spans.length) return;
-    // Sorting only matters for chords, whose snapped positions can tie.
-    const chord = reachedIndex(chordUnits.map(item => item.unit), position);
-    const note = reachedIndex(spans.map(item => item.unit), position);
-    const active = [
-      chord >= 0 ? chords[chord] : null,
-      note >= 0 && position < spans[note].unit + spans[note].length ? notes[note] : null,
-    ].filter((element): element is Element => !!element);
-    if (active.length !== this.highlighted.length || active.some((element, index) => element !== this.highlighted[index])) {
+    const active: Element[] = [];
+    if (chords.length === chordUnits.length) {
+      const chord = reachedIndex(chordUnits.map(item => item.unit), position);
+      if (chord >= 0) active.push(chords[chord]);
+    }
+    if (this.isDrums()) {
+      // Drum strokes have no length: the one just struck.
+      const strokes = this.drums().strokes, elements = flow.querySelectorAll('g.score-note');
+      const stroke = reachedIndex(strokes.map(item => item.unit), position);
+      if (elements.length === strokes.length && stroke >= 0 && position < strokes[stroke].unit + strokes[stroke].length) active.push(elements[stroke]);
+    } else {
+      const { main, second } = this.sounding();
+      const light = (list: ReturnType<typeof this.sounding>['main'], elements: NodeListOf<Element>) => {
+        if (elements.length !== list.count) return;
+        // From the last note started back to the earliest that could still be sounding.
+        for (let at = reachedIndex(list.starts, time); at >= 0 && list.starts[at] >= time - list.longest; at--) {
+          if (time < list.ends[at]) active.push(elements[list.order[at]]);
+        }
+      };
+      light(main, flow.querySelectorAll('g.score-note:not(.second)'));
+      light(second, flow.querySelectorAll('g.score-note.second'));
+    }
+    if (active.length !== this.highlighted.length || active.some(element => !this.highlighted.includes(element))) {
       for (const element of this.highlighted) element.classList.remove('active');
       for (const element of active) element.classList.add('active');
       this.highlighted = active;

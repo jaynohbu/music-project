@@ -179,7 +179,7 @@ progress { width: 100%; height: 12px; accent-color: #3459c9; }
 .score-rest rect, .score-rest circle { fill: var(--m-score-ink); }
 .score-rest path { fill: none; stroke: var(--m-score-ink); stroke-width: 1.7; }
 .score-note { color: var(--m-note); }
-.score-note.active { color: var(--m-accent); }
+.score-note.active { color: var(--m-accent); filter: drop-shadow(0 0 2px var(--m-accent)); }
 .score-note ellipse, .score-note circle, .score-note text { fill: currentColor; }
 .score-note ellipse.hollow { fill: none; stroke: currentColor; stroke-width: 1.5; }
 .score-note ellipse.voted { opacity: .45; }
