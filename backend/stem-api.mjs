@@ -11,6 +11,7 @@ import { ANALYSES, createAnalysisRoutes, currentAnalysis } from './analysis-api.
 import { STEM_NAMES, stemInput, UPLOAD_WINDOW_MS, STEM_WINDOW_MS } from './stem-shared.mjs';
 import { createSongDeletion, guardChildWrites, SongDeletingError } from './scene-api.mjs';
 import { checkUploadAllowed, LimitError, refundSplit, takeSplit, usage } from './stem-usage.mjs';
+import { createScoreRoutes, signedScore } from './song-score.mjs';
 
 const db = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const s3 = new S3Client({});
@@ -43,7 +44,8 @@ export async function signedStemJob(job, signer = getSignedUrl, storage = s3) {
     }];
   })));
   // Changes when the playback files are replaced, so app caches can tell.
-  return { ...visible, stems, playVersion: visible.playVersion ?? 'wav' };
+  const { score, ...rest } = visible;
+  return { ...rest, stems, playVersion: visible.playVersion ?? 'wav', ...(score ? { score: await signedScore(visible, signer, storage) } : {}) };
 }
 
 export function createStemHandler({
@@ -54,6 +56,7 @@ export function createStemHandler({
   const restorations = createRestorationRoutes({ database: guarded, storage, orchestrator, signer });
   const analyses = createAnalysisRoutes({ database: guarded, storage, orchestrator, signer });
   const deleteSong = createSongDeletion({ database, storage });
+  const scores = createScoreRoutes({ database, storage, uploadSigner, signer });
   return async event => {
     const reply = (statusCode, body) => ({
       statusCode, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
@@ -70,7 +73,7 @@ export function createStemHandler({
       if (song && method === 'DELETE') return await deleteSong({ userId, jobId: song[1], reply });
       // The song-deletion function's role may delete original stems, so it serves nothing else.
       if (deleteOnly) return reply(404, { message: 'Endpoint not found.' });
-      const child = /^\/api\/stems\/jobs\/([0-9a-f-]{36})\/(?:restorations|lyrics|harmony)(?:\/|$)/.exec(route ?? '');
+      const child = /^\/api\/stems\/jobs\/([0-9a-f-]{36})\/(?:restorations|lyrics|harmony|score)(?:\/|$)/.exec(route ?? '');
       if (child && method === 'POST') {
         const parent = (await database.send(new GetCommand({
           TableName: process.env.TABLE_NAME, Key: { userId, jobId: child[1] }, ConsistentRead: true,
@@ -84,6 +87,8 @@ export function createStemHandler({
         if (!id && method === 'POST') return await restorations.create({ userId, parentJobId, body, reply });
         return reply(404, { message: 'Endpoint not found.' });
       }
+      const scored = /^\/api\/stems\/jobs\/([0-9a-f-]{36})\/score(\/extracted)?$/.exec(route ?? '');
+      if (scored) return await scores({ userId, jobId: scored[1], extracted: !!scored[2], method, body, reply });
       const analyzing = /^\/api\/stems\/jobs\/([0-9a-f-]{36})\/(lyrics|harmony)$/.exec(route ?? '');
       if (analyzing) {
         if (method !== 'POST') return reply(404, { message: 'Endpoint not found.' });

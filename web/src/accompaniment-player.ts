@@ -180,3 +180,51 @@ export async function renderNotes(events: NoteEvent[], seconds: number, rate: nu
   });
   return context.startRendering();
 }
+
+// Note levels set so a part follows a recording's loudness through the song: `measured` (the notes the recording
+// has) is rendered in the sound, its loudness and the recording's are taken every WINDOW seconds, and each note's
+// velocity is moved by how much louder or softer the recording is there than the part (smoothed over SMOOTH windows
+// either side, at most MOST_CHANGE either way) against their typical ratio, which comes back as `gain`: the part's
+// level at which it is as loud as the recording.
+const WINDOW = 0.25, SMOOTH = 2, MOST_CHANGE = 4, RENDER_RATE = 11025;
+export async function matchLoudness(events: NoteEvent[], measured: NoteEvent[], reference: AudioBuffer, program: number): Promise<{ events: NoteEvent[]; gain: number }> {
+  const seconds = reference.duration;
+  const rendered = (await renderNotes(measured, seconds, RENDER_RATE, program)).getChannelData(0);
+  const windows = Math.ceil(seconds / WINDOW);
+  const loudness = (read: (index: number) => number, rate: number, length: number) => Array.from({ length: windows }, (_, w) => {
+    const from = Math.floor(w * WINDOW * rate), to = Math.min(length, Math.floor((w + 1) * WINDOW * rate));
+    let sum = 0;
+    for (let index = from; index < to; index++) sum += read(index) ** 2;
+    return to > from ? Math.sqrt(sum / (to - from)) : 0;
+  });
+  const channels = Array.from({ length: reference.numberOfChannels }, (_, index) => reference.getChannelData(index));
+  const heard = loudness(index => channels.reduce((sum, channel) => sum + channel[index], 0) / channels.length, reference.sampleRate, reference.length);
+  const played = loudness(index => rendered[index], RENDER_RATE, rendered.length);
+  const { change, typical } = levelChanges(heard, played);
+  const changeAt = (time: number) => change[Math.max(0, Math.min(windows - 1, Math.floor(time / WINDOW)))];
+  // A note's level goes as velocity to the power 1.5 (AccompanimentVoice), so dB move velocity by a third of their power.
+  const moved = events.map(event => ({ ...event, velocity: Math.max(1, Math.min(127, Math.round(event.velocity * 10 ** (changeAt(event.time) / 30)))) }));
+  return { events: moved, gain: 10 ** (typical / 20) };
+}
+
+// How many dB a part must move in each window to be as loud as a recording, against their typical ratio (the
+// median, in dB, of the windows where both sound): smoothed over SMOOTH windows either side, at most MOST_CHANGE
+// either way, and where only one sounds, as the nearest window that has both (within two seconds).
+export function levelChanges(heard: number[], played: number[]): { change: number[]; typical: number } {
+  const ratio = heard.map((value, w) => value > 1e-4 && played[w] > 1e-4 ? 20 * Math.log10(value / played[w]) : NaN);
+  const valid = ratio.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!valid.length) return { change: heard.map(() => 0), typical: 0 };
+  const typical = valid[valid.length >> 1];
+  const limit = 20 * Math.log10(MOST_CHANGE);
+  const smooth = ratio.map((_, w) => {
+    const near = ratio.slice(Math.max(0, w - SMOOTH), w + SMOOTH + 1).filter(Number.isFinite).sort((a, b) => a - b);
+    return near.length ? Math.max(-limit, Math.min(limit, near[near.length >> 1] - typical)) : NaN;
+  });
+  const change = smooth.map((_, w) => {
+    for (let reach = 0; reach <= 8; reach++) {
+      for (const at of [w - reach, w + reach]) if (at >= 0 && at < smooth.length && Number.isFinite(smooth[at])) return smooth[at];
+    }
+    return 0;
+  });
+  return { change, typical };
+}

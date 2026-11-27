@@ -403,6 +403,8 @@ export function songPrefixes(userId, jobId) {
     `stem-inputs/${userId}/${jobId}/`,
     `users/${userId}/stems/${jobId}/`,
     ...Object.values(CHILD_FOLDERS).map(folder => `users/${userId}/${folder}/${jobId}/`),
+    // The song's own score (song-score.mjs) and its extracted sound.
+    `users/${userId}/scores/${jobId}/`,
   ];
 }
 
@@ -505,8 +507,9 @@ export function guardChildWrites(database, storage) {
         TableName: command.input.TableName, Key: { userId: item.userId, jobId: item.parentJobId }, ConsistentRead: true,
       }))).Item;
       if (parent?.type === 'stems' && !parent.deleting) return result;
-      if (item.status === 'completed' && typeof item.key === 'string' &&
-          item.key.startsWith(`users/${item.userId}/lyrics/${item.parentJobId}/`)) {
+      // Saved results (edited lyrics, harmony from a score) written meanwhile go with the song.
+      if (item.status === 'completed' && typeof item.key === 'string' && (item.edited || item.fromScore) &&
+          (item.key.startsWith(`users/${item.userId}/lyrics/${item.parentJobId}/`) || item.key.startsWith(`users/${item.userId}/harmony/${item.parentJobId}/`))) {
         await storage.send(new DeleteObjectCommand({ Bucket: process.env.BUCKET_NAME, Key: item.key }));
       }
       try {

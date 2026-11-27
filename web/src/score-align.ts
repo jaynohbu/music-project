@@ -53,9 +53,12 @@ const LOOK = 0.4;                         // Seconds of a note's start looked at
 const ATTACK_SEARCH = 0.08;               // Seconds either side of the written start searched for the stem's attack.
 const ATTACK_RISE_DB = 3;
 const LEAST_LENGTH = 0.06;
-const VELOCITY_DB = 36;
+// Velocity from the attack's level against the stem's loudest, so the played note's level (velocity to the power 1.5)
+// is the stem's: 127 at its loudest, a third of the dB below it.
+const VELOCITY_LEAST = 12;
 const DECAY_DB = 25;
-const SPILL_DB = 24;                      // Another stem this much louder at a pitch: the other stem only has its spill.
+const SPILL_DB = 24;
+const LOW_OCTAVE_DB = 12;                  // A bass note's lowest octave counts when this close to its loudest.                      // Another stem this much louder at a pitch: the other stem only has its spill.
 
 export interface StemFeatures { chroma: Float32Array; loudness: Float32Array; onsets: Float32Array; steps: number }
 export interface AlignedMeasure { index: number; number: string; start: number; end: number; onBeat: boolean }
@@ -528,7 +531,8 @@ function floorsOf(spectrogram: Spectrogram, frames: number): Float32Array {
 export interface RestoreTarget { spectrogram: Spectrogram; stems: AlignStem[] }
 
 function restore(score: Score, spectrograms: Partial<Record<AlignStem, Spectrogram>>, target: RestoreTarget, timeAt: (quarter: number) => number,
-  shift: number, beatGap: (time: number) => number, stemOf: (note: ScoreNote) => AlignStem | null): { notes: RestoredNote[]; missing: MissingNote[] } {
+  shift: number, beatGap: (time: number) => number, stemOf: (note: ScoreNote) => AlignStem | null,
+  octaves: number[] = [-12, 12], lowestOctave = false): { notes: RestoredNote[]; missing: MissingNote[] } {
   // Named for the usual target, the other stem.
   const other = target.spectrogram;
   const perSecond = other.rate / HOP;
@@ -561,9 +565,16 @@ function restore(score: Score, spectrograms: Partial<Record<AlignStem, Spectrogr
     for (const stem of stems) heard[stem] = Math.round(above(stem, pitch, from, to) * 10) / 10;
     // The octave the target plays it in, when it does not have the written one.
     let octave = 0, level = inTarget(pitch, from, to);
-    for (const moved of level < PRESENT_DB ? [-12, 12] : []) {
+    for (const moved of level < PRESENT_DB ? octaves : []) {
       const there = inTarget(pitch + moved, from, to);
       if (there > level + OCTAVE_BETTER_DB && there >= PRESENT_DB) { octave = moved; level = there; }
+    }
+    // A bass line is where its lowest clear octave is: what sounds above it is its overtones.
+    if (lowestOctave) {
+      const options = [0, ...octaves].map(moved => ({ moved, there: moved === octave ? level : inTarget(pitch + moved, from, to) }));
+      const loudest = Math.max(...options.map(option => option.there));
+      const low = options.filter(option => option.there >= PRESENT_DB && option.there >= loudest - LOW_OCTAVE_DB).sort((a, b) => a.moved - b.moved)[0];
+      if (low) { octave = low.moved; level = low.there; }
     }
     // A part given to a stem outside the target: the vocals' is theirs (the target's overtones sound at a melody's
     // pitches); another's (a piano's left hand, given to the bass, when only the other stem is the target) is
@@ -590,7 +601,7 @@ function restore(score: Score, spectrograms: Partial<Record<AlignStem, Spectrogr
       }
       attack = from;
     }
-    // Velocity from the attack's level against the stem's loudest (0 dB): VELOCITY_DB below it is the softest.
+    // The attack's level, for its velocity.
     let peak = -Infinity;
     for (let frame = attack; frame <= Math.min(other.frames - 1, attack + Math.round(0.15 * perSecond)); frame++) peak = Math.max(peak, levelAt(other, frame, played));
     // The end: where the sound sinks to near its usual level or DECAY_DB below its attack (what is left there is
@@ -603,7 +614,7 @@ function restore(score: Score, spectrograms: Partial<Record<AlignStem, Spectrogr
     }
     notes.push({
       pitch: played, start: attack / perSecond, end: Math.max(attack / perSecond + LEAST_LENGTH, (last + 1) / perSecond),
-      velocity: Math.round(20 + 107 * Math.max(0, Math.min(1, 1 + peak / VELOCITY_DB))), measure: note.measure,
+      velocity: Math.round(Math.max(VELOCITY_LEAST, Math.min(127, 127 * 10 ** (peak / 30)))), measure: note.measure,
       written: { pitch, start: note.start, length: note.length }, heard, octave,
     });
   }
@@ -679,6 +690,10 @@ export interface MeasureFit {
   beats: number[]; firstBar: number;      // The corrected beats; bars of four from firstBar.
   corrections: { bars: number; extraBeats: number; missingBeats: number; moved: number; checked: number };
   alignment: Alignment;                   // The score as laid (measures in song order), restored.
+  // Named from the score's own notes, as laid: a chord a measure (or a half where it changes), N.C. in bars the
+  // score does not have. Pitch classes as numbers; harmonyFromScore spells them in the song's key.
+  chords: { start: number; root: number; quality: string; bass: number }[];
+  bass?: RestoredNote[];                  // The score's notes the bass stem plays, as it plays them.
 }
 const STRETCH = 0.3, JUMP = 0.5, FREE_BAR = 0.75, FREE_QUIET = 0.1, SLOTS_PER_QUARTER = 2;
 
@@ -892,10 +907,22 @@ export function fitMeasures({ score, spectrograms, beats, target }: AlignInput &
     return newBeats[index + 1] - newBeats[index];
   };
   const restored = restore(laid, spectrograms, target ?? { spectrogram: other, stems: ['other'] }, timeAt, base.shift, beatGap, stemOf);
+  // The bass line: the score's lowest note at each moment (the parts given to the vocals left out), as the bass
+  // stem plays it, an octave or two lower where it does.
+  const lowest = new Map<string, ScoreNote>();
+  for (const note of laid.notes) {
+    if (stemOf(note) === 'vocals') continue;
+    const key = `${note.measure}/${note.start.toFixed(4)}`, held = lowest.get(key);
+    if (!held || note.pitch < held.pitch) lowest.set(key, note);
+  }
+  const line = { ...laid, notes: [...lowest.values()].sort((a, b) => a.start - b.start) };
+  const bass = spectrograms.bass && spectrograms.bass.rate === other.rate
+    ? restore(line, spectrograms, { spectrogram: spectrograms.bass, stems: ['bass'] }, timeAt, base.shift, beatGap, stemOf, [-12, -24], true).notes : undefined;
+  const chords = scoreChords(laid, placed.map(place => place.measure !== null), timeAt, base.shift, stemOf);
   const aligned: AlignedMeasure[] = placed.map((place, index) => ({ index, number: place.number, start: place.start, end: place.end, onBeat: !place.corrected }));
   const span = placed.length ? placed[placed.length - 1].end - placed[0].start : 0;
   return {
-    placed, beats: newBeats, firstBar: newFirstBar, corrections,
+    placed, beats: newBeats, firstBar: newFirstBar, corrections, chords, ...(bass ? { bass } : {}),
     alignment: {
       ...base, measures: aligned, notes: restored.notes, missing: restored.missing, timeAt,
       secondsPerQuarter: at > 0 ? span / at : base.secondsPerQuarter,
@@ -919,7 +946,7 @@ export interface HarmonyDocument {
   [field: string]: unknown;
 }
 export function harmonyFromScore(analysis: HarmonyDocument, alignment: Alignment, fit: MeasureFit | null,
-  fromScore: { title: string; correctedBars: number; family?: 'guitar' | 'keys' }): HarmonyDocument {
+  fromScore: { title: string; correctedBars: number; family?: 'guitar' | 'keys'; scoreSavedAt?: string }): HarmonyDocument {
   const beats = fit?.beats ?? analysis.beats, firstBar = fit?.firstBar ?? analysis.firstBar;
   const unitAt = (time: number) => Math.round(beatPosition(beats, time) * 4);
   const moved = (part: HarmonyPart | undefined): HarmonyPart | undefined => part && {
@@ -941,13 +968,100 @@ export function harmonyFromScore(analysis: HarmonyDocument, alignment: Alignment
     return { start: note.start, end: note.end, pitch: note.pitch, unit, length: Math.max(1, unitAt(note.end) - unit), velocity: 100, confidence: 1 };
   }).sort((a, b) => a.start - b.start || a.pitch - b.pitch);
   const { second: _second, repeats: _repeats, corrections: _corrections, ...ensemble } = analysis.ensemble ?? { chords: [], notes: [] };
+  // With the score laid measure by measure, the chords and the bass line are the score's too: nothing the analysis
+  // found that the score does not have is kept.
+  const key = ensemble.key;
+  const chords = fit ? fit.chords.map(chord => ({ start: Math.round(chord.start * 1000) / 1000, name: chordName(chord, key) })) : ensemble.chords ?? [];
+  const bassNotes = fit?.bass?.map(note => {
+    const unit = Math.max(0, unitAt(alignment.timeAt(note.written.start)));
+    const end = unitAt(alignment.timeAt(note.written.start + note.written.length));
+    return { start: note.start, end: note.end, pitch: note.pitch, unit, length: Math.max(1, end - unit), velocity: note.velocity, confidence: 1 };
+  }).sort((a, b) => a.start - b.start || a.pitch - b.pitch);
   return {
     ...analysis, beats, firstBar,
-    ensemble: { ...ensemble, chords: ensemble.chords ?? [], notes, ...(melody.length ? { melody } : {}) },
-    stems: Object.fromEntries(Object.entries(analysis.stems ?? {}).map(([name, part]) => [name, moved(part)])),
+    ensemble: { ...ensemble, chords, notes, ...(melody.length ? { melody } : {}) },
+    stems: Object.fromEntries(Object.entries(analysis.stems ?? {}).map(([name, part]) => [name,
+      name === 'bass' && part && bassNotes ? { ...part, chords, notes: bassNotes, second: undefined, repeats: undefined, corrections: undefined } : moved(part)])),
     fromScore: {
       title: fromScore.title, measures: alignment.measures.length, notes: notes.length, correctedBars: fromScore.correctedBars,
       ...(fromScore.family ? { family: fromScore.family } : {}),
+      ...(fromScore.scoreSavedAt ? { scoreSavedAt: fromScore.scoreSavedAt } : {}),
+      // Where each of the score's measures is in the song (– for a bar it does not have), for the spectrum page.
+      bars: alignment.measures.map(measure => ({ number: measure.number, start: Math.round(measure.start * 1000) / 1000,
+        end: Math.round(measure.end * 1000) / 1000, ...(measure.onBeat ? {} : { corrected: true }) })),
     },
   };
+}
+
+// Chords named from a score's notes, a measure at a time: the pitch classes sounding (as long as they sound; the
+// sung line counts half), matched to the chord shapes below (the closest shape wins; a seventh or a suspension must
+// earn its place by CHORD_EXTRA), and the lowest note as the bass when it is not the root. A measure's second half
+// gets its own chord where it is clearly another. Measures the score does not have (`written` false) are N.C.
+const CHORD_SHAPES: [string, number[]][] = [['', [0, 4, 7]], ['m', [0, 3, 7]], ['7', [0, 4, 7, 10]], ['maj7', [0, 4, 7, 11]],
+  ['m7', [0, 3, 7, 10]], ['sus2', [0, 2, 7]], ['sus4', [0, 5, 7]], ['dim', [0, 3, 6]]];
+const CHORD_EXTRA = 0.01, CHORD_CHANGE = 0.08, BASS_ROOT = 0.03;
+export function nameChord(weights: number[], lowest: number | null): { root: number; quality: string; bass: number; fit: number } | null {
+  const total = weights.reduce((sum, value) => sum + value * value, 0);
+  if (total <= 0) return null;
+  let best: { root: number; quality: string; bass: number; fit: number } | null = null;
+  for (let root = 0; root < 12; root++) {
+    for (const [quality, shape] of CHORD_SHAPES) {
+      let dot = 0;
+      for (const step of shape) dot += weights[(root + step) % 12];
+      // Between shapes that fit alike, the one built on the lowest note.
+      const fit = dot / Math.sqrt(total * shape.length) - (quality === '' || quality === 'm' ? 0 : CHORD_EXTRA) + (root === lowest ? BASS_ROOT : 0);
+      if (!best || fit > best.fit) best = { root, quality, bass: root, fit };
+    }
+  }
+  if (best && lowest !== null && lowest !== best.root) {
+    const shape = CHORD_SHAPES.find(([name]) => name === best!.quality)![1];
+    // A bass on another chord tone, or a passing one held long enough to count, is written after a slash.
+    if (shape.some(step => (best!.root + step) % 12 === lowest) || weights[lowest] > 0) best.bass = lowest;
+  }
+  return best;
+}
+
+export function scoreChords(laid: Score, written: boolean[], timeAt: (quarter: number) => number, shift: number,
+  stemOf: (note: ScoreNote) => AlignStem | null): MeasureFit['chords'] {
+  const chords: MeasureFit['chords'] = [];
+  const add = (start: number, chord: { root: number; quality: string; bass: number } | null) => {
+    const last = chords[chords.length - 1];
+    const same = (a: MeasureFit['chords'][number], b: { root: number; quality: string; bass: number } | null) =>
+      b ? a.root === b.root && a.quality === b.quality && a.bass === b.bass : a.quality === 'N.C.';
+    if (last && same(last, chord)) return;
+    chords.push(chord ? { start, ...chord } : { start, root: 0, quality: 'N.C.', bass: 0 });
+  };
+  laid.measures.forEach((measure, index) => {
+    if (!written[index]) { add(timeAt(measure.start), null); return; }
+    const span = (from: number, to: number) => {
+      const weights = new Array(12).fill(0);
+      let lowest: number | null = null, lowestPitch = Infinity;
+      for (const note of laid.notes) {
+        if (note.measure !== index) continue;
+        const overlap = Math.min(to, note.start + note.length) - Math.max(from, note.start);
+        if (overlap <= 0) continue;
+        const pitch = note.pitch + shift, sung = stemOf(note) === 'vocals';
+        weights[((pitch % 12) + 12) % 12] += overlap * (sung ? 0.5 : 1);
+        if (!sung && pitch < lowestPitch) { lowestPitch = pitch; lowest = ((pitch % 12) + 12) % 12; }
+      }
+      return nameChord(weights, lowest);
+    };
+    const start = measure.start, half = measure.start + measure.length / 2, end = measure.start + measure.length;
+    const whole = span(start, end), first = span(start, half), second = span(half, end);
+    const split = first && second && (first.root !== second.root || first.quality !== second.quality || first.bass !== second.bass)
+      && first.fit + second.fit > 2 * (whole?.fit ?? 0) + CHORD_CHANGE;
+    if (split) { add(timeAt(start), first); add(timeAt(half), second); }
+    else add(timeAt(start), whole);
+  });
+  return chords;
+}
+
+// A chord's name in the song's key: sharps or flats as the key has them.
+const SHARP_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const FLAT_NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'];
+const FLAT_KEYS = new Set(['F', 'Bb', 'Eb', 'Ab', 'Db', 'Gb', 'Dm', 'Gm', 'Cm', 'Fm', 'Bbm', 'Ebm']);
+export function chordName(chord: { root: number; quality: string; bass: number }, key?: string): string {
+  if (chord.quality === 'N.C.') return 'N.C.';
+  const names = key && FLAT_KEYS.has(key) ? FLAT_NAMES : SHARP_NAMES;
+  return names[chord.root] + chord.quality + (chord.bass !== chord.root ? `/${names[chord.bass]}` : '');
 }

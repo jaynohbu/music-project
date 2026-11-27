@@ -17,8 +17,9 @@ import { scoreSheet } from './score-sheet';
 import type { DrumHit } from './services';
 import { harmonyMidi } from './score-export';
 import { renderNotes } from './accompaniment-player';
+import { wavFile } from './score-import';
 import {
-  HOP, LOWEST_PITCH, RANGE_DB, ROWS, ROWS_PER_SEMITONE, type Spectrogram, heatColors, maskedSignal, meaningful, monoSignal, spectrogramOf,
+  HOP, LOWEST_PITCH, RANGE_DB, ROWS, ROWS_PER_SEMITONE, type Spectrogram, heatColors, maskedSignal, meaningful, monoSignal, spectrogramOf, timeAtPosition,
 } from './spectrogram';
 
 const STEM = 'other';
@@ -117,12 +118,13 @@ function blockPeaks(signal: Float32Array, block: number) {
           <p role="status"><strong>The song's Harmonic score comes from the uploaded score</strong> ({{ used.title || 'score' }}:
             {{ used.notes }} notes over {{ used.measures }} measures{{ used.correctedBars ? ', ' + used.correctedBars + ' drum bars corrected' : '' }}).
             The mixer, accompaniment and exports use it; notes the score does not have are left out.
-            <button type="button" class="secondary" (click)="useAnalysis()">Use the analysis again</button></p>
+            <button type="button" class="secondary" (click)="useAnalysis()">Remove score</button></p>
         } @else if (harmonySource()) {
           <p class="hint">The song's Harmonic score comes from the analysis. Upload a score to use it instead.</p>
         }
         <p class="hint">A passage of the song (the intro, say) as a PDF or MusicXML (.musicxml, .mxl). It is found in the song by
           comparing it with every stem; the Harmonic stem is then restored from it: the score's notes the stem plays, as it plays them.</p>
+        @if (savedView()) { <p class="hint" role="status">{{ savedView() }}</p> }
         @if (scoreError()) { <p class="error" role="alert">{{ scoreError() }}</p> }
         @if (scoreStatus()) { <p class="hint" role="status">{{ scoreStatus() }}</p> }
         @if (wholeScore(); as whole) {
@@ -272,7 +274,12 @@ export class SpectrumPage implements OnInit, OnDestroy {
   private compared = new Map<AlignStem, Promise<{ spectrogram: Spectrogram; signal: Float32Array }>>();
   // The other and bass stems together, restored and separated from when chosen.
   private mixed?: { signal: Float32Array; spectrogram: Spectrogram };
-  private extracted?: { levels: Float32Array; kept: Uint8Array };
+  // What the score extracted: the levels drawn, only where kept (or all of them, for a saved extracted sound).
+  private extracted?: { levels: Float32Array; kept?: Uint8Array };
+  private scoreXml = '';
+  private partSignal?: Float32Array;
+  private separation?: Promise<void>;
+  readonly savedView = signal('');
   private spectrumReady?: Promise<Spectrogram>;
   private readonly overview = viewChild.required<ElementRef<HTMLCanvasElement>>('overview');
   private readonly wave = viewChild.required<ElementRef<HTMLCanvasElement>>('wave');
@@ -322,7 +329,7 @@ export class SpectrumPage implements OnInit, OnDestroy {
       this.harmonySource.set(job.harmony ? { fromScore: job.harmony.fromScore } : null);
       const url = job.stems?.[STEM]?.playUrl;
       if (!url) throw new Error('This song has no Harmonic stem yet.');
-      void this.loadGrid(job);
+      const grid = this.loadGrid(job);
       const response = await fetch(url);
       if (!response.ok) throw new Error(`Audio request failed (HTTP ${response.status}).`);
       this.context = new AudioContext();
@@ -347,6 +354,9 @@ export class SpectrumPage implements OnInit, OnDestroy {
       this.status.set('');
       this.draw();
       void this.rebuildMasked();
+      // The song's own score, already laid on it: its result and extracted sound shown as saved.
+      await grid;
+      void this.showSaved();
     } catch (error) {
       this.status.set('');
       this.error.set(`Could not load the Harmonic stem: ${errorMessage(error)}`);
@@ -544,7 +554,9 @@ export class SpectrumPage implements OnInit, OnDestroy {
     try {
       this.scoreStatus.set(/\.(pdf|png|jpe?g)$/i.test(file.name) ? 'Reading the score (this can take a minute)…' : 'Reading the score…');
       // The score as played: its repeats taken, so it follows the song from start to end.
-      const printed = parseMusicXml(await this.scoreText(file));
+      this.scoreXml = await this.scoreText(file);
+      const printed = parseMusicXml(this.scoreXml);
+      this.savedView.set('');
       if (!printed.notes.length) throw new Error('No notes were found in the score.');
       this.printedScore = printed;
       const whole = unrollRepeats(printed);
@@ -641,7 +653,7 @@ export class SpectrumPage implements OnInit, OnDestroy {
     this.separatedShare.set(null);
     const shown = this.alignment()!;
     void this.saveHarmony(shown, fit, score);
-    void this.separate(shown);
+    this.separation = this.separate(shown);
     this.seekTo(Math.max(0, shown.measures[0].start - 1));
     void this.renderRestored(shown);
   }
@@ -683,6 +695,7 @@ export class SpectrumPage implements OnInit, OnDestroy {
         rest[index] = mono[index] - part[index];
         if (index >= from && index < to) { inPart += part[index] ** 2; total += mono[index] ** 2; }
       }
+      this.partSignal = part;
       this.scorePart = this.context.createBuffer(1, part.length, this.rate);
       this.scorePart.copyToChannel(part, 0);
       this.scoreRest = this.context.createBuffer(1, rest.length, this.rate);
@@ -751,6 +764,55 @@ export class SpectrumPage implements OnInit, OnDestroy {
       .finally(() => { this.scoreStatus.set(''); this.aligning.set(false); });
   }
 
+  // The song's own score as saved: its measures and notes from its chords & notes, and the sound of its notes as
+  // extracted from the Harmonic and bass stems, heard and drawn; the score need not be uploaded again.
+  private async showSaved(): Promise<void> {
+    const job = this.job(), document = this.harmonyDocument;
+    const from = document?.['fromScore'] as { title: string; bars?: { number: string; start: number; end: number; corrected?: boolean }[] } | undefined;
+    if (!job?.score?.extractedUrl || !from?.bars?.length || !document || !this.context || !this.mono || this.alignment()) return;
+    this.savedView.set('Loading the song\'s saved score…');
+    try {
+      const response = await fetch(job.score.extractedUrl);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      // Decoded at the rate the page works at, so it lines up with the stems sample for sample.
+      const decoded = await new OfflineAudioContext(1, 1, this.rate).decodeAudioData(await response.arrayBuffer());
+      const part = new Float32Array(this.mono.length);
+      part.set(decoded.getChannelData(0).subarray(0, part.length));
+      const bass = await this.comparedSpectrogram('bass', share => this.savedView.set(`Loading the song's saved score… ${(share * 100).toFixed(0)}%`)).catch(() => undefined);
+      const rest = Float32Array.from(this.mono, (value, index) => value + (bass?.signal[index] ?? 0) - part[index]);
+      const levels = (await spectrogramOf(part, this.rate)).levels;
+      if (this.destroyed || this.alignment()) return;
+      const beats = document.beats, firstBar = document.firstBar;
+      const notes = document.ensemble?.notes ?? [];
+      const saved: Alignment = {
+        measures: from.bars.map((bar, index) => ({ index, number: bar.number, start: bar.start, end: bar.end, onBeat: !bar.corrected })),
+        shift: 0, likeness: 0, parts: [],
+        secondsPerQuarter: (from.bars[from.bars.length - 1].end - from.bars[0].start) / Math.max(1, from.bars.length * 4),
+        notes: notes.map(note => ({ pitch: note.pitch, start: note.start, end: note.end, velocity: note.velocity ?? 90, measure: 0,
+          written: { pitch: note.pitch, start: note.unit / 4 - firstBar, length: note.length / 4 }, heard: {}, octave: 0 })),
+        missing: (document.ensemble?.melody ?? []).map(note => ({ pitch: note.pitch, start: note.start, end: note.end, measure: 0, stems: ['vocals' as const], part: 'vocals' as const })),
+        timeAt: quarter => timeAtPosition(beats, (firstBar + quarter) * 4),
+      };
+      this.extracted = { levels };
+      this.partSignal = part;
+      this.scorePart = this.context.createBuffer(1, part.length, this.rate);
+      this.scorePart.copyToChannel(part, 0);
+      this.scoreRest = this.context.createBuffer(1, rest.length, this.rate);
+      this.scoreRest.copyToChannel(rest, 0);
+      let inPart = 0, total = 0;
+      for (let index = 0; index < part.length; index++) { inPart += part[index] ** 2; total += (part[index] + rest[index]) ** 2; }
+      this.separatedShare.set(Math.round(100 * inPart / Math.max(total, 1e-12)));
+      this.fit.set(null);
+      this.alignment.set(saved);
+      this.savedView.set(`Showing the song's saved score (${job.score.title || from.title}) and the sound of its notes extracted from the Harmonic and bass stems. Upload another score to replace it.`);
+      void this.renderRestored(saved);
+      this.draw();
+    } catch (error) {
+      this.savedView.set('');
+      this.scoreError.set(`Could not load the song's saved score: ${errorMessage(error)}`);
+    }
+  }
+
   // An aligned score is the song's Harmonic score from now on: saved as its harmony result, which the mixer, the
   // accompaniment and the exports use; the analysis's own is used again only when asked.
   private async saveHarmony(found: Alignment, fit: MeasureFit | null, score: Score): Promise<void> {
@@ -758,12 +820,20 @@ export class SpectrumPage implements OnInit, OnDestroy {
     if (!analysis) return;
     this.savingHarmony.set(true);
     try {
+      // The score is saved with the song first, so its chords & notes keep coming from it.
+      const title = this.printedScore?.title || score.title || this.scoreName().replace(/\.[^.]+$/, '');
+      const saved = this.scoreXml ? (await this.stems.saveSongScore(this.jobId, title, this.scoreXml)).score : undefined;
       const document = harmonyFromScore(analysis, found, fit, {
-        title: this.printedScore?.title || score.title || this.scoreName(), correctedBars: fit?.corrections.bars ?? 0,
+        title, correctedBars: fit?.corrections.bars ?? 0, ...(saved ? { scoreSavedAt: saved.savedAt } : {}),
       });
       const { harmony } = await this.stems.saveScoreHarmony(this.jobId, document);
       if (this.alignment() !== found || this.destroyed) return;
       this.harmonySource.set({ fromScore: harmony.fromScore });
+      // And the sound of its notes, extracted from the Harmonic and bass stems, once separated.
+      await this.separation;
+      if (saved && this.partSignal && this.extractFrom() === 'other+bass' && this.alignment() === found) {
+        await this.stems.uploadExtracted(this.jobId, wavFile(this.partSignal, this.rate));
+      }
     } catch (error) {
       this.scoreError.set(`Could not save the score as the song's Harmonic score: ${errorMessage(error)}`);
     } finally {
@@ -774,8 +844,11 @@ export class SpectrumPage implements OnInit, OnDestroy {
   async useAnalysis(): Promise<void> {
     this.savingHarmony.set(true);
     try {
+      // The song's score is removed with it, so its chords & notes come from the analysis again.
+      await this.stems.removeSongScore(this.jobId);
       await this.stems.useAnalysedHarmony(this.jobId);
       this.harmonySource.set({});
+      this.savedView.set('');
     } catch (error) {
       this.scoreError.set(`Could not go back to the analysis: ${errorMessage(error)}`);
     } finally {
@@ -894,7 +967,7 @@ export class SpectrumPage implements OnInit, OnDestroy {
     if (this.alignment()) {
       this.drawSpectrum(this.extractedCanvas().nativeElement, time, (frame, row) => {
         const index = frame * ROWS + row;
-        return extracted?.kept[index] ? Math.round((extracted.levels[index] + RANGE_DB) / RANGE_DB * 255) : 0;
+        return extracted && (extracted.kept ? extracted.kept[index] : extracted.levels[index] > -RANGE_DB) ? Math.round((extracted.levels[index] + RANGE_DB) / RANGE_DB * 255) : 0;
       });
     }
   }

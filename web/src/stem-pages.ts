@@ -12,7 +12,7 @@ import { scoreSheet, sheetFileName } from './score-sheet';
 import {
   type AccompanimentChoices, type StyleLibrary, accompanimentEvents, offered,
 } from './accompaniment';
-import { AccompanimentVoice, type PlayClock, loadLibrary, loadSound } from './accompaniment-player';
+import { AccompanimentVoice, type PlayClock, loadLibrary, loadSound, matchLoudness } from './accompaniment-player';
 import type { AlignStem, HarmonyDocument } from './score-align';
 import { LyricsStrip } from './lyrics-strip';
 import { LyricsEditor, firstChange } from './lyrics-editor';
@@ -388,7 +388,7 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
         <p role="alert" class="error">{{ job()?.error || 'Stem separation failed.' }}</p>
       }
       @if (job()?.status === 'completed' && findingChords() && !harmonyParts()) {
-        <p role="status" class="task-status">Finding this song's chords and melody in the background. It takes a few minutes; the scores appear here when ready.</p>
+        <p role="status" class="task-status">Finding this song's chords and notes in the background. It takes a few minutes; the scores appear here when ready.</p>
       } @else if (job()?.status === 'completed' && updatingChords()) {
         <p role="status" class="task-status">Updating this song's scores in the background. The previous scores stay here until the new ones are ready.</p>
       }
@@ -466,8 +466,8 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                     @if (findingChords()) {
                       <button type="button" class="secondary" disabled>Finding notes...</button>
                     } @else {
-                      <button type="button" class="secondary" (click)="findChords()" [disabled]="!canPlay()"
-                        aria-label="Find chords and melody for other and bass, and the drum score">{{ track.name === 'drums' ? 'Drum score' : 'Chords & melody' }}</button>
+                      <button type="button" class="secondary" (click)="track.name === 'drums' ? findChords() : chordsAndNotes()" [disabled]="!canPlay()"
+                        aria-label="Find the chords and notes for the Harmonic and bass stems, and the drum score">{{ track.name === 'drums' ? 'Drum score' : 'Chords & notes' }}</button>
                     }
                   }
                   @if (isRegenerable(track.name) && harmonyParts() && !updatingChords()) {
@@ -521,9 +521,12 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                   @if (scoreImportStatus()) { <span class="hint" role="status">{{ scoreImportStatus() }}</span> }
                   @if (scoreImportError()) { <span class="error" role="alert">{{ scoreImportError() }}</span> }
                   @if (job()?.harmony?.fromScore; as used) {
-                    <span class="hint">Score: {{ used.title }} · {{ used.notes }} notes over {{ used.measures }} measures{{ used.correctedBars ? ' · ' + used.correctedBars + ' drum bars corrected' : '' }}.
-                      Notes the score does not have are left out.
-                      <button type="button" class="secondary" (click)="useAnalysedScore()" [disabled]="!!scoreImportStatus()">Use the analysis again</button></span>
+                    <span class="hint">Chords & notes from the score {{ used.title }} · {{ used.notes }} notes over {{ used.measures }} measures{{ used.correctedBars ? ' · ' + used.correctedBars + ' drum bars corrected' : '' }}.
+                      Notes the score does not have are left out.</span>
+                  }
+                  @if (job()?.score; as saved) {
+                    <span class="hint">This song has its own score ({{ saved.title || 'score' }}): its chords & notes always come from it.
+                      <button type="button" class="secondary" (click)="removeScore()" [disabled]="!!scoreImportStatus()">Remove score</button></span>
                   }
                 }
               </div>
@@ -791,6 +794,9 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
         <app-lyrics-editor [lines]="lines" [duration]="duration()" [saving]="savingLyrics()" [error]="lyricsSaveError()"
           (saved)="saveLyrics($event)" (cancelled)="editingLyrics.set(false)"></app-lyrics-editor>
       }
+      <!-- The score asked for by Chords & notes. -->
+      <input #scoreFile type="file" class="visually-hidden" accept=".pdf,.png,.jpg,.jpeg,.musicxml,.xml,.mxl,application/pdf"
+        (change)="uploadScore($event)" aria-label="Upload a score of this song" tabindex="-1">
       <dialog #scoreDialog class="score-preview" aria-labelledby="score-preview-title">
         <header><h2 id="score-preview-title">{{ scoreHeading() }}</h2></header>
         <iframe #scoreFrame title="Full score"></iframe>
@@ -869,7 +875,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   private loadedChords?: string;
 
   readonly lyricsNote = 'Converting voice to text takes time. The timing may not match well at first but improves when reloaded. You can edit the text later.';
-  readonly chordsNote = 'Converting to chords and melody takes time, and the result is not the same as the original.';
+  readonly chordsNote = 'Finding the chords and notes takes time, and the result is not the same as the original.';
   readonly lyricLines = signal<LyricLine[] | null>(null);
   readonly editingLyrics = signal(false);
   readonly savingLyrics = signal(false);
@@ -890,6 +896,8 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   readonly scoreImportError = signal('');
   readonly scorePages = signal('');
   private harmonyDocument?: HarmonyDocument;
+  // The score part's level at which it is as loud as the Harmonic stem (matchLoudness): Volume 100% is that.
+  private scoreGain = 1;
   // Key change in semitones, as in the app: −6 to +6.
   readonly maxTranspose = MAX_TRANSPOSE;
   readonly transpose = signal(0);
@@ -1201,7 +1209,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     }
     if (!this.scorePart()) {
       const family = this.closestFamily();
-      this.scorePart.set({ family, sound: offered(library, this.accompanimentChoices(), family).sounds[0], volume: 80 });
+      this.scorePart.set({ family, sound: offered(library, this.accompanimentChoices(), family).sounds[0], volume: 100 });
     }
     const played = this.scorePart()!;
     // The choices show as soon as the score is here; the sound loads once there is audio to play it with.
@@ -1212,9 +1220,17 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     try {
       const buffer = await loadSound(this.context, played.sound);
       if (this.scorePart() !== played) return;
-      // Every note of the score, its melody among them, as written and played.
-      voice.setNotes(accompanimentEvents(`${played.family}-notes`, score, grid, [], this.transpose()), buffer, library.samples,
-        this.playing() ? this.playClock() : undefined);
+      // Every note of the score, its melody among them, as written and played; as loud through the song as the
+      // Harmonic stem plays its own notes (the melody, which the stem does not have, moves with them).
+      const kind = `${played.family}-notes` as const;
+      const all = accompanimentEvents(kind, score, grid, [], this.transpose());
+      const reference = this.runtimes.get('other')?.buffer;
+      const matched = reference
+        ? await matchLoudness(all, accompanimentEvents(kind, { ...score, melody: undefined }, grid, [], this.transpose()), reference, played.sound)
+        : { events: all, gain: 1 };
+      if (this.scorePart() !== played) return;
+      this.scoreGain = matched.gain;
+      voice.setNotes(matched.events, buffer, library.samples, this.playing() ? this.playClock() : undefined);
       this.applyAccompanimentLevels();
     } catch (error) {
       this.scoreImportError.set(`Could not load the sound: ${errorMessage(error)}`);
@@ -1223,33 +1239,91 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     }
   }
 
-  // An uploaded score made the song's Harmonic score: read, aligned with every stem loaded here, laid on the drum
-  // bars, saved; the Harmonic score shown here and the parts that play it follow.
+  // Chords & notes for the Harmonic part. A song with its own score always takes them from it; otherwise the page
+  // asks whether there is a score: one is uploaded and used, or they are found from the audio as before.
+  async chordsAndNotes(track?: StemTrack): Promise<void> {
+    if (this.scoreImportStatus()) return;
+    if (this.job()?.score) { void this.applySavedScore(true); return; }
+    const choice = await this.confirm.choose('Chords & notes',
+      'Do you have a score of this song (a PDF, or MusicXML)? With one, the chords and notes are taken from it, laid on the song and checked against the stems; notes it does not have are left out. Without one, they are found from the audio.',
+      'Upload a score', 'Find them from the audio');
+    if (choice === 'action') this.scoreFile?.nativeElement.click();
+    else if (choice === 'alternative') {
+      if (!this.harmonyParts()) await this.findChords();
+      else if (track) await this.regenerateFromAudio(track);
+    }
+  }
+
+  @ViewChild('scoreFile') private scoreFile?: ElementRef<HTMLInputElement>;
+
+  // An uploaded score becomes the song's own score (saved with it), and its chords & notes are made from it at once,
+  // or, when the song has no beats yet, as soon as its chords and beats have been found.
   async uploadScore(event: Event): Promise<void> {
     const input = event.target as HTMLInputElement, file = input.files?.[0];
     input.value = '';
-    const analysis = this.harmonyDocument;
     if (!file || this.scoreImportStatus()) return;
-    if (!analysis) { this.scoreImportError.set('Find this song\'s chords and beats first.'); return; }
     const generation = this.generation;
     this.scoreImportError.set('');
     try {
-      const stems: Partial<Record<AlignStem, AudioBuffer>> = {};
-      for (const name of ['other', 'vocals', 'bass', 'drums'] as AlignStem[]) {
-        const runtime = this.runtimes.get(name);
-        if (runtime) stems[name] = runtime.buffer;
+      const { scoreText } = await import('./score-import');
+      this.scoreImportStatus.set(/\.(pdf|png|jpe?g)$/i.test(file.name) ? 'Reading the score…' : 'Opening the score…');
+      const { text, scores } = await scoreText(file, this.scorePages(),
+        (pdf, pages) => this.stems.readScore(pdf, pages, message => this.scoreImportStatus.set(message)));
+      if (scores > 1) this.scoreImportError.set(`The score was read as ${scores} separate pieces; the first is used.`);
+      const title = /<work-title>([^<]*)<\/work-title>/.exec(text)?.[1]?.trim() || file.name.replace(/\.[^.]+$/, '');
+      this.scoreImportStatus.set('Saving the score with the song…');
+      await this.stems.saveSongScore(this.jobId, title, text);
+      if (this.destroyed || generation !== this.generation) return;
+      await this.refreshJob(generation);
+      if (!this.harmonyDocument) {
+        // Its beats come from finding the chords; the score is laid on them when they are ready.
+        this.scoreImportStatus.set('');
+        if (!this.findingChords()) await this.findChords();
+        return;
       }
-      // The score engine is loaded only when a score is uploaded.
+    } catch (error) {
+      if (!this.destroyed && generation === this.generation) this.scoreImportError.set(`Could not use the score: ${errorMessage(error)}`);
+      this.scoreImportStatus.set('');
+      return;
+    }
+    this.scoreImportStatus.set('');
+    await this.applySavedScore(true);
+  }
+
+  // The song's own score laid on the song with every stem, its result saved as the song's chords & notes, and the
+  // sound of its notes extracted and saved for the spectrum page. Done by itself (once a page) when the song's
+  // chords & notes are not yet from its present score.
+  private appliedScore?: string;
+  async applySavedScore(force = false): Promise<void> {
+    const job = this.job(), score = job?.score, analysis = this.harmonyDocument;
+    if (!score || !analysis || this.scoreImportStatus()) return;
+    if (!force && (this.appliedScore === score.savedAt || job?.harmony?.fromScore?.scoreSavedAt === score.savedAt)) return;
+    const stems: Partial<Record<AlignStem, AudioBuffer>> = {};
+    for (const name of ['other', 'vocals', 'bass', 'drums'] as AlignStem[]) {
+      const runtime = this.runtimes.get(name);
+      if (runtime) stems[name] = runtime.buffer;
+    }
+    if (!stems.other) return;
+    this.appliedScore = score.savedAt;
+    const generation = this.generation;
+    this.scoreImportError.set('');
+    try {
+      this.scoreImportStatus.set('Opening the song\'s score…');
+      const response = await fetch(score.url);
+      if (!response.ok) throw new Error(`The saved score could not be fetched (HTTP ${response.status}).`);
+      const musicxml = await response.text();
+      // The score engine is loaded only when a score is used.
       const { importScore } = await import('./score-import');
       const result = await importScore({
-        file, pages: this.scorePages(), stems, analysis,
+        source: { musicxml, title: score.title, savedAt: score.savedAt }, stems, analysis,
         readPdf: (pdf, pages) => this.stems.readScore(pdf, pages, message => this.scoreImportStatus.set(message)),
         progress: message => this.scoreImportStatus.set(message),
       });
       if (this.destroyed || generation !== this.generation) return;
-      this.scoreImportStatus.set('Saving the Harmonic score…');
+      this.scoreImportStatus.set('Saving the chords & notes…');
       await this.stems.saveScoreHarmony(this.jobId, result.document);
-      if (result.scores > 1) this.scoreImportError.set(`The score was read as ${result.scores} separate pieces; the first is used.`);
+      this.scoreImportStatus.set('Saving the extracted sound…');
+      await this.stems.uploadExtracted(this.jobId, result.extracted);
       await this.refreshJob(generation);
     } catch (error) {
       if (!this.destroyed && generation === this.generation) this.scoreImportError.set(`Could not use the score: ${errorMessage(error)}`);
@@ -1258,15 +1332,19 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     }
   }
 
-  async useAnalysedScore(): Promise<void> {
+  // The song's score removed: its chords & notes come from the analysis again.
+  async removeScore(): Promise<void> {
+    if (!await this.confirm.confirm('Remove the score?', 'The chords & notes will come from the analysis of the audio again. The score can be uploaded again later.', 'Remove score')) return;
     const generation = this.generation;
     this.scoreImportError.set('');
-    this.scoreImportStatus.set('Going back to the analysis…');
+    this.scoreImportStatus.set('Removing the score…');
     try {
-      await this.stems.useAnalysedHarmony(this.jobId);
+      await this.stems.removeSongScore(this.jobId);
+      await this.stems.useAnalysedHarmony(this.jobId).catch(() => undefined);
+      this.appliedScore = undefined;
       await this.refreshJob(generation);
     } catch (error) {
-      if (!this.destroyed && generation === this.generation) this.scoreImportError.set(`Could not go back to the analysis: ${errorMessage(error)}`);
+      if (!this.destroyed && generation === this.generation) this.scoreImportError.set(`Could not remove the score: ${errorMessage(error)}`);
     } finally {
       this.scoreImportStatus.set('');
     }
@@ -1285,7 +1363,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     // The score part follows the Harmonic track's own mute and solo.
     const harmonic = this.tracks().find(track => track.name === 'other'), played = this.scorePart();
     const on = !!harmonic && !!played && this.scoreMode() !== 'stem' && !harmonic.muted && !this.suppressedBySolo(harmonic);
-    this.voices.get(SCORE_VOICE)?.output.gain.setTargetAtTime(on ? played!.volume / 100 : 0, this.context.currentTime, 0.015);
+    this.voices.get(SCORE_VOICE)?.output.gain.setTargetAtTime(on ? played!.volume / 100 * this.scoreGain : 0, this.context.currentTime, 0.015);
   }
 
   async setTranspose(value: number): Promise<void> {
@@ -1473,8 +1551,9 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
         this.harmonyParts.set(ensemble ? { ...stems, ...Object.fromEntries(ENSEMBLE_STEMS.map(name => [name, ensemble])) } : stems);
         void this.loadParts(generation);
         this.harmonyDocument = document as unknown as HarmonyDocument;
-        // The score part plays the new score.
+        // The score part plays the new score; a song's own score is laid on the song when its result is older.
         void this.prepareScorePart();
+        void this.applySavedScore();
       }
     } catch (error) {
       if (!this.destroyed && generation === this.generation) {
@@ -1486,7 +1565,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   }
 
   regenerateLabel(name: string): string {
-    return name === 'drums' ? 'Regenerate drum score' : 'Regenerate chords & melody';
+    return name === 'drums' ? 'Regenerate drum score' : 'Regenerate chords & notes';
   }
 
   isRegenerable(name: string): boolean { return REGENERATED_STEMS.includes(name); }
@@ -1503,7 +1582,14 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   }
 
   // Uses the version being heard, since the same audio would give the same notes.
+  // Regenerating the Harmonic part asks for a score first (or uses the song's own); the bass and drums are found
+  // from the audio again.
   async regenerate(track: StemTrack): Promise<void> {
+    if (track.name === 'other') return this.chordsAndNotes(track);
+    return this.regenerateFromAudio(track);
+  }
+
+  private async regenerateFromAudio(track: StemTrack): Promise<void> {
     const name = track.name;
     if (this.regenerating(name)) return;
     const generation = this.generation;
@@ -2029,6 +2115,8 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     }
     if (this.destroyed || generation !== this.generation) return;
     this.loadingStems = false;
+    // With the stems here, a song's own score can be laid on them.
+    void this.applySavedScore();
     // A cleaned version that arrives after a key change is moved too.
     if (missing.length && this.transpose() && this.hydrated()) void this.applyKey();
     // A version that arrives during playback needs a restart to join in sync.

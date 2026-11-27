@@ -153,7 +153,7 @@ test('a score is found in the song: measures on the song beats, parts on their s
     assert.ok(found, `chord tone ${n.pitch} at quarter ${n.start}`);
     // Held on no later than half a beat past its written end (a neighbour's overtones can keep its pitch lit).
     assert.ok(found.end > found.start + 0.3 && found.end <= offset + (n.start + n.length + 0.5) * beat + 0.05, `ends at ${found.end}`);
-    assert.ok(found.velocity >= 20 && found.velocity <= 127);
+    assert.ok(found.velocity >= 12 && found.velocity <= 127);
   }
   const melodyMissing = result.missing.filter(m => score.notes.some(n => n.part === 1 && n.pitch === m.pitch));
   assert.ok(melodyMissing.length >= 12 && melodyMissing.every(m => m.stems.includes('vocals')));
@@ -337,16 +337,32 @@ test('the harmony result from a score: only the restored notes, on the corrected
     notes: [{ pitch: 60, start: 0.52, end: 0.98, velocity: 80, measure: 0, written: { pitch: 60, start: 1, length: 1 }, heard: {}, octave: 0 }],
     timeAt: quarter => quarter * 0.5,
   };
-  const fit = { beats, firstBar: 0, placed: [], corrections: { bars: 1, extraBeats: 1, missingBeats: 0, moved: 0, checked: 1 }, alignment };
+  const fit = { beats, firstBar: 0, placed: [], corrections: { bars: 1, extraBeats: 1, missingBeats: 0, moved: 0, checked: 1 }, alignment,
+    chords: [{ start: 0, root: 9, quality: 'm7', bass: 9 }, { start: 1, root: 2, quality: '', bass: 6 }, { start: 2, root: 0, quality: 'N.C.', bass: 0 }],
+    bass: [{ pitch: 33, start: 0.5, end: 1, velocity: 70, measure: 0, written: { pitch: 45, start: 1, length: 1 }, heard: {}, octave: -12 }] };
   const made = align.harmonyFromScore(analysis, alignment, fit, { title: 'Song', correctedBars: 1, family: 'keys' });
   assert.deepEqual(made.beats, beats);
   assert.deepEqual(made.ensemble.notes, [{ start: 0.52, end: 0.98, pitch: 60, unit: 4, length: 4, velocity: 80, confidence: 1 }]);
   assert.equal(made.ensemble.second, undefined);
   // The score's sung line goes with it, for parts that play the score; a note the stem does not play does not.
   assert.deepEqual(made.ensemble.melody, [{ start: 1, end: 1.5, pitch: 72, unit: 8, length: 4, velocity: 100, confidence: 1 }]);
-  assert.deepEqual(made.ensemble.chords, [{ start: 0, name: 'C' }]);
-  assert.deepEqual(made.stems.bass.notes.map(n => [n.unit, n.length]), [[12, 4]]);
+  // The chords and the bass line are the score's: the analysis's C chord and its bass note are gone.
+  assert.deepEqual(made.ensemble.chords, [{ start: 0, name: 'Am7' }, { start: 1, name: 'D/F#' }, { start: 2, name: 'N.C.' }]);
+  assert.deepEqual(made.stems.bass.chords, made.ensemble.chords);
+  assert.deepEqual(made.stems.bass.notes, [{ start: 0.5, end: 1, pitch: 33, unit: 4, length: 4, velocity: 70, confidence: 1 }]);
   assert.deepEqual(made.stems.drums.hits.map(h => h.unit), [12]);
   assert.deepEqual(made.accompaniment, { genre: 'rock' });
-  assert.deepEqual(made.fromScore, { title: 'Song', measures: 1, notes: 1, correctedBars: 1, family: 'keys' });
+  assert.deepEqual(made.fromScore, { title: 'Song', measures: 1, notes: 1, correctedBars: 1, family: 'keys', bars: [{ number: '1', start: 0, end: 2 }] });
+});
+
+test('chords named from a score\'s notes: the shape that fits, on the lowest note when two fit alike, a slash for another bass', () => {
+  const weights = pcs => { const w = new Array(12).fill(0); for (const [pc, value] of pcs) w[pc] += value; return w; };
+  const name = (pcs, lowest) => align.chordName(align.nameChord(weights(pcs), lowest), 'B');
+  assert.equal(name([[0, 2], [4, 1], [7, 1]], 0), 'C');
+  assert.equal(name([[9, 2], [0, 1], [4, 1], [7, 1]], 9), 'Am7');
+  // G#, B and F# with G# lowest: G#m7 (E/G# fits the notes no better, and its root is not the bass).
+  assert.equal(name([[8, 4], [11, 1.5], [6, 1]], 8), 'G#m7');
+  assert.equal(name([[2, 1], [6, 2], [9, 1]], 6), 'D/F#');
+  assert.equal(align.chordName({ root: 3, quality: '', bass: 3 }, 'Eb'), 'Eb');
+  assert.equal(align.nameChord(new Array(12).fill(0), null), null);
 });

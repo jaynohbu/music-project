@@ -4,7 +4,9 @@ interface Confirmation {
   title: string;
   message: string;
   action: string;
-  resolve: (accepted: boolean) => void;
+  // A second action, besides the main one and Cancel.
+  alternative?: string;
+  resolve: (accepted: boolean | 'alternative') => void;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -13,10 +15,18 @@ export class ConfirmationService {
 
   confirm(title: string, message: string, action = 'Confirm'): Promise<boolean> {
     if (this.pending()) return Promise.resolve(false);
-    return new Promise(resolve => this.pending.set({ title, message, action, resolve }));
+    return new Promise(resolve => this.pending.set({ title, message, action, resolve: value => resolve(value === true) }));
   }
 
-  finish(accepted: boolean): void {
+  // Two actions and Cancel: 'action', 'alternative', or null when cancelled.
+  choose(title: string, message: string, action: string, alternative: string): Promise<'action' | 'alternative' | null> {
+    if (this.pending()) return Promise.resolve(null);
+    return new Promise(resolve => this.pending.set({
+      title, message, action, alternative, resolve: value => resolve(value === true ? 'action' : value === 'alternative' ? 'alternative' : null),
+    }));
+  }
+
+  finish(accepted: boolean | 'alternative'): void {
     const request = this.pending();
     this.pending.set(null);
     request?.resolve(accepted);
@@ -34,6 +44,7 @@ export class ConfirmationService {
         <p>{{ request.message }}</p>
         <div class="dialog-actions">
           <button type="button" class="secondary" autofocus (click)="finish(false)">Cancel</button>
+          @if (request.alternative) { <button type="button" class="secondary" (click)="finish('alternative')">{{ request.alternative }}</button> }
           <button type="button" (click)="finish(true)">{{ request.action }}</button>
         </div>
       }
@@ -51,6 +62,6 @@ export class ConfirmationDialog {
       else if (!request && dialog.open) dialog.close();
     });
   }
-  finish(accepted: boolean): void { this.service.finish(accepted); }
+  finish(accepted: boolean | 'alternative'): void { this.service.finish(accepted); }
   cancel(event: Event): void { event.preventDefault(); this.finish(false); }
 }

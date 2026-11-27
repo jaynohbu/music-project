@@ -236,6 +236,8 @@ export interface Job {
   author?: string;
   duration?: number;
   stems?: Partial<Record<StemName, StemFile>>;
+  // The song's own score (an uploaded score's MusicXML) and the sound its notes were extracted as, when it has them.
+  score?: { title: string; savedAt: string; url: string; extractedAt?: string; extractedUrl?: string };
   restorations?: Restoration[];
   lyrics?: Lyrics;
   harmony?: Harmony;
@@ -333,7 +335,7 @@ export interface RegeneratedPart extends Lyrics { resultId?: string }
 // fromScore: the Harmonic score comes from an uploaded score aligned with the stems, not from the analysis.
 export interface Harmony extends Lyrics {
   stems?: Record<string, RegeneratedPart | undefined>; stale?: boolean; previous?: Lyrics;
-  fromScore?: { title: string; measures: number; notes: number; correctedBars: number; family?: 'guitar' | 'keys' };
+  fromScore?: { title: string; measures: number; notes: number; correctedBars: number; family?: 'guitar' | 'keys'; scoreSavedAt?: string };
 }
 export interface LyricWord { start: number; end: number; text: string }
 export interface LyricLine { start: number; end: number; words: LyricWord[] }
@@ -485,6 +487,32 @@ export class StemsService {
       if (seconds > 16 * 60) throw new Error('Reading the score took too long.');
       progress(`Reading the score… ${seconds} s (about ten seconds a page)`);
     }
+  }
+
+  // The song's own score: its MusicXML saved with it, removed, and the extracted sound uploaded (backend/song-score.mjs).
+  async saveSongScore(jobId: string, title: string, musicxml: string): Promise<{ score: NonNullable<Job['score']> }> {
+    const token = await this.auth.token();
+    return firstValueFrom(this.http.post<{ score: NonNullable<Job['score']> }>(
+      `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/score`, { title, musicxml },
+      { headers: { Authorization: `Bearer ${token}` } }));
+  }
+
+  async removeSongScore(jobId: string): Promise<void> {
+    const token = await this.auth.token();
+    await firstValueFrom(this.http.delete(`${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/score`,
+      { headers: { Authorization: `Bearer ${token}` } }));
+  }
+
+  async uploadExtracted(jobId: string, wav: Blob): Promise<void> {
+    const token = await this.auth.token();
+    const { upload } = await firstValueFrom(this.http.post<{ upload: { url: string; fields: Record<string, string> } }>(
+      `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/score/extracted`, { bytes: wav.size },
+      { headers: { Authorization: `Bearer ${token}` } }));
+    const form = new FormData();
+    for (const [key, value] of Object.entries(upload.fields)) form.append(key, value);
+    form.append('file', wav, 'extracted.wav');
+    const sent = await fetch(upload.url, { method: 'POST', body: form });
+    if (!sent.ok) throw new Error(`The extracted sound could not be uploaded (HTTP ${sent.status}).`);
   }
 
   // The song's harmony result made from an uploaded score (score-align.ts harmonyFromScore), or back to the analysis.

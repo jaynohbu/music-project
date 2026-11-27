@@ -586,7 +586,7 @@ export class HarmonyStrip {
   });
   readonly label = computed(() => this.isDrums()
     ? `Drum score with ${this.drums().strokes.length} strokes`
-    : `Chords and melody: ${this.part().chords.map(chord => chord.name).slice(0, 40).join(', ')}`);
+    : `Chords and notes: ${this.part().chords.map(chord => chord.name).slice(0, 40).join(', ')}`);
   private readonly strip = viewChild.required<ElementRef<HTMLElement>>('strip');
   private readonly flow = viewChild.required<ElementRef<SVGSVGElement>>('flow');
   private highlighted: Element[] = [];

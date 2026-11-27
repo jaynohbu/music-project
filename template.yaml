@@ -301,12 +301,13 @@ Resources:
             - Effect: Allow
               Action: s3:GetObject
               Resource: !Sub '${AudioBucket.Arn}/users/*'
-            # Edited lyrics and harmony from an uploaded score are saved here; original stems stay out of reach.
+            # Edited lyrics, harmony from an uploaded score and the song's score are saved here; original stems stay out of reach.
             - Effect: Allow
               Action: s3:PutObject
               Resource:
                 - !Sub '${AudioBucket.Arn}/users/*/lyrics/*'
                 - !Sub '${AudioBucket.Arn}/users/*/harmony/*'
+                - !Sub '${AudioBucket.Arn}/users/*/scores/*'
             # Deliberately excludes users/*/stems/*: original stems cannot be deleted here.
             # Lyrics: an edit saved while its song is being deleted is removed again.
             - Effect: Allow
@@ -314,6 +315,8 @@ Resources:
               Resource:
                 - !Sub '${AudioBucket.Arn}/users/*/restored/*'
                 - !Sub '${AudioBucket.Arn}/users/*/lyrics/*'
+                - !Sub '${AudioBucket.Arn}/users/*/harmony/*'
+                - !Sub '${AudioBucket.Arn}/users/*/scores/*'
             # Lets HEAD on a missing upload return 404 instead of 403.
             - Effect: Allow
               Action: s3:ListBucket
@@ -372,6 +375,24 @@ Resources:
           Properties:
             ApiId: !Ref HttpApi
             Path: /api/stems/jobs/{jobId}/harmony
+            Method: POST
+        SaveScore:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/stems/jobs/{jobId}/score
+            Method: POST
+        RemoveScore:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/stems/jobs/{jobId}/score
+            Method: DELETE
+        UploadExtracted:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/stems/jobs/{jobId}/score/extracted
             Method: POST
   # Reads score PDFs into MusicXML with Audiveris (backend/read_score.py, backend/Dockerfile.scores).
   ScoreReader:
@@ -455,6 +476,7 @@ Resources:
                 - !Sub '${AudioBucket.Arn}/users/*/restored/*'
                 - !Sub '${AudioBucket.Arn}/users/*/lyrics/*'
                 - !Sub '${AudioBucket.Arn}/users/*/harmony/*'
+                - !Sub '${AudioBucket.Arn}/users/*/scores/*'
             - Effect: Allow
               Action: s3:ListBucket
               Resource: !GetAtt AudioBucket.Arn
@@ -466,6 +488,7 @@ Resources:
                     - users/*/restored/*
                     - users/*/lyrics/*
                     - users/*/harmony/*
+                    - users/*/scores/*
       Events:
         DeleteSong:
           Type: HttpApi

@@ -55,8 +55,9 @@ function fakeDatabase() {
         } else if (expected !== undefined && current?.status !== expected) {
           throw failure('ConditionalCheckFailedException', 400);
         }
-        const [setPart, removePart] = input.UpdateExpression.replace(/^SET /, '').split(' REMOVE ');
-        for (const pair of setPart.split(', ')) {
+        const [setPart, removePart] = input.UpdateExpression.startsWith('REMOVE ') ? ['', input.UpdateExpression.slice(7)]
+          : input.UpdateExpression.replace(/^SET /, '').split(' REMOVE ');
+        for (const pair of setPart ? setPart.split(', ') : []) {
           const [name, value] = pair.split(' = ');
           current[names[name] ?? name] = values[value];
         }
@@ -1155,4 +1156,29 @@ test('a Harmonic score from an uploaded score must be a whole result on rising b
   }
   assert.equal(storage.objects.size, before);
   assert.equal((await setup().call(`${parentId}/harmony`, { useAnalysis: true })).status, 409);
+});
+
+const scoreXml = '<?xml version="1.0"?><score-partwise version="4.0"><part-list/><part id="P1"/></score-partwise>';
+
+test('a song keeps its own score and the sound extracted with it, removed with it', async () => {
+  const { call, database, storage } = regeneration();
+  assert.equal((await call(`${parentId}/score/extracted`, { bytes: 1000 })).status, 409, 'no score yet');
+  const saved = await call(`${parentId}/score`, { title: 'Our God', musicxml: scoreXml });
+  assert.equal(saved.status, 201);
+  assert.equal(saved.body.score.title, 'Our God');
+  assert.equal(saved.body.score.url, `https://signed/users/owner/scores/${parentId}/score.musicxml`);
+  assert.equal(storage.objects.get(`users/owner/scores/${parentId}/score.musicxml`).toString(), scoreXml);
+  assert.equal(database.get('owner', parentId).score.title, 'Our God');
+  const job = (await call(parentId, undefined, 'GET')).body.job;
+  assert.equal(job.score.title, 'Our God');
+  assert.equal(job.score.extractedUrl, undefined);
+  const upload = await call(`${parentId}/score/extracted`, { bytes: 1000 });
+  assert.equal(upload.status, 201, JSON.stringify(upload.body));
+  assert.equal((await call(parentId, undefined, 'GET')).body.job.score.extractedUrl, `https://signed/users/owner/scores/${parentId}/extracted.wav`);
+  for (const bad of [{ musicxml: '<html/>' }, { musicxml: 3 }, { title: 'x' }]) assert.equal((await call(`${parentId}/score`, bad)).status, 400);
+  assert.equal((await call(`${parentId}/score/extracted`, { bytes: 10 })).status, 400);
+  assert.equal((await call(`${parentId}/score`, { title: 'x', musicxml: scoreXml }, 'POST', 'intruder')).status, 404);
+  assert.equal((await call(`${parentId}/score`, undefined, 'DELETE')).status, 200);
+  assert.equal(database.get('owner', parentId).score, undefined);
+  assert.equal(storage.objects.has(`users/owner/scores/${parentId}/score.musicxml`), false);
 });
