@@ -344,6 +344,9 @@ interface StemRuntime extends StemEffects {
   shifted?: { semitones: number; buffer: AudioBuffer; cleaned?: AudioBuffer };
   originalLevel: GainNode;
   cleanedLevel: GainNode;
+  // The recording, both versions, on its way into the track (the Harmonic track's score part joins it there):
+  // silent while the track plays its score instead.
+  recording: GainNode;
 }
 
 // The buffers to play: moved by the key change once they are ready, the original audio until then.
@@ -575,7 +578,8 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                         @if (scorePartLoading()) { <span class="hint" role="status">Loading sound…</span> }
                       }
                     </div>
-                    <p class="hint">Stem plays the recording; Score plays the {{ job()?.harmony?.fromScore ? 'uploaded score' : 'transcribed score' }} in the chosen sound instead; Both plays them together.</p>
+                    <p class="hint">Stem plays the recording; Score plays the {{ job()?.harmony?.fromScore ? 'uploaded score' : 'transcribed score' }} in the chosen sound instead; Both plays them together.
+                      The Harmonic mixer's volume, effects, mute and solo apply to whichever is playing.</p>
                   }
                 } @else if (parts[track.name]) {
                   <p class="hint">No clear chords or notes were found in this stem.</p>
@@ -1214,7 +1218,10 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     const played = this.scorePart()!;
     // The choices show as soon as the score is here; the sound loads once there is audio to play it with.
     if (!this.context || !this.master) return;
-    if (!this.voices.has(SCORE_VOICE)) this.voices.set(SCORE_VOICE, new AccompanimentVoice(this.context, this.master));
+    // Into the Harmonic track, ahead of its effects and fader, once the track is loaded.
+    const harmonic = this.runtimes.get('other');
+    if (!harmonic) return;
+    if (!this.voices.has(SCORE_VOICE)) this.voices.set(SCORE_VOICE, new AccompanimentVoice(this.context, harmonic.input));
     const voice = this.voices.get(SCORE_VOICE)!;
     this.scorePartLoading.set(true);
     try {
@@ -1360,9 +1367,9 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   // Parts follow their volume and mute; a soloed stem silences them, as it does the other stems.
   private applyAccompanimentLevels(): void {
     if (!this.context) return;
-    // The score part follows the Harmonic track's own mute and solo.
-    const harmonic = this.tracks().find(track => track.name === 'other'), played = this.scorePart();
-    const on = !!harmonic && !!played && this.scoreMode() !== 'stem' && !harmonic.muted && !this.suppressedBySolo(harmonic);
+    // The score part plays through the Harmonic track, so its volume, effects, mute and solo apply to it there.
+    const played = this.scorePart();
+    const on = !!played && this.scoreMode() !== 'stem';
     this.voices.get(SCORE_VOICE)?.output.gain.setTargetAtTime(on ? played!.volume / 100 * this.scoreGain : 0, this.context.currentTime, 0.015);
   }
 
@@ -2092,11 +2099,12 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
           continue;
         }
         const track = this.tracks().find(item => item.name === name)!;
-        const originalLevel = context.createGain(), cleanedLevel = context.createGain();
+        const originalLevel = context.createGain(), cleanedLevel = context.createGain(), recording = context.createGain();
         cleanedLevel.gain.value = 0;
-        const runtime = { buffer, originalLevel, cleanedLevel, ...createStemEffects(context, master) };
-        originalLevel.connect(runtime.input);
-        cleanedLevel.connect(runtime.input);
+        const runtime = { buffer, originalLevel, cleanedLevel, recording, ...createStemEffects(context, master) };
+        originalLevel.connect(recording);
+        cleanedLevel.connect(recording);
+        recording.connect(runtime.input);
         this.runtimes.set(name, runtime);
         this.applyTrackSettings(track, runtime);
         this.updateTrack(name, {
@@ -2115,8 +2123,9 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     }
     if (this.destroyed || generation !== this.generation) return;
     this.loadingStems = false;
-    // With the stems here, a song's own score can be laid on them.
+    // With the stems here, a song's own score can be laid on them, and the score part joins the Harmonic track.
     void this.applySavedScore();
+    void this.prepareScorePart();
     // A cleaned version that arrives after a key change is moved too.
     if (missing.length && this.transpose() && this.hydrated()) void this.applyKey();
     // A version that arrives during playback needs a restart to join in sync.
@@ -2259,11 +2268,10 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     if (!this.context) return;
     for (const track of this.tracks()) {
       const runtime = this.runtimes.get(track.name);
-      const replaced = track.name === 'other' && this.scoreMode() === 'score';
-      if (runtime) runtime.gain.gain.setTargetAtTime(
-        track.muted || replaced || this.suppressedBySolo(track) ? 0 : track.volume / 100,
-        this.context.currentTime, 0.015,
-      );
+      if (!runtime) continue;
+      runtime.gain.gain.setTargetAtTime(track.muted || this.suppressedBySolo(track) ? 0 : track.volume / 100, this.context.currentTime, 0.015);
+      // The Harmonic track playing its score: the recording silent, the track's controls on the score part.
+      runtime.recording.gain.setTargetAtTime(track.name === 'other' && this.scoreMode() === 'score' ? 0 : 1, this.context.currentTime, 0.015);
     }
     this.applyAccompanimentLevels();
   }
