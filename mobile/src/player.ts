@@ -2,7 +2,7 @@
 // driven by one audio context so they stay sample-aligned (design doc, Audio engine).
 import {
   AnalyserNode, AudioContext, AudioManager, MediaElementAudioSourceNode, PlaybackNotificationManager,
-  type AudioBuffer, type AudioParam, type GainNode, type RecorderAdapterNode,
+  type AudioBuffer, type AudioBufferSourceNode, type AudioParam, type GainNode, type RecorderAdapterNode,
 } from 'react-native-audio-api';
 // @ts-expect-error Not part of the public API, so the library is pinned (design doc).
 // It is the only way to start every stem at one shared time.
@@ -13,7 +13,7 @@ import { EXPLICIT_STEREO, applyEffects, createEffects, defaults, stereoGain, typ
 import { t, type TextKey } from './i18n';
 import { bandLevels, type StemLevels } from './instrument-detect';
 import { MAX_RATE, MIN_RATE, rateAt, songPositionAt, takeTimeAt, type TempoPoint } from './live-follow';
-import { SCORE_FAMILIES, ScoreVoice, loadSound, type Family, type NoteEvent, type Samples } from './score-parts';
+import { RENDER_RATE, SCORE_FAMILIES, loadSound, type Family, type Samples } from './score-parts';
 
 export interface Channel extends Omit<Effects, 'volume'> {
   volume: number; // 0 to 1
@@ -78,8 +78,9 @@ interface Stem {
 // The player's own channel: the live input and the recorded take both play through it.
 interface LiveChannel { effects: EffectNodes; gain: GainNode }
 
-// A part played from the Harmonic score (score-parts.ts): a channel of its own, like a stem's, muted to begin with.
-interface ScorePart { effects: EffectNodes; gain: GainNode; voice?: ScoreVoice; channel: Channel }
+// A part played from the Harmonic score (score-parts.ts): a channel of its own, like a stem's, muted to begin with;
+// its notes rendered whole into `buffer`, played by one source started with the stems.
+interface ScorePart { effects: EffectNodes; gain: GainNode; channel: Channel; buffer?: AudioBuffer; source?: AudioBufferSourceNode }
 export const defaultScoreChannel = (): Channel => ({ ...defaultChannel(), muted: true });
 
 // The native media-control registry is an unsynchronised dictionary that every
@@ -361,6 +362,7 @@ export class Mixer {
     }
     this.speed = rate;
     for (const source of this.sources) source.setPlaybackRate(rate);
+    for (const family of SCORE_FAMILIES) { const source = this.scoreParts[family].source; if (source) source.playbackRate.value = rate; }
   }
 
   // Where playback ends: the section end, but never past the playable end of the stems.
@@ -384,6 +386,7 @@ export class Mixer {
       if (this.context.state !== 'running') throw new Error(t('player.engineStatePlay', { state: this.context.state }));
       const when = this.context.currentTime + START_DELAY;
       for (const source of sources) source.getFileSourceNode().start(when);
+      for (const family of SCORE_FAMILIES) this.startScorePart(family, when, position);
       this.startClock = when;
       this.startTake(takeStart, when);
     } finally {
@@ -400,7 +403,6 @@ export class Mixer {
       if (this.startPosition < this.sectionStart || this.startPosition >= this.stopAt - .05) this.startPosition = this.sectionStart;
       await this.startAt(this.startPosition);
       this.playing = true;
-      this.startVoices();
       this.notify();
     });
   }
@@ -421,7 +423,6 @@ export class Mixer {
       const position = Math.min(Math.max(target, this.sectionStart), this.stopAt);
       if (this.playing) {
         await this.startAt(position);
-        this.startVoices();
       } else {
         this.startPosition = position;
       }
@@ -453,7 +454,7 @@ export class Mixer {
       this.playing = false;
       this.startPosition = this.sectionStart;
       const looping = this.loop;
-      if (looping) { await this.startAt(this.sectionStart); this.playing = true; this.startVoices(); }
+      if (looping) { await this.startAt(this.sectionStart); this.playing = true; }
       this.notify();
       if (!looping) for (const listener of this.endedListeners) listener();
     }).catch(error => console.warn('Song completion failed', error)).finally(() => { this.endPending = false; });
@@ -461,12 +462,28 @@ export class Mixer {
 
   private pauseAll() {
     for (const source of this.sources) source.pause();
-    for (const family of SCORE_FAMILIES) this.scoreParts[family].voice?.stop();
+    for (const family of SCORE_FAMILIES) this.stopScorePart(family);
     this.closeTakeSource();
   }
 
-  private startVoices() {
-    for (const family of SCORE_FAMILIES) this.scoreParts[family].voice?.start();
+  // A score part's source, started at an audio-clock time from a song position, at the stems' speed with its pitch kept.
+  private startScorePart(family: Family, when: number, position: number) {
+    const part = this.scoreParts[family];
+    this.stopScorePart(family);
+    if (!part.buffer || position >= part.buffer.duration) return;
+    const source = this.context.createBufferSource({ pitchCorrection: true });
+    source.buffer = part.buffer;
+    source.playbackRate.value = this.speed;
+    source.connect(part.effects.input);
+    source.start(when, position);
+    part.source = source;
+  }
+  private stopScorePart(family: Family) {
+    const part = this.scoreParts[family], source = part.source;
+    part.source = undefined;
+    if (!source) return;
+    try { source.stop(); } catch { /* Not started or already ended. */ }
+    source.disconnect();
   }
 
   // Each score part's sound (a library sound id); undefined until chosen, then the closest for the song.
@@ -490,17 +507,16 @@ export class Mixer {
     this.applyGains();
     this.changed();
   }
-  setScoreNotes(family: Family, events: NoteEvent[], buffer: AudioBuffer, samples: Samples, attacks: number[], gain: number) {
+  // A part's notes rendered whole (score-parts.ts renderPart, at RENDER_RATE from the song's start); heard at once
+  // when the song is playing, from where it is.
+  setScoreRender(family: Family, signal: Float32Array<ArrayBuffer>) {
     const part = this.scoreParts[family];
-    part.voice ??= new ScoreVoice(this.context, part.effects.input, {
-      // The audio-clock time of a song time, from when the stems started at the speed they play now.
-      position: () => this.position, playing: () => this.playing && !this.restarting, end: () => this.stopAt,
-      contextTime: song => this.startClock + (song - this.startPosition) / this.speed,
-    });
-    part.voice.output.gain.value = gain;
-    part.voice.setNotes(events, buffer, samples, attacks);
-    if (this.playing && !this.restarting) part.voice.start();
+    const buffer = this.context.createBuffer(1, Math.max(1, signal.length), RENDER_RATE);
+    buffer.copyToChannel(signal, 0);
+    part.buffer = buffer;
+    if (this.playing && !this.restarting) this.startScorePart(family, this.context.currentTime + 0.05, this.positionAt(this.context.currentTime + 0.05));
   }
+
 
   // The take is reopened on every start: a file source that reached its end cannot play again.
   private closeTakeSource() {
@@ -756,7 +772,7 @@ export class Mixer {
       for (const source of this.sources) source.dispose();
       this.closeTakeSource();
       for (const name of STEM_NAMES) clearTimeout(this.stems[name].effects.links.reverbOff);
-      for (const family of SCORE_FAMILIES) { this.scoreParts[family].voice?.dispose(); clearTimeout(this.scoreParts[family].effects.links.reverbOff); }
+      for (const family of SCORE_FAMILIES) { this.stopScorePart(family); clearTimeout(this.scoreParts[family].effects.links.reverbOff); }
       clearTimeout(this.live.effects.links.reverbOff);
       this.listeners.clear(); this.endedListeners.clear();
       await notification(() => PlaybackNotificationManager.hide()).catch(error => console.warn('Could not hide media controls', error));

@@ -1,12 +1,11 @@
 // The Harmonic score played on guitar and on keys, as the website's mixer plays it (web/src/accompaniment-player.ts):
 // every note of the score (its sung line among them) in a sampled sound from the website's library — one note every
 // three semitones, read faster or slower for the notes between — started early by the sound's own attack, and as
-// loud through the song as the Harmonic stem (whose loudness comes with a result made from a score). The notes are
-// scheduled a little ahead on the mixer's clock, at whatever speed the song plays.
+// loud through the song as the Harmonic stem (whose loudness comes with a result made from a score). Each part is
+// rendered whole and played as one source with the stems (player.ts).
 import { Directory, File, Paths } from 'expo-file-system';
-import type { AudioBuffer, AudioContext, AudioNode } from 'react-native-audio-api';
+import type { AudioBuffer, AudioContext } from 'react-native-audio-api';
 import type { HarmonyNote, HarmonyPart } from './api';
-import { stereoGain } from './effects';
 
 export type Family = 'guitar' | 'keys';
 export const SCORE_FAMILIES: readonly Family[] = ['guitar', 'keys'];
@@ -135,100 +134,57 @@ export function matchLoudness(events: NoteEvent[], measured: NoteEvent[], loudne
   };
 }
 
-const AHEAD = 0.3, TICK_MS = 60, ATTACK = 0.004, RELEASE = 0.12, TOGETHER = 0.05;
-// Where the song is: its position now, and the audio-clock time of a song time (at the speed it plays now).
-export interface SongClock { position(): number; contextTime(song: number): number; playing(): boolean; end(): number }
-
-// One part's notes in one sound, played into `destination` while the song plays.
-export class ScoreVoice {
-  readonly output;
-  private events: NoteEvent[] = [];
-  private shares: number[] = [];
-  private buffer?: AudioBuffer;
-  private samples?: Samples;
-  private attacks: number[] = [];
-  private timer?: ReturnType<typeof setInterval>;
-  private next = 0;
-  private scheduledUntil = 0;
-  private active = new Set<{ stop(when?: number): void }>();
-
-  constructor(private readonly context: AudioContext, destination: AudioNode, private readonly clock: SongClock) {
-    this.output = stereoGain(context);
-    this.output.connect(destination);
+const ATTACK = 0.004, RELEASE = 0.12, TOGETHER = 0.05;
+export const RENDER_RATE = 22050;
+// A part rendered whole, as one signal at RENDER_RATE from the song's start: each note its sample read faster or
+// slower for its pitch, started early by the sample's attack (at most MOST_LEAD) and held as much longer, faded in
+// and out, as loud as its velocity and shared with the notes starting with it (a chord is no louder than a few
+// notes). Played as one source next to the stems, so nothing is made or removed on the audio graph per note.
+// `sound`: the sound's samples (its first channel) at `soundRate`.
+export function renderPart(events: NoteEvent[], sound: Float32Array, soundRate: number, samples: Samples, attacks: number[],
+  seconds: number, rate = RENDER_RATE): Float32Array<ArrayBuffer> {
+  const steps = renderSteps(events, sound, soundRate, samples, attacks, seconds, rate);
+  for (;;) { const step = steps.next(); if (step.done) return step.value; }
+}
+// The same, a few notes at a time, so the phone stays responsive while a song's part is made; undefined if `cancelled`.
+export async function renderPartAsync(events: NoteEvent[], sound: Float32Array, soundRate: number, samples: Samples, attacks: number[],
+  seconds: number, cancelled: () => boolean, rate = RENDER_RATE): Promise<Float32Array<ArrayBuffer> | undefined> {
+  const steps = renderSteps(events, sound, soundRate, samples, attacks, seconds, rate);
+  for (;;) {
+    const step = steps.next();
+    if (step.done) return step.value;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    if (cancelled()) return undefined;
   }
-
-  setNotes(events: NoteEvent[], buffer: AudioBuffer, samples: Samples, attacks: number[]) {
-    this.events = events;
-    let from = 0, to = 0;
-    this.shares = events.map(event => {
-      while (events[from].time < event.time - TOGETHER) from++;
-      while (to < events.length && events[to].time <= event.time + TOGETHER) to++;
-      return 1 / Math.sqrt(Math.max(1, (to - from) / 2));
-    });
-    this.buffer = buffer;
-    this.samples = samples;
-    this.attacks = attacks;
-    if (this.timer) this.start();
-  }
-
-  // From the song's position now; called whenever the song starts playing (play, seek, loop).
-  start() {
-    this.stop();
-    const position = this.clock.position();
-    this.next = this.firstAfter(position);
-    this.scheduledUntil = position;
-    this.schedule();
-    this.timer = setInterval(() => this.schedule(), TICK_MS);
-  }
-
-  stop() {
-    clearInterval(this.timer);
-    this.timer = undefined;
-    const now = this.context.currentTime;
-    for (const source of this.active) { try { source.stop(now + 0.02); } catch { /* Already ended. */ } }
-    this.active.clear();
-  }
-
-  dispose() { this.stop(); this.output.disconnect(); }
-
-  private firstAfter(time: number) {
-    let low = 0, high = this.events.length;
-    while (low < high) { const middle = (low + high) >> 1; if (this.events[middle].time < time) low = middle + 1; else high = middle; }
-    return low;
-  }
-
-  private schedule() {
-    if (!this.buffer || !this.samples || !this.clock.playing()) return;
-    const position = this.clock.position(), until = Math.min(this.clock.end(), position + AHEAD);
-    while (this.next < this.events.length && this.events[this.next].time < until) {
-      const index = this.next++, event = this.events[index];
-      if (event.time >= this.scheduledUntil - 0.01) this.play(event, this.shares[index]);
-    }
-    this.scheduledUntil = until;
-  }
-
-  private play(event: NoteEvent, share: number) {
-    const samples = this.samples!, { index, rate } = sampleFor(samples.pitches, event.pitch);
-    const lead = Math.min(MOST_LEAD, (this.attacks[index] ?? 0) / rate);
-    const start = this.clock.contextTime(event.time), at = Math.max(start - lead, this.context.currentTime);
-    const end = this.clock.contextTime(event.time + event.duration);
-    const held = Math.max(ATTACK, Math.min(end - start + lead, samples.length / rate - RELEASE));
-    const source = this.context.createBufferSource();
-    source.buffer = this.buffer!;
-    source.playbackRate.value = rate;
-    const envelope = stereoGain(this.context, 0);
+}
+const NOTES_PER_STEP = 40;
+function* renderSteps(events: NoteEvent[], sound: Float32Array, soundRate: number, samples: Samples, attacks: number[],
+  seconds: number, rate: number): Generator<void, Float32Array<ArrayBuffer>> {
+  const out = new Float32Array(Math.ceil(seconds * rate));
+  const sorted = [...events].sort((a, b) => a.time - b.time);
+  let from = 0, to = 0;
+  for (const [number, event] of sorted.entries()) {
+    if (number && number % NOTES_PER_STEP === 0) yield;
+    while (sorted[from].time < event.time - TOGETHER) from++;
+    while (to < sorted.length && sorted[to].time <= event.time + TOGETHER) to++;
+    const share = 1 / Math.sqrt(Math.max(1, (to - from) / 2));
+    const { index, rate: speed } = sampleFor(samples.pitches, event.pitch);
+    const lead = Math.min(MOST_LEAD, (attacks[index] ?? 0) / speed);
+    const held = Math.max(ATTACK, Math.min(event.duration + lead, samples.length / speed - RELEASE));
     const level = (event.velocity / 127) ** 1.5 * LEVEL * share;
-    envelope.gain.setValueAtTime(0, at);
-    envelope.gain.linearRampToValueAtTime(level, at + ATTACK);
-    envelope.gain.setValueAtTime(level, at + held);
-    envelope.gain.linearRampToValueAtTime(0, at + held + RELEASE);
-    source.connect(envelope);
-    envelope.connect(this.output);
-    source.start(at, index * samples.slot, samples.length);
-    source.stop(at + held + RELEASE + 0.01);
-    this.active.add(source);
-    source.onEnded = () => { this.active.delete(source); envelope.disconnect(); };
+    const begin = Math.round((event.time - lead) * rate), length = Math.round((held + RELEASE) * rate);
+    const offset = index * samples.slot * soundRate, step = speed * soundRate / rate, last = offset + samples.length * soundRate - 1;
+    const attackEnd = ATTACK * rate, releaseStart = held * rate;
+    for (let k = Math.max(0, -begin); k < length && begin + k < out.length; k++) {
+      const position = offset + k * step;
+      if (position >= last) break;
+      const whole = Math.floor(position), fraction = position - whole;
+      const value = sound[whole] + (sound[whole + 1] - sound[whole]) * fraction;
+      const envelope = k < attackEnd ? k / attackEnd : k < releaseStart ? 1 : Math.max(0, 1 - (k - releaseStart) / (RELEASE * rate));
+      out[begin + k] += value * level * envelope;
+    }
   }
+  return out;
 }
 
 // A sound's samples decoded on the mixer's context, and their shape, once per context and sound.

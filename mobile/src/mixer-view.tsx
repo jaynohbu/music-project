@@ -8,7 +8,7 @@ import { t as text } from './i18n';
 import { useT } from './language';
 import { LivePanel } from './live-panel';
 import { MAX_TRANSPOSE, Mixer, defaultChannel, defaultScoreChannel, type Channel } from './player';
-import { SCORE_FAMILIES, loadLibrary, matchLoudness, offered, scoreEvents, type Family, type SoundLibrary } from './score-parts';
+import { SCORE_FAMILIES, loadLibrary, matchLoudness, offered, renderPartAsync, scoreEvents, type Family, type SoundLibrary } from './score-parts';
 import { ChannelStrip, IconButton, LampSwitch, MasterFader, Timeline } from './mixer-console';
 import { EDGE, useStemScroll } from './stem-scroll';
 import { focusedStem } from './stem-focus';
@@ -387,11 +387,15 @@ function ScoreParts({ mixer, tasks, console }: {
       const sound = mixer.scoreSound(family) ?? offered(library, choices, family)[0];
       if (sound === undefined) continue;
       if (mixer.scoreSound(family) === undefined) mixer.setScoreSound(family, sound);
-      mixer.decodeSound(sound, library.samples).then(({ buffer, attacks, levels }) => {
+      mixer.decodeSound(sound, library.samples).then(async ({ buffer, attacks, levels }) => {
         if (cancelled || mixer.scoreSound(family) !== sound) return;
         const events = scoreEvents(part, transpose);
         const matched = loudness ? matchLoudness(events, scoreEvents(part, transpose, false), loudness, library.samples, levels) : { events, gain: 1 };
-        mixer.setScoreNotes(family, matched.events, buffer, library.samples, attacks, matched.gain);
+        // Rendered whole, the part's level at which it is as loud as the Harmonic stem included.
+        const signal = await renderPartAsync(matched.events, buffer.getChannelData(0), buffer.sampleRate, library.samples, attacks, mixer.duration + 1, () => cancelled);
+        if (!signal) return;
+        if (matched.gain !== 1) for (let index = 0; index < signal.length; index++) signal[index] *= matched.gain;
+        if (!cancelled && mixer.scoreSound(family) === sound) mixer.setScoreRender(family, signal);
       }, error => { if (!cancelled) setFailure(errorText(error)); });
     }
     return () => { cancelled = true; };

@@ -49,22 +49,23 @@ test('a part follows the stem\'s loudness: notes where the stem is louder are pl
   assert.equal(moved[5].velocity, moved[6].velocity);
 });
 
-test('notes are scheduled on the song clock at the speed it plays, started early by their sound\'s attack', () => {
+test('a part is rendered whole: each note its sample at its pitch, started early by the sample\'s attack', () => {
   const { parts } = load();
-  const started = [];
-  const context = { currentTime: 10,
-    createBufferSource: () => ({ playbackRate: { value: 1 }, connect() {}, start(at, offset, duration) { started.push({ at, offset, rate: this.playbackRate.value }); }, stop() {}, set onEnded(_) {} }) };
-  // The song started at song second 20 at audio time 10.5, playing 1.25 times as fast.
-  const clock = { position: () => 20, playing: () => true, end: () => 100, contextTime: song => 10.5 + (song - 20) / 1.25 };
-  const voice = new parts.ScoreVoice(context, {}, clock);
+  // A sound of one sample per slot, its value the slot's number + 1 (a constant level), at 100 samples a second.
+  const soundRate = 100, small = { ...samples, slot: 3.5, length: 3 };
+  const sound = new Float32Array(Math.round(samples.pitches.length * 3.5 * soundRate)).fill(0);
+  samples.pitches.forEach((_, index) => sound.fill(index + 1, index * 350, index * 350 + 300));
   const attacks = samples.pitches.map((_, index) => index === 8 ? 0.1 : 0);
-  voice.setNotes([{ time: 19, duration: 1, pitch: 60, velocity: 90 }, { time: 20.1, duration: 0.5, pitch: 60, velocity: 90 }, { time: 20.2, duration: 0.5, pitch: 61, velocity: 90 }],
-    {}, samples, attacks);
-  voice.start();
-  voice.stop();
-  // The note before the position is not played; the next at 20.1 → 10.5 + 0.08, less its sample's 0.1 s attack.
-  assert.equal(started.length, 2);
-  assert.ok(Math.abs(started[0].at - (10.58 - 0.1)) < 1e-9, String(started[0].at));
-  assert.equal(started[0].offset, 8 * 3.5);
-  assert.ok(Math.abs(started[1].rate - 2 ** (1 / 12)) < 1e-9, 'C#4 from the C4 sample, a semitone faster');
+  const out = parts.renderPart([{ time: 1, duration: 0.5, pitch: 60, velocity: 127 }], sound, soundRate, small, attacks, 3, 1000);
+  assert.equal(out.length, 3000);
+  // Heard from 0.9 s (its 0.1 s attack before the note), not before; the C4 slot's value at the full level.
+  assert.equal(out[890], 0);
+  assert.ok(out[905] > 0);
+  assert.ok(Math.abs(out[1200] - 9 * 0.5) < 1e-6, String(out[1200]));
+  // Held for the note and its lead, then released within RELEASE.
+  assert.ok(out[1550] > 0 && out[1800] === 0);
+  // Two notes together share their level.
+  const chord = parts.renderPart([{ time: 1, duration: 0.5, pitch: 60, velocity: 127 }, { time: 1, duration: 0.5, pitch: 60, velocity: 127 }],
+    sound, soundRate, small, attacks, 3, 1000);
+  assert.ok(Math.abs(chord[1200] - 2 * 9 * 0.5) < 1e-6);
 });
