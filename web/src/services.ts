@@ -336,6 +336,8 @@ export interface RegeneratedPart extends Lyrics { resultId?: string }
 export interface Harmony extends Lyrics {
   stems?: Record<string, RegeneratedPart | undefined>; stale?: boolean; previous?: Lyrics;
   fromScore?: { title: string; measures: number; notes: number; heard?: number; correctedBars: number; family?: 'guitar' | 'keys'; scoreSavedAt?: string };
+  // Set while (and after) the song's score is laid on it by the server.
+  scoring?: boolean;
 }
 export interface LyricWord { start: number; end: number; text: string }
 export interface LyricLine { start: number; end: number; words: LyricWord[] }
@@ -520,6 +522,14 @@ export class StemsService {
     const token = await this.auth.token();
     return firstValueFrom(this.http.post<{ harmony: Harmony }>(
       `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/harmony`, { fromScore: document },
+      { headers: { Authorization: `Bearer ${token}` } }));
+  }
+
+  // The song's chords & notes from its own score, laid on it by the server (when it has its analysis).
+  async useSongScore(jobId: string): Promise<{ harmony: Harmony }> {
+    const token = await this.auth.token();
+    return firstValueFrom(this.http.post<{ harmony: Harmony }>(
+      `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/harmony`, { useScore: true },
       { headers: { Authorization: `Bearer ${token}` } }));
   }
 

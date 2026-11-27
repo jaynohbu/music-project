@@ -356,8 +356,9 @@ function heard(runtime: StemRuntime): { buffer: AudioBuffer; cleaned?: AudioBuff
 
 // The voices of the Harmonic track's score parts.
 const SCORE_VOICES: Record<Family, number> = { guitar: 0, keys: -1 };
-// About how long a score takes: the reader's time a page, and laying it on the song (spectrograms of every stem).
-const PAGE_SECONDS = 22, LAYING_SECONDS = 50;
+// About how long a score takes: the reader's time a page, and laying it on the song on the server (a worker
+// starting, the stems fetched, every stem's spectrogram).
+const PAGE_SECONDS = 22, LAYING_SECONDS = 180;
 
 // A PDF's pages, counted from its page objects; 1 when they cannot be told.
 async function pageCount(file: File): Promise<number> {
@@ -525,7 +526,7 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                 @if (isHarmonic(track.name) && chordsFailure()) { <span class="error">{{ chordsFailure() }}</span> }
                 @if (isHarmonic(track.name) && partFailure(track.name)) { <span class="error">{{ partFailure(track.name) }}</span> }
                 @if (track.name === 'other') {
-                  @if (scoreImportStatus()) { <span class="hint" role="status">{{ scoreImportStatus() }}</span> }
+                  @if (scoreImportStatus() || scoring()) { <span class="hint" role="status">{{ scoreImportStatus() || 'Processing… about ' + layingMinutes + ' min' }}</span> }
                   @if (scoreImportError()) { <span class="error" role="alert">{{ scoreImportError() }}</span> }
                 }
               </div>
@@ -1256,24 +1257,20 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     this.scoreBusy = true;
     this.scoreImportError.set('');
     // Only that it is working, and about how long: reading takes about PAGE_SECONDS a page, laying it on the song
-    // about LAYING_SECONDS.
+    // on the server about LAYING_SECONDS.
     const pdf = /\.(pdf|png|jpe?g)$/i.test(file.name);
-    const pages = pdf ? await pageCount(file) : 0;
-    this.processing(pages * PAGE_SECONDS + (this.harmonyDocument ? LAYING_SECONDS : 0));
+    this.processing((pdf ? await pageCount(file) : 0) * PAGE_SECONDS + LAYING_SECONDS);
     try {
       const { scoreText } = await import('./score-import');
       const { text, scores } = await scoreText(file, '', (score, pagesToRead) => this.stems.readScore(score, pagesToRead, () => undefined));
       if (scores > 1) this.scoreImportError.set(`The score was read as ${scores} separate pieces; the first is used.`);
       const title = /<work-title>([^<]*)<\/work-title>/.exec(text)?.[1]?.trim() || file.name.replace(/\.[^.]+$/, '');
+      // Saved with the song; the server lays it on the song at once (or right after the song's analysis).
       await this.stems.saveSongScore(this.jobId, title, text);
       if (this.destroyed || generation !== this.generation) return;
+      if (!this.harmonyDocument && !this.findingChords()) await this.findChords();
       await this.refreshJob(generation);
-      // With no beats yet, the chords are found first; the score is laid on their beats when they are ready.
-      if (!this.harmonyDocument) {
-        if (!this.findingChords()) await this.findChords();
-        return;
-      }
-      await this.applySavedScore(true);
+      this.watchRestorations(generation);
     } catch (error) {
       if (!this.destroyed && generation === this.generation) this.scoreImportError.set(`Could not use the score: ${errorMessage(error)}`);
     } finally {
@@ -1286,45 +1283,32 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     this.scoreImportStatus.set(`Processing… about ${Math.max(1, Math.round(seconds / 60))} min`);
   }
 
-  // The song's own score laid on the song with every stem, its result saved as the song's chords & notes, and the
-  // sound of its notes extracted and saved for the spectrum page. Done by itself (once a page) when the song's
-  // chords & notes are not yet from its present score.
+  // While the server lays the song's score on it.
+  scoring(): boolean {
+    const harmony = this.job()?.harmony;
+    return !!harmony?.scoring && (harmony.status === 'queued' || harmony.status === 'processing');
+  }
+
+  // A song with its own score whose chords & notes are not yet from it (its analysis just finished, or the score
+  // is newer): the server is asked to lay it on the song, once a page per score.
+  readonly layingMinutes = Math.round(LAYING_SECONDS / 60);
   private appliedScore?: string;
   private scoreBusy = false;
   async applySavedScore(force = false): Promise<void> {
-    const job = this.job(), score = job?.score, analysis = this.harmonyDocument;
-    if (!score || !analysis || (this.scoreBusy && !force)) return;
-    if (!force && (this.appliedScore === score.savedAt || job?.harmony?.fromScore?.scoreSavedAt === score.savedAt)) return;
-    const stems: Partial<Record<AlignStem, AudioBuffer>> = {};
-    for (const name of ['other', 'vocals', 'bass', 'drums'] as AlignStem[]) {
-      const runtime = this.runtimes.get(name);
-      if (runtime) stems[name] = runtime.buffer;
-    }
-    if (!stems.other) return;
+    const job = this.job(), score = job?.score, harmony = job?.harmony;
+    if (!score || !harmony || harmony.status !== 'completed' || this.scoreBusy) return;
+    if (!force && (this.appliedScore === score.savedAt || harmony.fromScore?.scoreSavedAt === score.savedAt)) return;
     this.appliedScore = score.savedAt;
-    const generation = this.generation, owner = !this.scoreBusy;
-    this.scoreBusy = true;
-    if (owner) { this.scoreImportError.set(''); this.processing(LAYING_SECONDS); }
+    const generation = this.generation;
     try {
-      const response = await fetch(score.url);
-      if (!response.ok) throw new Error(`The saved score could not be fetched (HTTP ${response.status}).`);
-      const musicxml = await response.text();
-      // The score engine is loaded only when a score is used.
-      const { importScore } = await import('./score-import');
-      const result = await importScore({
-        source: { musicxml, title: score.title, savedAt: score.savedAt }, stems, analysis,
-        readPdf: (pdf, pages) => this.stems.readScore(pdf, pages, () => undefined), progress: () => undefined,
-      });
-      if (this.destroyed || generation !== this.generation) return;
-      await this.stems.saveScoreHarmony(this.jobId, result.document);
-      await this.stems.uploadExtracted(this.jobId, result.extracted);
+      await this.stems.useSongScore(this.jobId);
       await this.refreshJob(generation);
+      this.watchRestorations(generation);
     } catch (error) {
       if (!this.destroyed && generation === this.generation) this.scoreImportError.set(`Could not use the score: ${errorMessage(error)}`);
-    } finally {
-      if (owner) { this.scoreBusy = false; this.scoreImportStatus.set(''); }
     }
   }
+
 
 
 

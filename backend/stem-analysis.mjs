@@ -3,18 +3,40 @@ import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { extractedKey } from './song-score.mjs';
 import { failureRetention } from './shared.mjs';
 import { stemDeadline } from './stem-shared.mjs';
 
 const db = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const s3 = new S3Client({});
 const execute = promisify(execFile);
+const LARGEST_SCORE_HARMONY = 4 * 1024 * 1024;
+const finite = value => typeof value === 'number' && Number.isFinite(value);
+
+// What the page sends as the Harmonic score from an uploaded score: the song's harmony result in its usual form
+// (beats, firstBar, the ensemble part and the other parts), and a short account of the score it came from.
+export function checkScoreHarmony(document) {
+  const invalid = message => { throw new Error(message ?? 'This score result could not be saved.'); };
+  if (!document || typeof document !== 'object') invalid();
+  if (Buffer.byteLength(JSON.stringify(document)) > LARGEST_SCORE_HARMONY) invalid('This score result is too large to save.');
+  const { beats, firstBar, ensemble, stems, fromScore } = document;
+  if (!Array.isArray(beats) || beats.length < 2 || !beats.every(finite) || beats.some((beat, index) => index && beat <= beats[index - 1])) invalid();
+  if (!Number.isInteger(firstBar) || firstBar < 0 || firstBar >= beats.length) invalid();
+  const notes = list => Array.isArray(list) && list.every(note => note && finite(note.start) && finite(note.end) && note.end >= note.start
+    && Number.isInteger(note.pitch) && note.pitch >= 0 && note.pitch <= 127 && Number.isInteger(note.unit) && Number.isInteger(note.length));
+  if (!ensemble || !notes(ensemble.notes) || !Array.isArray(ensemble.chords)) invalid();
+  if (stems && (typeof stems !== 'object' || Object.values(stems).some(part => part && (!notes(part.notes ?? []) || (part.hits && !Array.isArray(part.hits)))))) invalid();
+  if (!fromScore || typeof fromScore.title !== 'string' || !Number.isInteger(fromScore.measures) || !Number.isInteger(fromScore.notes)) invalid();
+  return document;
+}
+
 const validTime = (time, duration) => Number.isFinite(time) && time >= 0 && time <= duration + 1;
 
 export function checkLyrics(value, duration) {
@@ -88,9 +110,20 @@ const harmonyStems = child => !child.stem ? HARMONY_STEMS
   : child.stem === 'drums' ? ['drums'] : ['other', 'bass'];
 
 // The whole score also chooses the live accompaniment, whose genre is heard with the vocals and the title.
+// A harmony record with scoreKey is the song's chords & notes from its own score (song-score.mjs): the score laid on
+// the stems by the website's engine (score_run.mjs, in Node), on the analysis result at baseKey; the sound of the
+// score's notes is saved as the song's extracted sound.
+const SCORED_STEMS = ['other', 'vocals', 'bass', 'drums'];
+// What a record keeps of a result from a score: everything but where each measure is (that stays in the result).
+export const summary = ({ bars, ...rest }) => rest;
 const HARMONY = {
-  type: 'harmony', code: 'HARMONY', stems: child => child.stem ? harmonyStems(child) : [...HARMONY_STEMS, 'vocals'], check: checkHarmony,
-  command: (files, output, child, parent) => ['analyze_harmony.py', output,
+  type: 'harmony', code: 'HARMONY',
+  stems: child => child.scoreKey ? SCORED_STEMS : child.stem ? harmonyStems(child) : [...HARMONY_STEMS, 'vocals'],
+  check: (value, duration, child) => child.scoreKey ? checkScoreHarmony(value) : checkHarmony(value, duration),
+  program: child => child.scoreKey ? process.execPath : undefined,
+  command: (files, output, child, parent) => child.scoreKey ? ['score_run.mjs', output,
+    ...SCORED_STEMS.flatMap(name => ['--stem', `${name}=${files[name]}`]), '--base', files.base, '--score', files.score,
+    '--extracted', files.extracted, '--title', child.scoreTitle ?? '', '--saved-at', child.scoreSavedAt ?? ''] : ['analyze_harmony.py', output,
     ...harmonyStems(child).flatMap(name => ['--stem', `${name}=${files[name]}`]),
     ...(child.stem ? ['--only', child.stem, '--grid', files.base] : ['--vocals', files.vocals, '--title', parent.title ?? ''])],
   messages: {
@@ -152,22 +185,43 @@ function createAnalysisWorker(analysis, {
         await download(name, name === child.stem && child.sourceKey ? child.sourceKey : parent.stems[name].key, 'wav');
       }
       if (child.baseKey) await download('base', child.baseKey, 'json');
+      if (child.scoreKey) {
+        await download('score', child.scoreKey, 'musicxml');
+        files.extracted = path.join(directory, 'extracted.wav');
+      }
       stage = 'analyze';
       const output = path.join(directory, 'result.json');
       const [script, ...args] = analysis.command(files, output, child, parent);
-      await run(pythonPath, [fileURLToPath(new URL(`./${script}`, import.meta.url)), ...args],
+      await run(analysis.program?.(child) ?? pythonPath, [fileURLToPath(new URL(`./${script}`, import.meta.url)), ...args],
         { timeout: Math.max(1000, stemDeadline(child) - Date.now() - 60000), maxBuffer: 16 * 1024 * 1024 });
       stage = 'validate';
       const text = await readFile(output, 'utf8');
-      analysis.check(JSON.parse(text), parent.duration);
+      const result = JSON.parse(text);
+      analysis.check(result, parent.duration, child);
       stage = 'upload';
       await storage.send(new PutObjectCommand({
         Bucket: process.env.BUCKET_NAME, Key: child.key, ContentType: 'application/json',
         Body: createReadStream(output), ContentLength: Buffer.byteLength(text),
       }));
       uploaded = true;
+      if (child.scoreKey) {
+        // The sound of the score's notes, as the song's extracted sound while this score is still the song's.
+        const wav = await readFile(files.extracted);
+        await storage.send(new PutObjectCommand({
+          Bucket: process.env.BUCKET_NAME, Key: extractedKey(child.userId, child.parentJobId), ContentType: 'audio/wav', Body: Readable.from([wav]), ContentLength: wav.length,
+        }));
+        if (parent.score?.savedAt === child.scoreSavedAt) {
+          await database.send(new UpdateCommand({
+            TableName: process.env.TABLE_NAME, Key: { userId: child.userId, jobId: child.parentJobId },
+            UpdateExpression: 'SET #score.extractedAt = :at', ConditionExpression: '#score.savedAt = :saved AND attribute_not_exists(deleting)',
+            ExpressionAttributeNames: { '#score': 'score' }, ExpressionAttributeValues: { ':at': new Date().toISOString(), ':saved': child.scoreSavedAt },
+          })).catch(error => { if (error.name !== 'ConditionalCheckFailedException') throw error; });
+        }
+      }
       stage = 'record';
-      await update('processing', { status: 'completed', completedAt: new Date().toISOString() }, ['expiresAt']);
+      await update('processing', {
+        status: 'completed', completedAt: new Date().toISOString(), ...(child.scoreKey ? { fromScore: summary(result.fromScore) } : {}),
+      }, ['expiresAt']);
     } catch (error) {
       console.error('Stem analysis failed', { jobId: child.jobId, type: analysis.type, stage, name: error.name });
       await update('processing', {

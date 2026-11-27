@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import zipfile
 
 import boto3
 
@@ -66,6 +67,18 @@ def read(source, output, pages):
     return found, log
 
 
+def plain_musicxml(mxl):
+    """The score inside a compressed MusicXML file: the one META-INF/container.xml names, or its first .xml."""
+    with zipfile.ZipFile(mxl) as archive:
+        names = archive.namelist()
+        path = None
+        if 'META-INF/container.xml' in names:
+            found = re.search(rb'full-path\s*=\s*"([^"]+)"', archive.read('META-INF/container.xml'))
+            path = found.group(1).decode() if found else None
+        path = path or next(name for name in names if not name.startswith('META-INF/') and name.endswith(('.xml', '.musicxml')))
+        return archive.read(path)
+
+
 def handler(event, context=None):
     bucket, prefix = event['bucket'], event['prefix'].rstrip('/')
     pages = ' '.join(str(event.get('pages') or '').replace(',', ' ').split())
@@ -96,6 +109,9 @@ def handler(event, context=None):
         with open(found[0], 'rb') as file:
             s3.put_object(Bucket=bucket, Key=f'{prefix}/score.mxl', Body=file.read(),
                           ContentType='application/vnd.recordare.musicxml')
+        # The score itself as plain MusicXML too, so a reading can be saved with a song by its id.
+        s3.put_object(Bucket=bucket, Key=f'{prefix}/score.musicxml', Body=plain_musicxml(found[0]),
+                      ContentType='application/vnd.recordare.musicxml+xml')
         return report({'status': 'completed', 'scores': len(found)})
     except Exception as error:  # Reported to the page, which otherwise waits.
         print(f'Reading the score failed: {error!r}')

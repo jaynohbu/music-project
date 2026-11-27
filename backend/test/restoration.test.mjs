@@ -1182,3 +1182,53 @@ test('a song keeps its own score and the sound extracted with it, removed with i
   assert.equal(database.get('owner', parentId).score, undefined);
   assert.equal(storage.objects.has(`users/owner/scores/${parentId}/score.musicxml`), false);
 });
+
+test('a song\'s score is laid on it by the stem worker: started when saved (once), run in Node, its sound saved', async () => {
+  const { call, database, storage, started } = regeneration();
+  for (const name of STEM_NAMES) storage.objects.set(stemKey(name), wavFile());
+  storage.objects.set(`users/owner/harmony/${parentId}/${lyricsId}.json`, Buffer.from(JSON.stringify({ beats: [0, 0.5, 1], firstBar: 0 })));
+  const saved = await call(`${parentId}/score`, { title: 'Our God', musicxml: scoreXml });
+  assert.equal(saved.status, 201);
+  assert.equal(saved.body.harmony.status, 'queued');
+  const child = database.get('owner', saved.body.harmony.id);
+  assert.equal(child.scoreKey, `users/owner/scores/${parentId}/score.musicxml`);
+  assert.equal(child.baseKey, `users/owner/harmony/${parentId}/${lyricsId}.json`, 'on the analysed result');
+  assert.equal(child.scoreSavedAt, saved.body.score.savedAt);
+  assert.deepEqual(JSON.parse(started.at(-1).input), { userId: 'owner', jobId: child.jobId, kind: 'harmony' });
+  // Asking again for the same score, or regenerating Harmonic, gives the same run.
+  assert.equal((await call(`${parentId}/harmony`, { useScore: true })).body.harmony.id, child.jobId);
+  assert.equal((await call(`${parentId}/harmony`, { stem: 'other' })).body.harmony.id, child.jobId);
+  assert.equal(started.length, 1);
+  // The worker: node runs score_run.mjs, which writes the result and the extracted sound.
+  const document = { beats: [0, 0.5, 1, 1.5], firstBar: 0, ensemble: { key: 'B', chords: [{ start: 0, name: 'B' }], notes: [{ start: 0, end: 0.5, pitch: 59, unit: 0, length: 4, velocity: 90 }] },
+    stems: {}, fromScore: { title: 'Our God', measures: 1, notes: 1, heard: 1, correctedBars: 0, bars: [{ number: '1', start: 0, end: 2 }] } };
+  const calls = [];
+  const run = async (program, args) => {
+    calls.push({ program, script: args[0].split('/').pop(), args });
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(args[1], JSON.stringify(document));
+    await writeFile(args[args.indexOf('--extracted') + 1], Buffer.from('RIFFWAVE'));
+    return { stdout: '' };
+  };
+  await createHarmonyWorker({ database, storage, run })({ userId: 'owner', jobId: child.jobId, kind: 'harmony' });
+  assert.equal(calls[0].program, process.execPath);
+  assert.equal(calls[0].script, 'score_run.mjs');
+  for (const name of ['other', 'vocals', 'bass', 'drums']) assert.ok(calls[0].args.some(arg => arg.startsWith(`${name}=`)));
+  const done = database.get('owner', child.jobId);
+  assert.equal(done.status, 'completed');
+  assert.deepEqual(done.fromScore, { title: 'Our God', measures: 1, notes: 1, heard: 1, correctedBars: 0 }, 'without where each measure is');
+  assert.deepEqual(JSON.parse(storage.objects.get(child.key)), document);
+  assert.equal(storage.objects.get(`users/owner/scores/${parentId}/extracted.wav`).toString(), 'RIFFWAVE');
+  assert.equal((await call(parentId, undefined, 'GET')).body.job.harmony.id, child.jobId);
+});
+
+test('a score saved before the song is analysed waits for the analysis', async () => {
+  const { call, started } = setup();
+  const saved = await call(`${parentId}/score`, { title: 'x', musicxml: scoreXml });
+  assert.equal(saved.status, 201);
+  assert.equal(saved.body.harmony, undefined);
+  // Asking for chords & notes then runs the analysis first.
+  assert.equal((await call(`${parentId}/harmony`, {})).status, 202);
+  assert.equal(database_type(started), 'harmony');
+});
+function database_type(started) { return JSON.parse(started.at(-1).input).kind; }

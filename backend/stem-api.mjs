@@ -56,7 +56,7 @@ export function createStemHandler({
   const restorations = createRestorationRoutes({ database: guarded, storage, orchestrator, signer });
   const analyses = createAnalysisRoutes({ database: guarded, storage, orchestrator, signer });
   const deleteSong = createSongDeletion({ database, storage });
-  const scores = createScoreRoutes({ database, storage, uploadSigner, signer });
+  const scores = createScoreRoutes({ database, storage, uploadSigner, signer, startScoring: (userId, job) => analyses.startScored({ userId, parent: job }) });
   return async event => {
     const reply = (statusCode, body) => ({
       statusCode, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },

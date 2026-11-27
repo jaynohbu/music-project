@@ -632,12 +632,14 @@ Resources:
                   - !Sub '${AudioBucket.Arn}/users/*/stems/*'
                   - !Sub '${AudioBucket.Arn}/users/*/restored/*'
                   - !Sub '${AudioBucket.Arn}/users/*/harmony/*'
+                  - !Sub '${AudioBucket.Arn}/users/*/scores/*'
               - Effect: Allow
                 Action: [s3:PutObject, s3:DeleteObject]
                 Resource:
                   - !Sub '${AudioBucket.Arn}/users/*/restored/*'
                   - !Sub '${AudioBucket.Arn}/users/*/lyrics/*'
                   - !Sub '${AudioBucket.Arn}/users/*/harmony/*'
+                  - !Sub '${AudioBucket.Arn}/users/*/scores/*'
               - Effect: Allow
                 Action: [s3:PutObject, s3:DeleteObject]
                 Resource: !Sub '${AudioBucket.Arn}/users/*/stems/*'

@@ -8,6 +8,8 @@ if [[ -z "$REPOSITORY" || "$REPOSITORY" == "None" ]]; then
   echo "Deploy artifacts.yaml before building the stem image." >&2
   exit 1
 fi
+# The website's score engine, for laying songs' scores on their stems (backend/score_run.mjs).
+node backend/build-score-engine.mjs >&2
 IMAGE="${REPOSITORY}:cpu-$(date -u +%Y%m%d%H%M%S)"
 aws ecr get-login-password --region us-west-2 | docker login \
   --username AWS --password-stdin "${REPOSITORY%%/*}" >&2

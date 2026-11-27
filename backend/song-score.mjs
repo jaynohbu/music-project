@@ -27,7 +27,7 @@ export async function signedScore(job, signer, storage) {
   };
 }
 
-export function createScoreRoutes({ database, storage, uploadSigner, signer }) {
+export function createScoreRoutes({ database, storage, uploadSigner, signer, startScoring = async () => null }) {
   const table = () => process.env.TABLE_NAME;
   const bucket = () => process.env.BUCKET_NAME;
 
@@ -87,7 +87,17 @@ export function createScoreRoutes({ database, storage, uploadSigner, signer }) {
       return reply(201, { upload });
     }
     const title = typeof input.title === 'string' ? input.title.trim().slice(0, 200) : '';
-    const xml = input.musicxml;
+    // A score read by the ScoreReader (score-api.mjs) can be saved by its reading's id.
+    let xml = input.musicxml;
+    if (xml === undefined && typeof input.reading === 'string' && /^[0-9a-f-]{36}$/.test(input.reading)) {
+      try {
+        const object = await storage.send(new GetObjectCommand({ Bucket: bucket(), Key: `score-readings/${userId}/${input.reading}/score.musicxml` }));
+        xml = await object.Body.transformToString();
+      } catch (error) {
+        if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) return reply(404, { message: 'That score reading is not ready or has expired.' });
+        throw error;
+      }
+    }
     if (typeof xml !== 'string' || !xml.includes('<score-partwise') || Buffer.byteLength(xml) > LARGEST_SCORE_XML) {
       return reply(400, { message: 'Send the score as partwise MusicXML, up to 4 MB.' });
     }
@@ -102,6 +112,8 @@ export function createScoreRoutes({ database, storage, uploadSigner, signer }) {
       await storage.send(new DeleteObjectCommand({ Bucket: bucket(), Key: scoreKey(userId, jobId) }));
       return reply(409, { message: 'This song is being deleted.' });
     }
-    return reply(201, { score: await signedScore({ ...job, score }, signer, storage) });
+    // Laid on the song at once when it has its analysis; otherwise when its chords & notes are asked for next.
+    const harmony = await startScoring(userId, { ...job, score });
+    return reply(201, { score: await signedScore({ ...job, score }, signer, storage), ...(harmony ? { harmony } : {}) });
   };
 }
