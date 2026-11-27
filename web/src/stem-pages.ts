@@ -10,7 +10,7 @@ import { harmonyEvents, harmonyMidi, harmonyMusicXml } from './score-export';
 import { shiftBuffer } from './pitch-shift';
 import { scoreSheet, sheetFileName } from './score-sheet';
 import {
-  ACCOMPANIMENT_KINDS, type AccompanimentChoices, type AccompanimentKind, type StyleLibrary, accompanimentEvents, familyOf, offered, styled,
+  type AccompanimentChoices, type StyleLibrary, accompanimentEvents, offered,
 } from './accompaniment';
 import { AccompanimentVoice, type PlayClock, loadLibrary, loadSound } from './accompaniment-player';
 import type { AlignStem, HarmonyDocument } from './score-align';
@@ -354,10 +354,6 @@ function heard(runtime: StemRuntime): { buffer: AudioBuffer; cleaned?: AudioBuff
 // The voice of the Harmonic track's score part; added parts are numbered from 1.
 const SCORE_VOICE = 0;
 
-interface AccompanimentPart {
-  id: number; kind: AccompanimentKind; style: string; sound: number; volume: number; muted: boolean; loading: boolean;
-}
-
 // Names shown for the stems; the stored names stay as they are (other is shown as harmonic).
 const STEM_LABELS: Record<string, string> = { other: 'harmonic' };
 
@@ -567,14 +563,6 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                           <select (change)="changeScorePart({ sound: +$any($event.target).value })">
                             @for (sound of scoreSounds(); track sound; let first = $first) {
                               <option [value]="sound" [selected]="sound === played.sound">{{ soundName(sound) }}{{ first ? ' (closest)' : '' }}</option>
-                            }
-                          </select>
-                        </label>
-                        <label>Style
-                          <select (change)="changeScorePart({ style: $any($event.target).value })">
-                            <option value="" [selected]="!played.style">As written: every note and the melody</option>
-                            @for (style of scoreStyles(); track style; let first = $first) {
-                              <option [value]="style" [selected]="style === played.style">{{ style }}: chords + melody{{ first ? ' (closest)' : '' }}</option>
                             }
                           </select>
                         </label>
@@ -798,57 +786,6 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
             </article>
           }
         </div>
-        <!-- Parts played live from the Harmonic score: nothing is recorded or saved but the choices. -->
-        @if (harmonyParts()?.['other'] && harmonyGrid()) {
-          <section class="accompaniment" aria-labelledby="accompaniment-title">
-            <div class="section-heading">
-              <h2 id="accompaniment-title">Accompaniment</h2>
-              <div class="accompaniment-add">
-                <label for="accompaniment-kind" class="visually-hidden">Part to add</label>
-                <select id="accompaniment-kind" #kind [disabled]="accompaniments().length >= maxAccompaniments">
-                  @for (option of accompanimentKinds; track option) { <option [value]="option">{{ kindLabel(option) }}</option> }
-                </select>
-                <button type="button" (click)="addAccompaniment($any(kind.value))"
-                  [disabled]="!canPlay() || accompaniments().length >= maxAccompaniments">Add part</button>
-              </div>
-            </div>
-            @if (accompanimentChoices(); as choices) {
-              <p class="hint">Genre heard: {{ choices.genre }}. Styles and sounds are listed closest to this song first.</p>
-            } @else {
-              <p class="hint">Played from the Harmonic chords and melody. Styles and sounds can be changed while it plays.</p>
-            }
-            @if (accompanimentError()) { <p class="error" role="alert">{{ accompanimentError() }}</p> }
-            @for (part of accompaniments(); track part.id) {
-              <div class="accompaniment-part" role="group" [attr.aria-label]="kindLabel(part.kind)">
-                <strong>{{ kindLabel(part.kind) }}</strong>
-                @if (isStyled(part.kind)) {
-                  <label>Style
-                    <select [value]="part.style" (change)="changeAccompaniment(part.id, { style: $any($event.target).value })">
-                      @for (style of offeredFor(part.kind).styles; track style; let first = $first) {
-                        <option [value]="style" [selected]="style === part.style">{{ style }}{{ first ? ' (closest)' : '' }}</option>
-                      }
-                    </select>
-                  </label>
-                }
-                <label>Sound
-                  <select (change)="changeAccompaniment(part.id, { sound: +$any($event.target).value })">
-                    @for (sound of offeredFor(part.kind).sounds; track sound; let first = $first) {
-                      <option [value]="sound" [selected]="sound === part.sound">{{ soundName(sound) }}{{ first ? ' (closest)' : '' }}</option>
-                    }
-                  </select>
-                </label>
-                <label class="accompaniment-volume">Volume {{ part.volume }}%
-                  <input type="range" min="0" max="100" step="1" [value]="part.volume"
-                    (input)="changeAccompaniment(part.id, { volume: +$any($event.target).value })">
-                </label>
-                <button type="button" class="console-switch" [class.lit]="part.muted" [attr.aria-pressed]="part.muted"
-                  (click)="changeAccompaniment(part.id, { muted: !part.muted })"><span class="switch-lamp"></span><span>MUTE</span></button>
-                <button type="button" class="secondary" (click)="removeAccompaniment(part.id)">Remove</button>
-                @if (part.loading) { <span class="hint" role="status">Loading sound…</span> }
-              </div>
-            }
-          </section>
-        }
       }
       @if (editingLyrics() && lyricLines(); as lines) {
         <app-lyrics-editor [lines]="lines" [duration]="duration()" [saving]="savingLyrics()" [error]="lyricsSaveError()"
@@ -938,26 +875,21 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   readonly savingLyrics = signal(false);
   readonly lyricsSaveError = signal('');
   readonly harmonyParts = signal<Record<string, HarmonyPart> | null>(null);
-  // Live accompaniment: the parts added, the analysis's choices for the song, and the style and sound library.
-  readonly accompanimentKinds = ACCOMPANIMENT_KINDS;
-  readonly maxAccompaniments = 4;
-  readonly accompaniments = signal<AccompanimentPart[]>([]);
+  // The analysis's sound choices for the song, and the sound library, for the Harmonic score part.
   readonly accompanimentChoices = signal<AccompanimentChoices | undefined>(undefined);
   readonly accompanimentLibrary = signal<StyleLibrary | null>(null);
-  readonly accompanimentError = signal('');
   private readonly voices = new Map<number, AccompanimentVoice>();
   // The Harmonic track played from its score (voice SCORE_VOICE), in place of the stem or with it.
   readonly scoreModes: { value: 'stem' | 'score' | 'both'; label: string }[] = [
     { value: 'stem', label: 'Stem' }, { value: 'score', label: 'Score' }, { value: 'both', label: 'Both' },
   ];
   readonly scoreMode = signal<'stem' | 'score' | 'both'>('stem');
-  readonly scorePart = signal<{ family: 'guitar' | 'keys'; sound: number; style: string; volume: number } | null>(null);
+  readonly scorePart = signal<{ family: 'guitar' | 'keys'; sound: number; volume: number } | null>(null);
   readonly scorePartLoading = signal(false);
   readonly scoreImportStatus = signal('');
   readonly scoreImportError = signal('');
   readonly scorePages = signal('');
   private harmonyDocument?: HarmonyDocument;
-  private nextAccompaniment = 1;
   // Key change in semitones, as in the app: −6 to +6.
   readonly maxTranspose = MAX_TRANSPOSE;
   readonly transpose = signal(0);
@@ -1021,7 +953,10 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
       this.loopSection(), this.tracks(), this.job()?.duration);
     // Keep the app's live-input mix; saving from the website must not erase it.
     const { live } = this.sceneEntry?.settings ?? {};
-    const accompaniment = this.accompaniments().map(({ kind, style, sound, volume, muted }) => ({ kind, style, sound, volume, muted }));
+    // The Harmonic score part, kept as the scene's one played part: its instrument and sound, and (as its style word)
+    // whether the track plays the stem, the score or both.
+    const played = this.scorePart();
+    const accompaniment = played ? [{ kind: `${played.family}-notes` as const, style: this.scoreMode(), sound: played.sound, volume: played.volume, muted: this.scoreMode() === 'stem' }] : [];
     return { ...settings, ...(live ? { live } : {}), transpose: this.transpose(), ...(accompaniment.length ? { accompaniment } : {}) };
   }
 
@@ -1235,23 +1170,18 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     return library && played ? offered(library, this.accompanimentChoices(), played.family).sounds : [];
   }
 
-  scoreStyles(): string[] {
-    const library = this.accompanimentLibrary(), played = this.scorePart();
-    return library && played ? offered(library, this.accompanimentChoices(), played.family).styles : [];
-  }
-
   setScoreMode(mode: 'stem' | 'score' | 'both'): void {
     this.scoreMode.set(mode);
     if (mode !== 'stem') void this.prepareScorePart();
     this.updateMixGains();
   }
 
-  changeScorePart(change: Partial<{ family: 'guitar' | 'keys'; sound: number; style: string; volume: number }>): void {
+  changeScorePart(change: Partial<{ family: 'guitar' | 'keys'; sound: number; volume: number }>): void {
     const played = this.scorePart(), library = this.accompanimentLibrary();
     if (!played || !library) return;
     const next = { ...played, ...change };
     // Another instrument starts on its closest sound, as written.
-    if (change.family && change.family !== played.family) Object.assign(next, { sound: offered(library, this.accompanimentChoices(), change.family).sounds[0], style: '' });
+    if (change.family && change.family !== played.family) Object.assign(next, { sound: offered(library, this.accompanimentChoices(), change.family).sounds[0] });
     this.scorePart.set(next);
     if (change.volume !== undefined && Object.keys(change).length === 1) this.applyAccompanimentLevels();
     else void this.prepareScorePart();
@@ -1260,7 +1190,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   // The score part's notes in the current key, handed to its voice; it starts as the closest sound, as written.
   private async prepareScorePart(): Promise<void> {
     const score = this.harmonyParts()?.['other'], grid = this.harmonyGrid();
-    if (!score || !grid || !this.context || !this.master) return;
+    if (!score || !grid) return;
     let library = this.accompanimentLibrary();
     if (!library) {
       try { library = await loadLibrary(); } catch (error) {
@@ -1271,18 +1201,19 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     }
     if (!this.scorePart()) {
       const family = this.closestFamily();
-      this.scorePart.set({ family, sound: offered(library, this.accompanimentChoices(), family).sounds[0], style: '', volume: 80 });
+      this.scorePart.set({ family, sound: offered(library, this.accompanimentChoices(), family).sounds[0], volume: 80 });
     }
     const played = this.scorePart()!;
+    // The choices show as soon as the score is here; the sound loads once there is audio to play it with.
+    if (!this.context || !this.master) return;
     if (!this.voices.has(SCORE_VOICE)) this.voices.set(SCORE_VOICE, new AccompanimentVoice(this.context, this.master));
     const voice = this.voices.get(SCORE_VOICE)!;
     this.scorePartLoading.set(true);
     try {
       const buffer = await loadSound(this.context, played.sound);
       if (this.scorePart() !== played) return;
-      const kind = `${played.family}-${played.style ? 'melody' : 'notes'}` as AccompanimentKind;
-      const pattern = played.style ? library.styles[played.style]?.[played.family] ?? [] : [];
-      voice.setNotes(accompanimentEvents(kind, score, grid, pattern, this.transpose()), buffer, library.samples,
+      // Every note of the score, its melody among them, as written and played.
+      voice.setNotes(accompanimentEvents(`${played.family}-notes`, score, grid, [], this.transpose()), buffer, library.samples,
         this.playing() ? this.playClock() : undefined);
       this.applyAccompanimentLevels();
     } catch (error) {
@@ -1341,73 +1272,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     }
   }
 
-  kindLabel(kind: AccompanimentKind): string {
-    return { 'guitar-rhythm': 'Electric rhythm', 'keys-rhythm': 'Keyboard rhythm', 'guitar-melody': 'Electric melody + rhythm',
-      'keys-melody': 'Keyboard melody + rhythm', 'guitar-notes': 'Electric, transcribed notes', 'keys-notes': 'Keyboard, transcribed notes' }[kind];
-  }
-
-  isStyled(kind: AccompanimentKind): boolean { return styled(kind); }
-
   soundName(sound: number): string { return this.accompanimentLibrary()?.sounds[String(sound)]?.name ?? `Sound ${sound}`; }
-
-  offeredFor(kind: AccompanimentKind): { styles: string[]; sounds: number[] } {
-    const library = this.accompanimentLibrary();
-    return library ? offered(library, this.accompanimentChoices(), familyOf(kind)) : { styles: [], sounds: [] };
-  }
-
-  // Adds a part with the song's closest style and sound, or with saved ones from the scene.
-  async addAccompaniment(kind: AccompanimentKind, saved?: Partial<AccompanimentPart>): Promise<void> {
-    if (!this.context || !this.master || this.accompaniments().length >= this.maxAccompaniments) return;
-    this.accompanimentError.set('');
-    try {
-      this.accompanimentLibrary.set(await loadLibrary());
-    } catch (error) {
-      this.accompanimentError.set(`Could not load the accompaniment styles: ${errorMessage(error)}`);
-      return;
-    }
-    const choices = this.offeredFor(kind);
-    const id = this.nextAccompaniment++;
-    const part: AccompanimentPart = {
-      id, kind, loading: true, volume: saved?.volume ?? 80, muted: saved?.muted ?? false,
-      style: saved?.style && this.accompanimentLibrary()!.styles[saved.style] ? saved.style : choices.styles[0],
-      sound: saved?.sound !== undefined && choices.sounds.includes(saved.sound) ? saved.sound : choices.sounds[0],
-    };
-    this.voices.set(id, new AccompanimentVoice(this.context, this.master));
-    this.accompaniments.update(parts => [...parts, part]);
-    await this.prepareAccompaniment(id);
-  }
-
-  changeAccompaniment(id: number, change: Partial<Pick<AccompanimentPart, 'style' | 'sound' | 'volume' | 'muted'>>): void {
-    this.accompaniments.update(parts => parts.map(part => part.id === id ? { ...part, ...change } : part));
-    if (change.style !== undefined || change.sound !== undefined) void this.prepareAccompaniment(id);
-    else this.applyAccompanimentLevels();
-  }
-
-  removeAccompaniment(id: number): void {
-    this.voices.get(id)?.dispose();
-    this.voices.delete(id);
-    this.accompaniments.update(parts => parts.filter(part => part.id !== id));
-  }
-
-  // Builds a part's notes in the current key and hands them to its voice, which carries on if playing.
-  private async prepareAccompaniment(id: number): Promise<void> {
-    const part = this.accompaniments().find(item => item.id === id), voice = this.voices.get(id);
-    const library = this.accompanimentLibrary(), score = this.harmonyParts()?.['other'], grid = this.harmonyGrid();
-    if (!part || !voice || !library || !score || !grid || !this.context) return;
-    this.accompaniments.update(parts => parts.map(item => item.id === id ? { ...item, loading: true } : item));
-    try {
-      const buffer = await loadSound(this.context, part.sound);
-      const current = this.accompaniments().find(item => item.id === id);
-      if (!current || current.sound !== part.sound || current.style !== part.style) return;
-      const events = accompanimentEvents(part.kind, score, grid, library.styles[part.style][familyOf(part.kind)], this.transpose());
-      voice.setNotes(events, buffer, library.samples, this.playing() ? this.playClock() : undefined);
-      this.applyAccompanimentLevels();
-    } catch (error) {
-      this.accompanimentError.set(`Could not load the sound: ${errorMessage(error)}`);
-    } finally {
-      this.accompaniments.update(parts => parts.map(item => item.id === id ? { ...item, loading: false } : item));
-    }
-  }
 
   private playClock(): PlayClock {
     const { start, end } = this.playbackBounds();
@@ -1417,10 +1282,6 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   // Parts follow their volume and mute; a soloed stem silences them, as it does the other stems.
   private applyAccompanimentLevels(): void {
     if (!this.context) return;
-    const soloing = this.tracks().some(track => track.solo);
-    for (const part of this.accompaniments()) {
-      this.voices.get(part.id)?.output.gain.setTargetAtTime(part.muted || soloing ? 0 : part.volume / 100, this.context.currentTime, 0.015);
-    }
     // The score part follows the Harmonic track's own mute and solo.
     const harmonic = this.tracks().find(track => track.name === 'other'), played = this.scorePart();
     const on = !!harmonic && !!played && this.scoreMode() !== 'stem' && !harmonic.muted && !this.suppressedBySolo(harmonic);
@@ -1432,7 +1293,6 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     if (!Number.isFinite(semitones) || semitones === this.transpose()) return;
     this.transpose.set(semitones);
     // Played parts move by their notes, at once; the stems follow when their audio is shifted.
-    for (const part of this.accompaniments()) void this.prepareAccompaniment(part.id);
     void this.prepareScorePart();
     await this.applyKey();
   }
@@ -1613,8 +1473,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
         this.harmonyParts.set(ensemble ? { ...stems, ...Object.fromEntries(ENSEMBLE_STEMS.map(name => [name, ensemble])) } : stems);
         void this.loadParts(generation);
         this.harmonyDocument = document as unknown as HarmonyDocument;
-        // Parts already added play the new score.
-        for (const part of this.accompaniments()) void this.prepareAccompaniment(part.id);
+        // The score part plays the new score.
         void this.prepareScorePart();
       }
     } catch (error) {
@@ -1677,7 +1536,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
         const { stems } = await response.json() as { stems: Record<string, HarmonyPart> };
         if (!this.destroyed && generation === this.generation) {
           this.harmonyParts.update(current => current && { ...current, [name]: stems[name] });
-          if (name === 'other') for (const part of this.accompaniments()) void this.prepareAccompaniment(part.id);
+          if (name === 'other') void this.prepareScorePart();
         }
       } catch (error) {
         this.loadedParts.delete(name);
@@ -1948,13 +1807,11 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     this.stopSources();
     for (const voice of this.voices.values()) voice.dispose();
     this.voices.clear();
-    this.accompaniments.set([]);
     // The next song's score part starts again from its own closest sound, playing the stem.
     this.scorePart.set(null);
     this.scoreMode.set('stem');
     this.harmonyDocument = undefined;
     this.accompanimentChoices.set(undefined);
-    this.accompanimentError.set('');
     if (this.context && this.context.state !== 'closed') void this.context.close();
     this.context = undefined;
     this.master = undefined;
@@ -2084,6 +1941,8 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
         this.master = master;
         master.gain.value = this.masterVolume() / 100;
         master.connect(context.destination);
+        // The score part, when its score came first, gets its sound now.
+        void this.prepareScorePart();
       }
     } catch (error) {
       this.error.set(`Audio playback is unavailable: ${errorMessage(error)}`);
@@ -2204,7 +2063,16 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
           }
         }
       }
-      for (const saved of this.sceneEntry?.settings?.accompaniment ?? []) void this.addAccompaniment(saved.kind, saved);
+      // A scene's saved score part: its instrument, sound and volume, and whether it plays (older scenes' parts of
+      // another kind start the score part on their instrument).
+      const savedPart = this.sceneEntry?.settings?.accompaniment?.[0];
+      if (savedPart) {
+        const family = savedPart.kind.startsWith('guitar') ? 'guitar' as const : 'keys' as const;
+        this.scorePart.set({ family, sound: savedPart.sound, volume: savedPart.volume });
+        this.scoreMode.set(savedPart.style === 'score' || savedPart.style === 'both' ? savedPart.style : savedPart.muted ? 'stem' : 'both');
+        void this.prepareScorePart();
+        this.updateMixGains();
+      }
       this.lastSettings = JSON.stringify(this.snapshotSettings());
       this.hydrated.set(true);
       void this.applyKey();
