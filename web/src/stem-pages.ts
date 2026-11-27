@@ -1,4 +1,5 @@
 import { Component, ElementRef, EventEmitter, Injector, Input, ViewChild, OnChanges, computed, OnDestroy, OnInit, Output, afterNextRender, effect, inject, signal, untracked } from '@angular/core';
+import { NgTemplateOutlet } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
@@ -364,7 +365,15 @@ async function pageCount(file: File): Promise<number> {
   const text = new TextDecoder('latin1').decode(await file.arrayBuffer());
   return Math.max(1, (text.match(/\/Type\s*\/Page(?![a-z])/g) ?? []).length);
 }
-interface ScorePart { sound: number; volume: number; muted: boolean }
+interface ScorePart { sound: number }
+
+// A score part's channel: a mixer like a stem's, muted to begin with.
+function scoreTrack(name: Family, label: string): StemTrack {
+  return {
+    name, label, ...defaultEffects(), muted: true, solo: false, bypassed: false, status: 'ready',
+    peaks: [], cleanedPeaks: [], duration: 0, hasCleaned: false, useCleaned: false,
+  };
+}
 
 // Names shown for the stems; the stored names stay as they are (other is shown as harmonic).
 const STEM_LABELS: Record<string, string> = { other: 'harmonic' };
@@ -381,7 +390,7 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
 @Component({
   selector: 'app-stem-mixer',
   standalone: true,
-  imports: [RouterLink, FormsModule, LyricsStrip, LyricsEditor, HarmonyStrip],
+  imports: [RouterLink, FormsModule, NgTemplateOutlet, LyricsStrip, LyricsEditor, HarmonyStrip],
   template: `
     <section class="card mixer-page">
       <div class="section-heading">
@@ -538,26 +547,20 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                   <app-harmony-strip [part]="parts[track.name]" [stem]="track.name" [grid]="harmonyGrid()!" [time]="position()"
                     [songKey]="heardKey()"></app-harmony-strip>
                   @if (track.name === 'other') {
-                    <!-- The score played on guitar and on keys, each with its own sound, volume and mute, into the Harmonic track. -->
+                    <!-- The score played on guitar and on keys: each a channel of its own, with its sound and its mixer. -->
                     <div class="score-parts" role="group" aria-label="The Harmonic score played">
-                      @for (family of scoreFamilies; track family.name) {
-                        @if (scoreParts()[family.name]; as played) {
-                          <div class="score-part" role="group" [attr.aria-label]="family.label">
-                            <strong>{{ family.label }}</strong>
-                            <select class="score-sound" [attr.aria-label]="family.label + ' sound'" (change)="changeScorePart(family.name, { sound: +$any($event.target).value })">
-                              @for (sound of scoreSounds(family.name); track sound; let first = $first) {
-                                <option [value]="sound" [selected]="sound === played.sound">{{ soundName(sound) }}{{ first ? ' (closest)' : '' }}</option>
+                      @for (part of scoreTracks(); track part.name) {
+                        <section class="mixing-console score-console" [attr.aria-label]="part.label + ' mixer'">
+                          <div class="score-part">
+                            <strong>{{ part.label }}</strong>
+                            <select class="score-sound" [attr.aria-label]="part.label + ' sound'" (change)="changeScoreSound(part.name, +$any($event.target).value)">
+                              @for (sound of scoreSounds(part.name); track sound; let first = $first) {
+                                <option [value]="sound" [selected]="sound === scoreSound(part.name)">{{ soundName(sound) }}{{ first ? ' (closest)' : '' }}</option>
                               }
                             </select>
-                            <label class="score-volume"><span>Volume</span>
-                              <input type="range" min="0" max="100" step="1" [value]="played.volume" (input)="changeScorePart(family.name, { volume: +$any($event.target).value })">
-                              <output>{{ played.volume }}%</output>
-                            </label>
-                            <button type="button" class="console-switch" [class.lit]="played.muted" [attr.aria-pressed]="played.muted"
-                              [attr.aria-label]="family.label + ' mute'" (click)="changeScorePart(family.name, { muted: !played.muted })">
-                              <span class="switch-lamp"></span><span>MUTE</span></button>
                           </div>
-                        }
+                          <ng-container *ngTemplateOutlet="mixerConsole; context: { $implicit: part }"></ng-container>
+                        </section>
                       }
                     </div>
                   }
@@ -649,6 +652,18 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                   <span>{{ formatTime(duration()) }}</span>
                 </div>
               </div>
+                <ng-container *ngTemplateOutlet="mixerConsole; context: { $implicit: track }"></ng-container>
+              </section>
+            </article>
+          }
+        </div>
+      }
+      @if (editingLyrics() && lyricLines(); as lines) {
+        <app-lyrics-editor [lines]="lines" [duration]="duration()" [saving]="savingLyrics()" [error]="lyricsSaveError()"
+          (saved)="saveLyrics($event)" (cancelled)="editingLyrics.set(false)"></app-lyrics-editor>
+      }
+      <!-- One channel's console: the stems' and the score parts' alike. -->
+      <ng-template #mixerConsole let-track>
                 <button type="button" class="console-heading" [id]="'mixer-toggle-' + track.name"
                   [attr.aria-label]="track.label + ' mixer controls'"
                   [attr.aria-expanded]="expandedStem() === track.name"
@@ -769,15 +784,7 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                   @else { All effects apply to this stem. Reset restores its faders and buttons only. }
                 </p>
                 </div>
-              </section>
-            </article>
-          }
-        </div>
-      }
-      @if (editingLyrics() && lyricLines(); as lines) {
-        <app-lyrics-editor [lines]="lines" [duration]="duration()" [saving]="savingLyrics()" [error]="lyricsSaveError()"
-          (saved)="saveLyrics($event)" (cancelled)="editingLyrics.set(false)"></app-lyrics-editor>
-      }
+      </ng-template>
       <!-- The score asked for by Chords & notes. -->
       <input #scoreFile type="file" class="visually-hidden" accept=".pdf,.png,.jpg,.jpeg,.musicxml,.xml,.mxl,application/pdf"
         (change)="uploadScore($event)" aria-label="Upload a score of this song" tabindex="-1">
@@ -869,9 +876,12 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   readonly accompanimentChoices = signal<AccompanimentChoices | undefined>(undefined);
   readonly accompanimentLibrary = signal<StyleLibrary | null>(null);
   private readonly voices = new Map<number, AccompanimentVoice>();
-  // The Harmonic score played on guitar and on keys (voices SCORE_VOICES), each muted until asked for.
+  // The Harmonic score played on guitar and on keys (voices SCORE_VOICES): each a channel of its own, with its sound
+  // and the same mixer as a stem (scoreTracks, scoreRuntimes), muted until asked for.
   readonly scoreFamilies: { name: Family; label: string }[] = [{ name: 'guitar', label: 'Guitar' }, { name: 'keys', label: 'Keys' }];
   readonly scoreParts = signal<Partial<Record<Family, ScorePart>>>({});
+  readonly scoreTracks = signal<StemTrack[]>([]);
+  private readonly scoreRuntimes = new Map<string, StemEffects>();
   readonly scoreImportStatus = signal('');
   readonly scoreImportError = signal('');
   private harmonyDocument?: HarmonyDocument;
@@ -944,8 +954,8 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     // whether the track plays the stem, the score or both.
     const parts = this.scoreParts();
     const accompaniment = this.scoreFamilies.flatMap(({ name }) => {
-      const played = parts[name];
-      return played ? [{ kind: name === 'guitar' ? 'guitar-notes' as const : 'keys-notes' as const, style: 'score', sound: played.sound, volume: played.volume, muted: played.muted }] : [];
+      const played = parts[name], channel = this.channel(name);
+      return played && channel ? [{ kind: name === 'guitar' ? 'guitar-notes' as const : 'keys-notes' as const, style: 'score', sound: played.sound, volume: channel.volume, muted: channel.muted }] : [];
     });
     return { ...settings, ...(live ? { live } : {}), transpose: this.transpose(), ...(accompaniment.length ? { accompaniment } : {}) };
   }
@@ -1151,17 +1161,20 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
 
   isHarmonic(name: string): boolean { return HARMONY_STEMS.includes(name); }
 
-  scoreSounds(family: Family): number[] {
+  scoreSounds(family: string): number[] {
+    if (family !== 'guitar' && family !== 'keys') return [];
     const library = this.accompanimentLibrary();
     return library ? offered(library, this.accompanimentChoices(), family).sounds : [];
   }
 
-  changeScorePart(family: Family, change: Partial<ScorePart>): void {
-    const played = this.scoreParts()[family];
-    if (!played) return;
-    this.scoreParts.update(parts => ({ ...parts, [family]: { ...played, ...change } }));
-    if (change.sound !== undefined) void this.prepareScorePart(family);
-    else this.applyAccompanimentLevels();
+  scoreSound(family: string): number | undefined {
+    return family === 'guitar' || family === 'keys' ? this.scoreParts()[family]?.sound : undefined;
+  }
+
+  changeScoreSound(family: string, sound: number): void {
+    if (family !== 'guitar' && family !== 'keys') return;
+    this.scoreParts.update(parts => ({ ...parts, [family]: { sound } }));
+    void this.prepareScorePart(family);
   }
 
   // The score's notes for both parts in the current key, each in its sound (the closest to begin with) and as loud
@@ -1177,19 +1190,27 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
       }
       this.accompanimentLibrary.set(library);
     }
-    for (const { name } of this.scoreFamilies) {
+    for (const { name, label } of this.scoreFamilies) {
       if (!this.scoreParts()[name]) {
         const sound = offered(library, this.accompanimentChoices(), name).sounds[0];
-        this.scoreParts.update(parts => ({ ...parts, [name]: { sound, volume: 100, muted: true } }));
+        this.scoreParts.update(parts => ({ ...parts, [name]: { sound } }));
       }
+      if (!this.channel(name)) this.scoreTracks.update(tracks => [...tracks, scoreTrack(name, label)]);
     }
-    // The choices show as soon as the score is here; the sounds load once the Harmonic track can play them.
+    // The choices show as soon as the score is here; the sounds load once the Harmonic stem is here to match.
     const harmonic = this.runtimes.get('other');
-    if (!this.context || !harmonic) return;
+    if (!this.context || !this.master || !harmonic) return;
+    for (const { name } of this.scoreFamilies) {
+      if (this.scoreRuntimes.has(name)) continue;
+      const effects = createStemEffects(this.context, this.master);
+      effects.transport.gain.value = this.playing() ? 1 : 0;
+      this.scoreRuntimes.set(name, effects);
+      this.applyTrackSettings(this.channel(name)!, effects);
+    }
     const families = only ? [only] : this.scoreFamilies.map(family => family.name);
     await Promise.all(families.map(async family => {
       const played = this.scoreParts()[family]!;
-      if (!this.voices.has(SCORE_VOICES[family])) this.voices.set(SCORE_VOICES[family], new AccompanimentVoice(this.context!, harmonic.input));
+      if (!this.voices.has(SCORE_VOICES[family])) this.voices.set(SCORE_VOICES[family], new AccompanimentVoice(this.context!, this.scoreRuntimes.get(family)!.input));
       const voice = this.voices.get(SCORE_VOICES[family])!;
       try {
         const buffer = await loadSound(this.context!, played.sound);
@@ -1317,11 +1338,9 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   // Parts follow their volume and mute; a soloed stem silences them, as it does the other stems.
   private applyAccompanimentLevels(): void {
     if (!this.context) return;
-    // The score parts play through the Harmonic track, so its volume, effects, mute and solo apply to them there.
+    // Each score part at the level where it is as loud as the Harmonic stem; its channel's fader, mute and solo follow.
     for (const { name } of this.scoreFamilies) {
-      const played = this.scoreParts()[name];
-      this.voices.get(SCORE_VOICES[name])?.output.gain.setTargetAtTime(
-        played && !played.muted ? played.volume / 100 * (this.scoreGains[name] ?? 1) : 0, this.context.currentTime, 0.015);
+      this.voices.get(SCORE_VOICES[name])?.output.gain.setTargetAtTime(this.scoreGains[name] ?? 1, this.context.currentTime, 0.015);
     }
   }
 
@@ -1820,6 +1839,8 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     this.voices.clear();
     // The next song's score part starts again from its own closest sound, playing the stem.
     this.scoreParts.set({});
+    this.scoreTracks.set([]);
+    this.scoreRuntimes.clear();
     this.harmonyDocument = undefined;
     this.accompanimentChoices.set(undefined);
     if (this.context && this.context.state !== 'closed') void this.context.close();
@@ -2081,12 +2102,15 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
       // another kind start the score part on their instrument).
       const savedParts = this.sceneEntry?.settings?.accompaniment ?? [];
       if (savedParts.length) {
-        const parts: Partial<Record<Family, ScorePart>> = {};
+        const parts: Partial<Record<Family, ScorePart>> = {}, channels: StemTrack[] = [];
         for (const saved of savedParts) {
           const family: Family = saved.kind.startsWith('guitar') ? 'guitar' : 'keys';
-          parts[family] ??= { sound: saved.sound, volume: saved.volume, muted: saved.muted };
+          if (parts[family]) continue;
+          parts[family] = { sound: saved.sound };
+          channels.push({ ...scoreTrack(family, family === 'guitar' ? 'Guitar' : 'Keys'), volume: saved.volume, muted: saved.muted });
         }
         this.scoreParts.set(parts);
+        this.scoreTracks.set(channels);
         void this.prepareScorePart();
       }
       this.lastSettings = JSON.stringify(this.snapshotSettings());
@@ -2097,10 +2121,15 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   }
 
   private updateTrack(name: string, patch: Partial<StemTrack>): void {
-    this.tracks.update(tracks => tracks.map(track =>
-      track.name === name ? { ...track, ...patch } : track,
-    ));
+    const update = (tracks: StemTrack[]) => tracks.map(track => track.name === name ? { ...track, ...patch } : track);
+    if (this.scoreRuntimes.has(name) || this.scoreTracks().some(track => track.name === name)) this.scoreTracks.update(update);
+    else this.tracks.update(update);
   }
+
+  // Every channel: the stems, and the score parts after them.
+  private channels(): StemTrack[] { return [...this.tracks(), ...this.scoreTracks()]; }
+  private channel(name: string): StemTrack | undefined { return this.channels().find(track => track.name === name); }
+  private effectsOf(name: string): StemEffects | undefined { return this.runtimes.get(name) ?? this.scoreRuntimes.get(name); }
 
   controlDisabled(track: StemTrack, control: FaderControl): boolean {
     return track.status !== 'ready' || (track.bypassed && control.key !== 'volume');
@@ -2126,56 +2155,57 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     if (!(target instanceof HTMLInputElement)) return;
     const value = Number(target.value);
     const definition = this.controls.find(item => item.key === control);
-    const current = this.tracks().find(item => item.name === name);
+    const current = this.channel(name);
     if (!definition || !current || this.controlDisabled(current, definition)) return;
     if (!Number.isFinite(value) || value < definition.min || value > definition.max) {
       this.error.set(`Choose a ${definition.label} value between ${definition.min} and ${definition.max}.`);
       return;
     }
     this.updateTrack(name, { [control]: value });
-    const track = this.tracks().find(item => item.name === name);
-    const runtime = this.runtimes.get(name);
+    const track = this.channel(name);
+    const runtime = this.effectsOf(name);
     if (track && runtime && this.context) this.applyTrackSettings(track, runtime);
   }
 
   toggleMute(name: string): void {
-    const track = this.tracks().find(item => item.name === name);
+    const track = this.channel(name);
     if (!track || track.status !== 'ready') return;
     this.updateTrack(name, { muted: !track.muted });
     this.updateMixGains();
   }
 
   suppressedBySolo(track: StemTrack): boolean {
-    return !track.solo && this.tracks().some(item => item.solo);
+    return !track.solo && this.channels().some(item => item.solo);
   }
 
-  allMuted(): boolean { return this.tracks().every(track => track.muted); }
+  allMuted(): boolean { return this.channels().every(track => track.muted); }
 
   toggleMuteAll(): void {
     if (!this.canPlay()) return;
     const muted = !this.allMuted();
     this.tracks.update(tracks => tracks.map(track => ({ ...track, muted })));
+    this.scoreTracks.update(tracks => tracks.map(track => ({ ...track, muted })));
     this.updateMixGains();
   }
 
   toggleSolo(name: string): void {
-    const track = this.tracks().find(item => item.name === name);
+    const track = this.channel(name);
     if (!track || track.status !== 'ready') return;
     this.updateTrack(name, { solo: !track.solo });
     this.updateMixGains();
   }
 
   toggleBypass(name: string): void {
-    const track = this.tracks().find(item => item.name === name);
-    const runtime = this.runtimes.get(name);
+    const track = this.channel(name);
+    const runtime = this.effectsOf(name);
     if (!track || !runtime || !this.context) return;
     this.updateTrack(name, { bypassed: !track.bypassed });
     this.applyTrackSettings({ ...track, bypassed: !track.bypassed }, runtime);
   }
 
   resetTrack(name: string): void {
-    const track = this.tracks().find(item => item.name === name);
-    const runtime = this.runtimes.get(name);
+    const track = this.channel(name);
+    const runtime = this.effectsOf(name);
     if (!track || !runtime || !this.context) return;
     const restored = { ...track, ...defaultEffects(), muted: false, solo: false, bypassed: false };
     this.updateTrack(name, restored);
@@ -2185,24 +2215,23 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
 
   private updateMixGains(): void {
     if (!this.context) return;
-    for (const track of this.tracks()) {
-      const runtime = this.runtimes.get(track.name);
+    // The score parts are channels of their own, so the Harmonic track's mute silences only the recording.
+    for (const track of this.channels()) {
+      const runtime = this.effectsOf(track.name);
       if (!runtime) continue;
       runtime.gain.gain.setTargetAtTime(track.muted || this.suppressedBySolo(track) ? 0 : track.volume / 100, this.context.currentTime, 0.015);
-      // The Harmonic track playing its score: the recording silent, the track's controls on the score part.
-      runtime.recording.gain.setTargetAtTime(1, this.context.currentTime, 0.015);
     }
     this.applyAccompanimentLevels();
   }
 
   private setTransport(active: boolean): void {
     if (!this.context) return;
-    for (const runtime of this.runtimes.values()) {
+    for (const runtime of [...this.runtimes.values(), ...this.scoreRuntimes.values()]) {
       runtime.transport.gain.setTargetAtTime(active ? 1 : 0, this.context.currentTime, 0.003);
     }
   }
 
-  private applyTrackSettings(track: StemTrack, runtime: StemRuntime): void {
+  private applyTrackSettings(track: StemTrack, runtime: StemEffects): void {
     if (!this.context) return;
     applyStemEffects(this.context, runtime, track, track.bypassed);
     this.updateMixGains();

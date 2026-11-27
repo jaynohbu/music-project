@@ -557,4 +557,5 @@ footer { text-align: center; color: #64748b; padding: 20px var(--page-gutter); f
 .score-part .score-volume input, :root[data-theme]:not([data-theme="simple"]) .score-part .score-volume input {
   width: 120px; padding: 0; border: 0; background: transparent; accent-color: var(--accent, #3459c9); }
 .score-volume output { min-width: 3.2em; color: var(--ink, #192536); font-variant-numeric: tabular-nums; font-weight: 600; }
-.score-part .console-switch { margin-left: auto; }
+.score-console { margin-top: 0; }
+.score-console .score-part { border: 0; border-radius: 8px 8px 0 0; background: transparent; }
