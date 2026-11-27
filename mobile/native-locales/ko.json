@@ -1,0 +1,9 @@
+{
+  "ios": {
+    "CFBundleDisplayName": "소리터",
+    "NSMicrophoneUsageDescription": "라이브로 함께 연주할 때 악기 소리를 녹음해서, 밴드가 내 템포를 따라오게 해요."
+  },
+  "android": {
+    "app_name": "소리터"
+  }
+}

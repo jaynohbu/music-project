@@ -7,7 +7,7 @@ export type MainRoute = '/' | '/scenes' | '/settings';
 export function AppHeader({ pathname, navigate }: { pathname: string; navigate: (path: MainRoute) => void }) {
   const styles = useStyles(makeStyles), theme = useTheme(), t = useT();
   return <SafeAreaView edges={['top', 'left', 'right']} style={styles.header}>
-    <Text style={styles.brand}>Sorituh</Text>
+    <Text style={styles.brand}>{t('app.name')}</Text>
     <View style={styles.row}>
       {([
         { label: t('nav.music'), path: '/' }, { label: t('nav.scenes'), path: '/scenes' }, { label: t('nav.settings'), path: '/settings' },

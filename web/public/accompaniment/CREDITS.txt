@@ -1,4 +1,4 @@
-Sorituh: sound credits
+SORITUH: sound credits
 
 The guitar and keyboard sounds that play a song's score are short samples, one note every three semitones, resampled,
 retuned and trimmed from these instruments. Each one's licence is that of its source.

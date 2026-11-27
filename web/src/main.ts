@@ -31,9 +31,9 @@ const admin: CanActivateFn = () =>
     }
     @if (!uploadScreen()) {
     <header>
-      <a class="brand" routerLink="/list" aria-label="Sorituh home">
+      <a class="brand" routerLink="/list" aria-label="SORITUH home">
         <img src="/sorituh-mark.svg" width="40" height="40" alt="">
-        <span>Sorituh<small>The foundation of sound</small></span>
+        <span>SORITUH<small>The foundation of sound</small></span>
       </a>
       @if (auth.signedIn()) {
         <nav aria-label="Main navigation">
@@ -55,7 +55,7 @@ const admin: CanActivateFn = () =>
       @if (auth.signedIn() && auth.notice()) { <p class="error" role="alert">{{ auth.notice() }}</p> }
       <router-outlet />
     </main>
-    @if (!uploadScreen()) { <footer>Sorituh · The foundation of sound. Your music, privately stored. · <a href="/accompaniment/CREDITS.txt" target="_blank" rel="noopener">Sound credits</a></footer> }
+    @if (!uploadScreen()) { <footer>SORITUH · The foundation of sound. Your music, privately stored. · <a href="/accompaniment/CREDITS.txt" target="_blank" rel="noopener">Sound credits</a></footer> }
     <app-confirmation />
   `,
 })

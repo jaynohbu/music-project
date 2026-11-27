@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Sorituh",
+    "name": "SORITUH",
     "slug": "sorituh",
     "owner": "nohjiyoung",
     "version": "1.0.0",
@@ -12,7 +12,8 @@
       "bundleIdentifier": "com.tunesbasis.sorituh",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "UIViewControllerBasedStatusBarAppearance": true
+        "UIViewControllerBasedStatusBarAppearance": true,
+        "CFBundleAllowMixedLocalizations": true
       }
     },
     "android": {
@@ -34,7 +35,7 @@
         "react-native-audio-api",
         {
           "iosBackgroundMode": true,
-          "iosMicrophonePermission": "Sorituh records your instrument when you play along live, so the band can follow your tempo.",
+          "iosMicrophonePermission": "SORITUH records your instrument when you play along live, so the band can follow your tempo.",
           "androidForegroundService": true,
           "androidFSTypes": [
             "mediaPlayback"
@@ -47,6 +48,9 @@
         "projectId": "621ec342-3002-4e90-994e-d789aa50e02e"
       }
     },
-    "scheme": "sorituh"
+    "scheme": "sorituh",
+    "locales": {
+      "ko": "./native-locales/ko.json"
+    }
   }
 }

@@ -33,7 +33,7 @@ export default function SignIn() {
   return (
     <SafeAreaView style={styles.page}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.form}>
-        <Text style={styles.brand}>Sorituh</Text>
+        <Text style={styles.brand}>{t('app.name')}</Text>
         {state.name === 'offline' && <>
           <Text style={styles.text}>{state.message}</Text>
           <Button label={t('common.tryAgain')} onPress={retry} />

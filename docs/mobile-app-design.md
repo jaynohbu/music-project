@@ -518,6 +518,8 @@ The staff uses `react-native-svg`. It draws in four-bar chunks and mounts only t
 
 ### Languages
 
+**App name (2026-11-27):** 소리터 in Korean, SORITUH (capitals) in every other language and on the website. In the app it is the `app.name` key (header, sign-in) and in the texts that name it; the home-screen name and microphone prompt are localised through `locales` in app.json (`mobile/native-locales/ko.json`, with `CFBundleAllowMixedLocalizations`). Identifiers (slug, bundle ID, scheme, storage keys) stay lower-case `sorituh`.
+
 Settings → Language offers 12 languages: English, 한국어, 日本語, 简体中文, Filipino, Tiếng Việt, Bahasa Indonesia, Français, Deutsch, Español, Português and Italiano. "Phone language" is the default. It follows the iPhone's language (via `expo-localization`) and falls back to English. The choice is saved in `language.json` in the app's documents.
 
 - `src/locales/en.ts` is the source. Each key's text may hold `{name}` placeholders. Every other file is typed as `Strings`, so `npx tsc --noEmit` fails if a language is missing a key.
