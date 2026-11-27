@@ -113,7 +113,8 @@ function accompanimentParts(value, path) {
     if (!ACCOMPANIMENT_KINDS.includes(part.kind)) fail(`${at}.kind is not a known part.`);
     if (typeof part.style !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(part.style)) fail(`${at}.style must be a style name.`);
     if (!Number.isInteger(part.sound)) fail(`${at}.sound must be a sound number.`);
-    number(part.sound, `${at}.sound`, 0, 127);
+    // General MIDI programs, and from 200 the sounds made from sampled instruments (tools/accompaniment/sample_sounds.py).
+    number(part.sound, `${at}.sound`, 0, 255);
     number(part.volume, `${at}.volume`, 0, 100);
     if (typeof part.muted !== 'boolean') fail(`${at}.muted must be true or false.`);
     return { kind: part.kind, style: part.style, sound: part.sound, volume: part.volume, muted: part.muted };

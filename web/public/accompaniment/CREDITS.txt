@@ -1,0 +1,33 @@
+Sorituh: sound credits
+
+The guitar and keyboard sounds that play a song's score are short samples, one note every three semitones, resampled,
+retuned and trimmed from these instruments. Each one's licence is that of its source.
+
+Sounds 200 and up (sampled instruments)
+
+  Salamander Grand Piano V3 (Yamaha C5), by Alexander Holm
+    https://github.com/sfzinstruments/SalamanderGrandPiano
+    Licence: Creative Commons Attribution 3.0 (CC BY 3.0), https://creativecommons.org/licenses/by/3.0/
+
+  CP80, Wurlitzer EP200 and Pianet T electric pianos, by Greg Sullivan
+    https://github.com/sfzinstruments/GregSullivan.E-Pianos
+    Licence: Creative Commons Attribution 3.0 (CC BY 3.0), https://creativecommons.org/licenses/by/3.0/
+
+  Steinway B grand, Yamaha upright piano, French harpsichord and FM piano (TX81Z),
+  from the Versilian Community Sample Library (VCSL), by Versilian Studios
+    https://github.com/sgossner/VCSL
+    Licence: CC0 1.0 (public domain dedication)
+
+  Shiny guitar (electric and acoustic), Emily guitar, and the Black and Green hollow-body guitars, by Karoryfer Samples
+    https://github.com/sfzinstruments/karoryfer.shinyguitar
+    https://github.com/sfzinstruments/karoryfer.emilyguitar
+    https://github.com/sfzinstruments/karoryfer.black-and-green-guitars
+    Licence: CC0 1.0 (public domain dedication)
+
+  Spanish Classical Guitar, by FreePats
+    https://github.com/freepats/spanish-classical-guitar
+    Licence: CC0 1.0 (public domain dedication)
+
+Sounds 0 to 127 (General MIDI)
+
+  Rendered from MuseScore_General, by S. Christian Collins and MuseScore, MIT licence.

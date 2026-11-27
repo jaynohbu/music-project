@@ -55,7 +55,7 @@ const admin: CanActivateFn = () =>
       @if (auth.signedIn() && auth.notice()) { <p class="error" role="alert">{{ auth.notice() }}</p> }
       <router-outlet />
     </main>
-    @if (!uploadScreen()) { <footer>Sorituh · The foundation of sound. Your music, privately stored.</footer> }
+    @if (!uploadScreen()) { <footer>Sorituh · The foundation of sound. Your music, privately stored. · <a href="/accompaniment/CREDITS.txt" target="_blank" rel="noopener">Sound credits</a></footer> }
     <app-confirmation />
   `,
 })
