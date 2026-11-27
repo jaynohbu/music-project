@@ -11,7 +11,7 @@
 import { ChangeDetectionStrategy, Component, ElementRef, OnDestroy, OnInit, inject, signal, viewChild } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { StemsService, errorMessage, type HarmonyGrid, type Job } from './services';
-import { type Score, parseMusicXml, scoreExcerpt, unzipMusicXml } from './musicxml';
+import { type Score, parseMusicXml, scoreExcerpt, unrollRepeats, unzipMusicXml } from './musicxml';
 import { type AlignStem, type Alignment, alignScore, restoredScore, scoreMask } from './score-align';
 import { harmonyMidi } from './score-export';
 import { renderNotes } from './accompaniment-player';
@@ -28,8 +28,6 @@ const ZOOMS = [40, 80, 160, 320, 640];
 const COLORS = heatColors();
 // The other stems the score is compared with, besides the Harmonic stem itself.
 const COMPARED: AlignStem[] = ['vocals', 'bass', 'drums'];
-// A long score is aligned up to MOST_MEASURES measures at a time (the alignment's table grows with both lengths).
-const MOST_MEASURES = 40, DEFAULT_MEASURES = 16;
 // separated: the Harmonic stem split by the score, its two layers played together, each muted on its own.
 type Listen = 'all' | 'meaningful' | 'rest' | 'restored' | 'both' | 'separated';
 
@@ -118,8 +116,9 @@ function blockPeaks(signal: Float32Array, block: number) {
               to
               <input type="number" class="spectrum-measure-input" min="1" [max]="whole.measures.length" [value]="toMeasure()"
                 (change)="setRange(fromMeasure(), +$any($event.target).value)" [disabled]="aligning()">
-              of {{ whole.measures.length }}
+              of {{ whole.measures.length }} as played
             </label>
+            @if (repeatText()) { <span class="hint">{{ repeatText() }}</span> }
           </div>
         }
         @if (alignment(); as found) {
@@ -233,6 +232,7 @@ export class SpectrumPage implements OnInit, OnDestroy {
   private layerGains?: { score: GainNode; rest: GainNode };
   readonly pages = signal('');
   readonly wholeScore = signal<Score | null>(null);
+  readonly repeatText = signal('');
   readonly fromMeasure = signal(1);
   readonly toMeasure = signal(1);
   private restored?: AudioBuffer;
@@ -507,13 +507,16 @@ export class SpectrumPage implements OnInit, OnDestroy {
     this.scoreName.set(file.name);
     try {
       this.scoreStatus.set(/\.(pdf|png|jpe?g)$/i.test(file.name) ? 'Reading the score (this can take a minute)…' : 'Reading the score…');
-      const whole = parseMusicXml(await this.scoreText(file));
-      if (!whole.notes.length) throw new Error('No notes were found in the score.');
+      // The score as played: its repeats taken, so it follows the song from start to end.
+      const printed = parseMusicXml(await this.scoreText(file));
+      if (!printed.notes.length) throw new Error('No notes were found in the score.');
+      const whole = unrollRepeats(printed);
+      this.repeatText.set(whole.measures.length > printed.measures.length
+        ? `Repeats taken: ${printed.measures.length} printed measures are played as ${whole.measures.length}.` : '');
       this.wholeScore.set(whole);
       this.alignment.set(null);
-      // A long score is aligned a part at a time: its first DEFAULT_MEASURES measures to begin with.
       this.fromMeasure.set(1);
-      this.toMeasure.set(whole.measures.length <= MOST_MEASURES ? whole.measures.length : DEFAULT_MEASURES);
+      this.toMeasure.set(whole.measures.length);
       await this.alignRange();
     } catch (error) {
       this.scoreError.set(`Could not use the score: ${errorMessage(error)}`);
@@ -711,7 +714,7 @@ export class SpectrumPage implements OnInit, OnDestroy {
   setRange(from: number, to: number): void {
     const count = this.wholeScore()?.measures.length ?? 1;
     const first = Math.max(1, Math.min(count, Math.round(from) || 1));
-    const last = Math.max(first, Math.min(count, Math.round(to) || first, first + MOST_MEASURES - 1));
+    const last = Math.max(first, Math.min(count, Math.round(to) || first));
     this.fromMeasure.set(first);
     this.toMeasure.set(last);
     // Past the first measures the score is no longer the song's beginning.

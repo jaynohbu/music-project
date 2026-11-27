@@ -242,3 +242,36 @@ test('restored from the bass and other stems together: the bass line comes back 
   assert.equal(result.notes.length, roots.length + chordTones.length);
   assert.ok(result.missing.filter(m => m.stems.includes('vocals')).length >= 12);
 });
+
+test('repeats taken: first and second endings, an ending read in pieces, a second repeat, a stray ending mark', () => {
+  // Printed: 1 |: 2 3 [1. 4 5 :|] [2. 6] 7 [1. 8] |: 9 :| 10 — the ending over 4–5 read as start, stop, start, stop;
+  // the ending at 8 has no repeat to belong to and no stop.
+  const measures = Array.from({ length: 10 }, (_, i) => ({ number: String(i + 1), start: i * 4, length: 4, beats: 4, beatType: 4 }));
+  const notes = measures.map((m, i) => ({ pitch: 60 + i, start: m.start, length: 4, measure: i, part: 0, staff: 1 }));
+  const marks = {
+    1: { forward: true }, 3: { endingStart: [1], endingStop: [1] }, 4: { endingStart: [1], endingStop: [1], backward: 2 },
+    5: { endingStart: [2], endingStop: [2] }, 7: { endingStart: [1] }, 8: { forward: true, backward: 2 },
+  };
+  const played = xml.unrollRepeats({ title: '', parts: [], measures, notes, chords: [], marks });
+  assert.deepEqual(played.measures.map(m => m.number), ['1', '2', '3', '4', '5', '2', '3', '6', '7', '8', '9', '9', '10']);
+  assert.deepEqual(played.measures.map(m => m.start), played.measures.map((_, i) => i * 4));
+  assert.deepEqual(played.notes.map(n => n.pitch), [60, 61, 62, 63, 64, 61, 62, 65, 66, 67, 68, 68, 69]);
+  assert.deepEqual(played.notes.map(n => n.measure), played.notes.map((_, i) => i));
+  // Without repeats the score is as printed.
+  const plain = { title: '', parts: [], measures, notes, chords: [] };
+  assert.equal(xml.unrollRepeats(plain), plain);
+});
+
+test('MusicXML: repeat barlines and endings are read from every part, and taken', () => {
+  const bar = (n, barlines = '') => `<measure number="${n}">${barlines}${note('C', 4, 4)}</measure>`;
+  const piano = '<part id="P1"><measure number="1"><attributes><divisions>1</divisions></attributes>' + note('C', 4, 4) + '</measure>'
+    + bar(2, '<barline location="left"><repeat direction="forward"/></barline>')
+    + bar(3, '<barline location="left"><ending number="1" type="start"/></barline><barline location="right"><ending number="1" type="stop"/><repeat direction="backward"/></barline>')
+    + bar(4) + '</part>';
+  // The second ending is marked only on the voice part.
+  const voice = '<part id="P2"><measure number="1"><attributes><divisions>1</divisions></attributes>' + note('E', 4, 4) + '</measure>'
+    + bar(2) + bar(3) + bar(4, '<barline location="left"><ending number="2" type="start"/></barline><barline location="right"><ending number="2" type="stop"/></barline>') + '</part>';
+  const score = xml.parseMusicXml(scoreXml(piano + voice, '<score-part id="P1"><part-name>A</part-name></score-part><score-part id="P2"><part-name>B</part-name></score-part>'));
+  assert.deepEqual(score.marks, { 1: { forward: true }, 2: { endingStart: [1], endingStop: [1], backward: 2 }, 3: { endingStart: [2], endingStop: [2] } });
+  assert.deepEqual(xml.unrollRepeats(score).measures.map(m => m.number), ['1', '2', '3', '2', '4']);
+});

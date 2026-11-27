@@ -6,6 +6,9 @@
 
 export interface ScoreNote { pitch: number; start: number; length: number; measure: number; part: number; staff: number }
 export interface ScoreMeasure { number: string; start: number; length: number; beats: number; beatType: number }
+// Repeat signs on a measure, from every part: a repeat starts here (forward) or goes back from its end (backward, the
+// times it is played in all), and the endings (first and second time bars) begun or ended on it, by number.
+export interface MeasureMarks { forward?: boolean; backward?: number; endingStart?: number[]; endingStop?: number[] }
 export interface ScoreChord { start: number; pitchClasses: number[] }
 export interface ScorePart { id: string; name: string }
 export interface Score {
@@ -14,6 +17,8 @@ export interface Score {
   measures: ScoreMeasure[];
   notes: ScoreNote[];
   chords: ScoreChord[];
+  // Repeat signs by measure index (absent where there are none).
+  marks?: Record<number, MeasureMarks>;
   // Quarter notes per minute, when the score marks one.
   tempo?: number;
 }
@@ -83,6 +88,7 @@ export function parseMusicXml(source: string): Score {
   const notes: ScoreNote[] = [];
   const chords: ScoreChord[] = [];
   let tempo: number | undefined;
+  const marks: Record<number, MeasureMarks> = {};
   children(score, 'part').forEach((partElement, part) => {
     const id = partElement.attributes['id'] ?? `P${part + 1}`;
     parts.push({ id, name: names.get(id) || `Part ${part + 1}` });
@@ -92,7 +98,18 @@ export function parseMusicXml(source: string): Score {
     children(partElement, 'measure').forEach((measure, index) => {
       let at = 0, furthest = 0, lastStart = 0;
       for (const element of measure.children) {
-        if (element.name === 'attributes') {
+        if (element.name === 'barline') {
+          const mark = marks[index] ??= {};
+          const repeat = child(element, 'repeat');
+          if (repeat?.attributes['direction'] === 'forward') mark.forward = true;
+          if (repeat?.attributes['direction'] === 'backward') mark.backward = Math.max(mark.backward ?? 0, Number(repeat.attributes['times']) || 2);
+          const ending = child(element, 'ending');
+          if (ending) {
+            const numbers = (ending.attributes['number'] ?? '').split(/[ ,]+/).map(Number).filter(number => number > 0);
+            const side = ending.attributes['type'] === 'start' ? 'endingStart' : 'endingStop';
+            mark[side] = [...new Set([...(mark[side] ?? []), ...numbers])];
+          }
+        } else if (element.name === 'attributes') {
           divisions = numberOf(element, 'divisions', divisions);
           const time = child(element, 'time');
           if (time) { beats = numberOf(time, 'beats', beats); beatType = numberOf(time, 'beat-type', beatType); }
@@ -154,7 +171,7 @@ export function parseMusicXml(source: string): Score {
   if (!measures.length) throw new Error('The score has no measures.');
   notes.sort((a, b) => a.start - b.start || a.pitch - b.pitch);
   chords.sort((a, b) => a.start - b.start);
-  return { title, parts, measures, notes, chords, tempo };
+  return { title, parts, measures, notes, chords, tempo, ...(Object.keys(marks).length ? { marks } : {}) };
 }
 
 // The score inside a compressed MusicXML (.mxl) file: a zip whose META-INF/container.xml names the score.
@@ -204,4 +221,75 @@ export function scoreExcerpt(score: Score, from: number, to: number): Score {
       .map(note => ({ ...note, start: note.start - start, length: Math.min(note.length, end - note.start), measure: note.measure - (first - 1) })),
     chords: score.chords.filter(chord => inside(chord.start)).map(chord => ({ ...chord, start: chord.start - start })),
   };
+}
+
+// The score as played: repeats taken (a backward repeat goes back to the forward one before it, or to the start, as
+// many times as it says), and on each time through only the endings numbered for it. An ending runs from its start
+// to its stop (a stop missing or repeated, as score reading leaves them, is read sensibly: an ending lasts until the
+// next ending, a backward repeat, a stop or a forward repeat). Signs such as D.S. and Coda are not read. Measures are numbered as
+// printed; a measure played again keeps its number.
+export function unrollRepeats(score: Score): Score {
+  const marks = score.marks;
+  const count = score.measures.length;
+  if (!marks || !Object.values(marks).some(mark => mark.backward)) return score;
+  // Each ending's measures.
+  const endings: { numbers: number[]; from: number; to: number }[] = [];
+  for (let index = 0; index < count; index++) {
+    const numbers = marks[index]?.endingStart;
+    if (!numbers?.length) continue;
+    const last = endings[endings.length - 1];
+    // A start of the same numbers right after (or inside) the last ending continues it.
+    if (last && last.numbers.join() === numbers.join() && index <= last.to + 1) continue;
+    let to = index;
+    for (let at = index; at < count; at++) {
+      to = at;
+      const mark = marks[at];
+      if (mark?.backward || mark?.endingStop?.length) {
+        // A stop followed at once by a start of the same numbers continues.
+        const again = marks[at + 1]?.endingStart;
+        if (!mark.backward && again?.join() === numbers.join()) continue;
+        break;
+      }
+      const next = marks[at + 1]?.endingStart;
+      if ((next?.length && next.join() !== numbers.join()) || marks[at + 1]?.forward) break;
+    }
+    endings.push({ numbers, from: index, to });
+  }
+  const endingAt = (index: number) => endings.find(ending => index >= ending.from && index <= ending.to);
+  const order: number[] = [];
+  const taken = new Map<number, number>();
+  // done: a repeat has been played its last time; the next measure outside an ending is past it.
+  let start = 0, pass = 1, index = 0, done = false;
+  while (index < count && order.length < count * 8) {
+    if (marks[index]?.forward && index !== start) { start = index; pass = 1; }
+    const ending = endingAt(index);
+    if (done && !ending) { pass = 1; done = false; start = index; }
+    // An ending skipped on a later time through is how the repeat is left.
+    if (ending && !ending.numbers.includes(pass)) { index = ending.to + 1; done = true; continue; }
+    order.push(index);
+    const times = marks[index]?.backward;
+    if (times && (taken.get(index) ?? 0) < times - 1) {
+      taken.set(index, (taken.get(index) ?? 0) + 1);
+      pass++;
+      index = start;
+      continue;
+    }
+    if (times) done = true;
+    index++;
+  }
+  const measures: ScoreMeasure[] = [], notes: ScoreNote[] = [], chords: ScoreChord[] = [];
+  let at = 0;
+  order.forEach((printed, played) => {
+    const measure = score.measures[printed], end = measure.start + measure.length;
+    measures.push({ ...measure, start: at });
+    for (const note of score.notes) {
+      if (note.measure === printed) notes.push({ ...note, start: note.start - measure.start + at, measure: played });
+    }
+    for (const chord of score.chords) {
+      if (chord.start >= measure.start - 1e-6 && chord.start < end - 1e-6) chords.push({ ...chord, start: chord.start - measure.start + at });
+    }
+    at += measure.length;
+  });
+  const { marks: _, ...rest } = score;
+  return { ...rest, measures, notes, chords };
 }

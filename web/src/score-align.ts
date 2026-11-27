@@ -24,7 +24,10 @@ import type { HarmonyGrid, HarmonyNote } from './services';
 
 export type AlignStem = 'vocals' | 'bass' | 'drums' | 'other';
 export const PITCHED_STEMS: readonly AlignStem[] = ['vocals', 'bass', 'other'];
-export const FEATURE_FRAMES = 2;          // Spectrogram frames per feature step (about 46 ms).
+export const FEATURE_FRAMES = 2;          // Spectrogram frames per feature step (about 46 ms), at the finest.
+// A long score against a long song is compared on coarser steps, so the warping table stays near this many cells
+// (a whole song and its whole score: steps of about 0.1 s; measures still go on the song's beats).
+const MOST_CELLS = 12e6;
 const LOWEST_CHROMA_PITCH = 28, HIGHEST_CHROMA_PITCH = 96;  // E1 to C7.
 const COMPRESSION = 100;                  // Chroma is log(1 + COMPRESSION * level).
 const QUIET = 0.15;                       // A step this share of the stem's loud steps or quieter is partly quiet.
@@ -78,7 +81,6 @@ export interface Alignment {
 }
 
 const PITCH_CLASSES = 12, DIMENSIONS = PITCH_CLASSES + 1;
-const stepSeconds = (spectrogram: Spectrogram) => FEATURE_FRAMES * HOP / spectrogram.rate;
 const rowOf = (pitch: number) => (pitch - LOWEST_PITCH) * ROWS_PER_SEMITONE;
 
 function normalize(vectors: Float32Array, count: number): void {
@@ -99,22 +101,22 @@ function percentile(values: ArrayLike<number>, share: number): number {
 // length, for comparing with the stem alone; `loudness`, its twelve pitch classes as loud as the stem plays them
 // (its loud steps about 1, silence 0), for adding stems together. Levels SILENT_DB below the stem's loudest count as
 // nothing, so a stem that is silent in a stretch adds nothing there. Onsets are 0 to 1.
-export function stemFeatures(spectrogram: Spectrogram, frames = spectrogram.frames): StemFeatures {
-  const steps = Math.max(1, Math.floor(Math.min(frames, spectrogram.frames) / FEATURE_FRAMES));
+export function stemFeatures(spectrogram: Spectrogram, frames = spectrogram.frames, per = FEATURE_FRAMES): StemFeatures {
+  const steps = Math.max(1, Math.floor(Math.min(frames, spectrogram.frames) / per));
   const chroma = new Float32Array(steps * DIMENSIONS), loudness = new Float32Array(steps * PITCH_CLASSES);
   const energy = new Float32Array(steps), flux = new Float32Array(steps);
   const { levels } = spectrogram;
   const silence = Math.log1p(COMPRESSION * 10 ** (-SILENT_DB / 20));
   for (let step = 0; step < steps; step++) {
-    for (let k = 0; k < FEATURE_FRAMES; k++) {
-      const frame = step * FEATURE_FRAMES + k, base = frame * ROWS;
+    for (let k = 0; k < per; k++) {
+      const frame = step * per + k, base = frame * ROWS;
       for (let pitch = LOWEST_CHROMA_PITCH; pitch <= HIGHEST_CHROMA_PITCH; pitch++) {
         // A peak among its neighbouring semitones counts fully, the rest a little: low notes, whose windows cannot
         // tell semitones apart well, would otherwise spread over three (two notes a semitone apart are both peaks
         // only where the window tells them apart).
         const level = levels[base + rowOf(pitch)];
         const peak = level >= levels[base + rowOf(pitch - 1)] && level >= levels[base + rowOf(pitch + 1)];
-        const value = (peak ? 1 : SHOULDER) * Math.max(0, Math.log1p(COMPRESSION * 10 ** (level / 20)) - silence) / FEATURE_FRAMES;
+        const value = (peak ? 1 : SHOULDER) * Math.max(0, Math.log1p(COMPRESSION * 10 ** (level / 20)) - silence) / per;
         loudness[step * PITCH_CLASSES + pitch % 12] += value;
         energy[step] += value;
       }
@@ -305,10 +307,17 @@ export function alignScore({ score, spectrograms, seconds, beats, intro, target 
   const other = spectrograms.other;
   if (!other) throw new Error('The Harmonic stem is needed.');
   if (!score.notes.length) throw new Error('The score has no notes.');
-  const step = stepSeconds(other);
   const frames = Math.min(other.frames, Math.ceil(seconds * other.rate / HOP));
   const stems = (Object.keys(spectrograms) as AlignStem[]).filter(stem => spectrograms[stem]!.rate === other.rate);
-  const features = Object.fromEntries(stems.map(stem => [stem, stemFeatures(spectrograms[stem]!, frames)])) as Partial<Record<AlignStem, StemFeatures>>;
+  // Feature steps as fine as the table allows: the score at the slowest tempo tried, against the stretch searched.
+  const total = score.measures.at(-1)!.start + score.measures.at(-1)!.length;
+  const guesses = tempoGuesses(score, beats), fitting = guesses.filter(guess => total * guess <= seconds);
+  const slowest = Math.max(...(fitting.length ? fitting : guesses));
+  const finest = FEATURE_FRAMES * HOP / other.rate;
+  const cells = (total * slowest / finest) * (frames / FEATURE_FRAMES);
+  const per = Math.max(FEATURE_FRAMES, Math.ceil(FEATURE_FRAMES * Math.sqrt(cells / MOST_CELLS)));
+  const step = per * HOP / other.rate;
+  const features = Object.fromEntries(stems.map(stem => [stem, stemFeatures(spectrograms[stem]!, frames, per)])) as Partial<Record<AlignStem, StemFeatures>>;
   const columns = features.other!.steps;
   const pitched = PITCHED_STEMS.filter(stem => features[stem]).map(stem => features[stem]!);
   const heard = together(pitched, columns);
