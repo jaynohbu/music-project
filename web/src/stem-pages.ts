@@ -544,13 +544,14 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                         @if (scoreParts()[family.name]; as played) {
                           <div class="score-part" role="group" [attr.aria-label]="family.label">
                             <strong>{{ family.label }}</strong>
-                            <select [attr.aria-label]="family.label + ' sound'" (change)="changeScorePart(family.name, { sound: +$any($event.target).value })">
+                            <select class="score-sound" [attr.aria-label]="family.label + ' sound'" (change)="changeScorePart(family.name, { sound: +$any($event.target).value })">
                               @for (sound of scoreSounds(family.name); track sound; let first = $first) {
                                 <option [value]="sound" [selected]="sound === played.sound">{{ soundName(sound) }}{{ first ? ' (closest)' : '' }}</option>
                               }
                             </select>
-                            <label class="accompaniment-volume">Volume {{ played.volume }}%
+                            <label class="score-volume"><span>Volume</span>
                               <input type="range" min="0" max="100" step="1" [value]="played.volume" (input)="changeScorePart(family.name, { volume: +$any($event.target).value })">
+                              <output>{{ played.volume }}%</output>
                             </label>
                             <button type="button" class="console-switch" [class.lit]="played.muted" [attr.aria-pressed]="played.muted"
                               [attr.aria-label]="family.label + ' mute'" (click)="changeScorePart(family.name, { muted: !played.muted })">
