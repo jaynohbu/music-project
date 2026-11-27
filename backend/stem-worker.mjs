@@ -48,6 +48,10 @@ export function createStemWorker({
     }
     let directory;
     let stage = 'download';
+    // Seconds each stage took, logged at the end so slow splits can be read from the worker's log.
+    const timing = {};
+    let mark = Date.now();
+    const lap = name => { const now = Date.now(); timing[name] = Math.round((now - mark) / 100) / 10; mark = now; };
     const uploaded = [];
     const update = async fields => {
       const removed = fields.status === 'completed'
@@ -86,6 +90,7 @@ export function createStemWorker({
         },
       }), createWriteStream(source));
       if (bytes !== job.bytes) throw new Error('Upload is incomplete.');
+      lap('download');
       stage = 'separate';
       const result = await run(pythonPath, [
         fileURLToPath(new URL('./separate.py', import.meta.url)), source, directory,
@@ -95,6 +100,7 @@ export function createStemWorker({
       if (!Number.isFinite(output.duration) || output.duration <= 0 || output.duration > STEM_MAX_DURATION) {
         throw new Error('Invalid separation duration.');
       }
+      lap('separate');
       stage = 'validate';
       const files = await Promise.all(STEM_NAMES.map(async name => {
         const file = path.join(directory, `${name}.wav`);
@@ -109,7 +115,8 @@ export function createStemWorker({
       }));
       stage = 'upload';
       const stems = {};
-      for (const file of files) {
+      // The four WAVs go up together; a failure waits for the rest, so every one that arrived is removed.
+      const sent = await Promise.allSettled(files.map(async file => {
         const objectKey = `users/${job.userId}/stems/${job.jobId}/${file.name}.wav`;
         await storage.send(new PutObjectCommand({
           Bucket: process.env.BUCKET_NAME, Key: objectKey, ContentType: 'audio/wav',
@@ -117,11 +124,15 @@ export function createStemWorker({
         }));
         uploaded.push(objectKey);
         stems[file.name] = { key: objectKey, bytes: file.bytes };
-      }
+      }));
+      const unsent = sent.find(result => result.status === 'rejected');
+      if (unsent) throw unsent.reason;
+      lap('upload');
       const copies = await savePlayCopies({
         storage, encode, jobId: job.jobId,
         files: files.map(file => ({ file: file.file, key: stems[file.name].key })),
       });
+      lap('playCopies');
       if (copies) {
         for (const name of STEM_NAMES) {
           Object.assign(stems[name], copies[stems[name].key]);
@@ -129,6 +140,7 @@ export function createStemWorker({
         }
       }
       stage = 'record';
+      console.log('Split timing', { jobId: job.jobId, duration: output.duration, seconds: timing });
       await update({
         status: 'completed', stems, duration: output.duration,
         completedAt: new Date().toISOString(), ...(copies ? { playVersion: PLAY_VERSION } : {}),

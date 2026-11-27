@@ -21,7 +21,7 @@ Replace the WebView wrapper with a native Expo app that plays stems from its own
 | Scenes | Mix, live mix and key change saved per scene entry; nothing saved from Music | `backend/scene-api.mjs`, `mobile/src/mixer-settings.ts` |
 | Themes | Heavy metal (default), Rock, Pop, Jazz club, Worship, Simple, with backgrounds, in app and website | `mobile/src/theme.tsx`, `web/src/themes.ts` |
 | Website | Deployed 2026-11-27 with song scores, the spectrum page, sampled sounds and their credits, besides the ensemble score, themes, usage and store links | `web/src/` |
-| Worker image | `cpu-20261127094405` | `backend/Dockerfile.stems` |
+| Worker images | Analysis `cpu-20261127094405` (`backend/Dockerfile.stems`); split `split-20261127175341` (`backend/Dockerfile.split`), see Two worker containers | `backend/` |
 | Not built | Score editor, website languages and live input, account deletion, billing, store submission | see Build order |
 
 Since 2026-11-27 the user wants the work done without asking: implement, test, commit, deploy (API, worker image, website) and build, then report in Korean. Nothing destructive to user data outside the task (test scores are not uploaded to the user's songs).
@@ -37,8 +37,8 @@ App (Expo)
  └ Local cache: most recent 20 songs or 2 GB, whichever comes first
 Server (existing AWS stack)
  ├ API: accounts, song list, scenes, usage limits, lyrics and score analysis
- ├ Split worker: on-demand Fargate task (htdemucs, four stems; htdemucs_6s before 2026-11-21), also produces AAC
- ├ Analysis worker: same image; lyrics, ensemble score, bass and drum parts
+ ├ Split worker: on-demand Fargate task in its own small image (htdemucs, four stems; htdemucs_6s before 2026-11-21), also produces AAC
+ ├ Analysis worker: on-demand Fargate task in the large image; lyrics, scores, songs' own scores, cleanups
  └ S3: WAV (original, downloads) + AAC (playback, cache) + analysis JSON
 ```
 
@@ -189,6 +189,17 @@ Added parts are played from the Harmonic score in the browser, not rendered or s
 `backend/repeats.py`, called at the end of the ensemble analysis, finds passages of the Harmonic notes that come back, the way BLAST aligns sequences: bars are the letters, a seed is two bars that sound alike, and it is extended both ways (crossing up to two weaker bars, as BLAST's drop-off) while the whole passage stays at least 70% alike, up to 16 bars. Passages are compared on what sounds in each eighth (pitch classes of the melody and second line, with their lengths), because detection hears a repeat a little differently each time; note-by-note matching found 8-bar repeats at only 45%. A passage must have at least two notes per bar on average, three quarters of its bars played, and starts and ends on played bars. Families (longest first, each bar in one family) take their clearest member (most like the others, then surest notes): its melody and chords are copied over the other members, and the second line (the grey ghost notes) is dropped inside every member. The result lists `repeats` (family, bars, members, source). On Our God: 11-bar verse and chorus pairs and an 8-bar pair; on Enter Sandman: 7- and 5-bar riff pairs.
 
 **Harmonic:** the Other stem is shown as Harmonic (하모닉 in Korean) in the app and website; stored names stay `other`.
+
+### Two worker containers (2026-11-27)
+
+The user found splitting slow. Splits took 5.6–7.6 min for songs of 3.7–5.5 min: about 100 s fixed (starting the Fargate task and pulling the 4.3 GB compressed image, which carried Whisper, CLAP, Basic Pitch and ADTOF that a split never uses) plus about 1.07 s per second of audio (Demucs on 4 vCPU, then the uploads and AAC encodes one at a time). The split did nothing else; chords and lyrics start after it, when the song is opened.
+
+- **Split container:** `backend/Dockerfile.split` (Node, ffmpeg, torch CPU, Demucs and the htdemucs weights only), entry `stem-split-task.mjs`, task definition `SplitTask` (same 4 vCPU / 16 GB), image `split-<time>` in the stem repository from `build-split-image.sh`, released with `SPLIT_IMAGE=… bash publish-api.sh`.
+- **Analysis container:** the old image and `StemTask`, unchanged, for lyrics, harmony, songs' scores and cleanups.
+- **Routing:** the state machine starts with a Choice: input with a `kind` (lyrics, harmony, restoration) goes to `StemTask`, a split (no `kind`) to `SplitTask`. Both on demand; Finalize is shared.
+- **Inside the split:** the four WAVs upload together, the four AAC copies encode together and upload together (a failure still removes everything that arrived). The worker logs `Split timing` with seconds per stage (download, separate, upload, playCopies); before this, nothing was logged, so stage times could not be read.
+- **Measured (deployed, image `split-20261127175341`, 0.62 GB against 4.3 GB):** Psalm 139 live (3 min 42 s) under a test user, removed afterwards: 4 min 30 s from start to finish, against 5 min 37 s before. Task start about 46 s (was about 100 s); Demucs 181 s; WAV upload 0.7 s; AAC copies 16.7 s. Demucs is now nearly all of it.
+- Not done: 8 vCPU for splits (about 30–40% faster Demucs at about 1.3–1.5× the cost per song), left for the user to decide.
 
 ### Four stems (2026-11-21)
 
@@ -556,7 +567,7 @@ The ADTOF licence is handled by a plan to train an in-house model before product
 - **CocoaPods** needs `LANG=en_US.UTF-8` and `LC_ALL=en_US.UTF-8`.
 - **Expo APIs:** `mobile/AGENTS.md` says to check the versioned docs, because SDK 58 differs from older knowledge. `ios/` and `android/` are generated and gitignored; never edit them by hand.
 - **Checks:** `node --test test/*.test.mjs` in `backend/`; `npm test`, `npx tsc --noEmit`, `npx expo lint` and `npx expo-doctor` in `mobile/`; `sam validate --lint` in the repo root.
-- **API deploy:** `STEM_IMAGE=<image> bash publish-api.sh youtube-audio-library`; without `STEM_IMAGE` the deployed image stays. The current image is `086723604095.dkr.ecr.us-west-2.amazonaws.com/youtube-audio-library-artifacts-stemrepository-8kjzuftyhvbg:cpu-20261127094405`. Use publish-api.sh, not a bare `sam deploy` (ScoreImageUri and the image repositories have no defaults). The score engine in the image is transpiled from `web/src` by `build-score-engine.mjs`; rebuild the image after changing score-align.ts or score-import.ts. Worker code changes need a new image first (`build-stem-image.sh`, needs Docker Desktop running). The publish scripts ship the working folder as it stands.
+- **API deploy:** `STEM_IMAGE=<image> SPLIT_IMAGE=<image> bash publish-api.sh youtube-audio-library`; without them the deployed images stay. Split code (`stem-worker.mjs`, `stem-playback.mjs`, `separate.py`) is in both images; rebuild the split image (`build-split-image.sh`) when it changes. The current image is `086723604095.dkr.ecr.us-west-2.amazonaws.com/youtube-audio-library-artifacts-stemrepository-8kjzuftyhvbg:cpu-20261127094405`. Use publish-api.sh, not a bare `sam deploy` (ScoreImageUri and the image repositories have no defaults). The score engine in the image is transpiled from `web/src` by `build-score-engine.mjs`; rebuild the image after changing score-align.ts or score-import.ts. Worker code changes need a new image first (`build-stem-image.sh`, needs Docker Desktop running). The publish scripts ship the working folder as it stands.
 - **Analysis locally:** a venv with the worker's Python requirements (no torch, demucs or whisper) plus `basic-pitch==0.4.0 --no-deps`, and the ADTOF model from the Dockerfile's URL as `DRUM_MODEL`, runs `analyze_harmony.py` on downloaded stems.
 - **iPhone builds:** `eas build --platform ios --profile staging` and install from the build link. `xcrun devicectl` cannot install on the user's iPhone because Xcode 16.2 has no disk image for its iOS. The `simulator` profile builds for the iOS 18 simulator on this Mac. `eas build` sometimes fails right after a cancel; rerunning works. `npx eas-cli@latest` fails with npm "Invalid Version"; pin a version (`npx eas-cli@27.10.0 build --platform ios --profile staging --non-interactive --no-wait`). The EAS iOS quota did not stop builds on 2026-11-27.
 - **Scene settings and the server:** the backend validates every field of scene settings, so a new app field (like `live` or `transpose`) needs the API deployed before an app build that sends it.

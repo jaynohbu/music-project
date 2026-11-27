@@ -22,19 +22,22 @@ export function playbackEncoder(ffmpegPath, run = promisify(execFile)) {
 export async function savePlayCopies({ storage, encode, files, jobId }) {
   const saved = [];
   try {
-    const copies = [];
-    for (const { file, key } of files) {
+    // Encoded together (one ffmpeg per stem), then uploaded together; a failed upload waits for the rest,
+    // so every copy that arrived is removed.
+    const copies = await Promise.all(files.map(async ({ file, key }) => {
       const output = file.replace(/\.wav$/, '.m4a');
       await encode(file, output);
-      copies.push({ key, output, playKey: playKeyFor(key), playBytes: (await stat(output)).size });
-    }
-    for (const copy of copies) {
+      return { key, output, playKey: playKeyFor(key), playBytes: (await stat(output)).size };
+    }));
+    const sent = await Promise.allSettled(copies.map(async copy => {
       await storage.send(new PutObjectCommand({
         Bucket: process.env.BUCKET_NAME, Key: copy.playKey, ContentType: 'audio/mp4',
         Body: createReadStream(copy.output), ContentLength: copy.playBytes,
       }));
       saved.push(copy.playKey);
-    }
+    }));
+    const unsent = sent.find(result => result.status === 'rejected');
+    if (unsent) throw unsent.reason;
     return Object.fromEntries(copies.map(({ key, playKey, playBytes }) => [key, { playKey, playBytes }]));
   } catch (error) {
     console.error('Playback copy failed', { jobId, name: error.name });

@@ -5,7 +5,10 @@ Description: Sorituh private music library - Angular, Cognito, API and on-demand
 Parameters:
   StemImageUri:
     Type: String
-    Description: ECR URI of the separately built CPU Demucs image
+    Description: ECR URI of the analysis worker image (lyrics, chords, scores, cleanups), from build-stem-image.sh
+  SplitImageUri:
+    Type: String
+    Description: ECR URI of the split-only worker image (Demucs), from build-split-image.sh
   ScoreImageUri:
     Type: String
     Description: ECR URI of the separately built score reading (Audiveris) image, from build-score-image.sh
@@ -674,6 +677,38 @@ Resources:
               awslogs-group: !Ref StemLogs
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: separation
+  # Splits run in their own, much smaller image, so the on-demand task starts sooner.
+  SplitTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '4096'
+      Memory: '16384'
+      ExecutionRoleArn: !GetAtt StemExecutionRole.Arn
+      TaskRoleArn: !GetAtt StemTaskRole.Arn
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ContainerDefinitions:
+        - Name: split
+          Image: !Ref SplitImageUri
+          Essential: true
+          Environment:
+            - Name: TABLE_NAME
+              Value: !Ref Jobs
+            - Name: BUCKET_NAME
+              Value: !Ref AudioBucket
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: OMP_NUM_THREADS
+              Value: '4'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref StemLogs
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: separation
   StemFinalize:
     Type: AWS::Serverless::Function
     Properties:
@@ -695,9 +730,42 @@ Resources:
     Properties:
       Type: STANDARD
       Definition:
-        StartAt: Separate
+        StartAt: Route
         TimeoutSeconds: 7200
         States:
+          # A split has no kind; lyrics, harmony and restoration jobs name theirs.
+          Route:
+            Type: Choice
+            Choices:
+              - Variable: $.kind
+                IsPresent: true
+                Next: Separate
+            Default: Split
+          Split:
+            Type: Task
+            Resource: arn:aws:states:::ecs:runTask.sync
+            TimeoutSeconds: 6900
+            Parameters:
+              LaunchType: FARGATE
+              Cluster: !GetAtt StemCluster.Arn
+              TaskDefinition: !Ref SplitTask
+              NetworkConfiguration:
+                AwsvpcConfiguration:
+                  AssignPublicIp: ENABLED
+                  Subnets: [!Ref StemSubnet]
+                  SecurityGroups: [!Ref StemSecurityGroup]
+              Overrides:
+                ContainerOverrides:
+                  - Name: split
+                    Environment:
+                      - Name: STEM_JOB
+                        Value.$: States.JsonToString($)
+            ResultPath: null
+            Catch:
+              - ErrorEquals: [States.ALL]
+                ResultPath: null
+                Next: Finalize
+            Next: Finalize
           Separate:
             Type: Task
             Resource: arn:aws:states:::ecs:runTask.sync
@@ -737,7 +805,7 @@ Resources:
           Statement:
             - Effect: Allow
               Action: ecs:RunTask
-              Resource: !Ref StemTask
+              Resource: [!Ref StemTask, !Ref SplitTask]
             - Effect: Allow
               Action: [ecs:StopTask, ecs:DescribeTasks]
               Resource: '*'

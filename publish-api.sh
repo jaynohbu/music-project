@@ -8,6 +8,13 @@ ARTIFACT_BUCKET="$(aws cloudformation describe-stacks --stack-name "$STACK-artif
 # Pass STEM_IMAGE (from build-stem-image.sh) to release worker changes; otherwise the deployed image stays.
 STEM_IMAGE="${STEM_IMAGE:-$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
   --query "Stacks[0].Parameters[?ParameterKey=='StemImageUri'].ParameterValue | [0]" --output text)}"
+# Pass SPLIT_IMAGE (from build-split-image.sh) to release split worker changes; otherwise the deployed image stays.
+SPLIT_IMAGE="${SPLIT_IMAGE:-$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
+  --query "Stacks[0].Parameters[?ParameterKey=='SplitImageUri'].ParameterValue | [0]" --output text)}"
+if [[ -z "$SPLIT_IMAGE" || "$SPLIT_IMAGE" == "None" ]]; then
+  echo "Build the split image first: SPLIT_IMAGE=\$(bash build-split-image.sh) bash publish-api.sh" >&2
+  exit 1
+fi
 # Pass SCORE_IMAGE (from build-score-image.sh) to release score reading changes; otherwise the deployed image stays.
 SCORE_IMAGE="${SCORE_IMAGE:-$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
   --query "Stacks[0].Parameters[?ParameterKey=='ScoreImageUri'].ParameterValue | [0]" --output text)}"
@@ -27,4 +34,4 @@ aws cloudformation package --template-file .aws-sam/api-release/template.yaml --
   --region "$REGION" --output-template-file .aws-sam/api-release/packaged.yaml
 aws cloudformation deploy --template-file .aws-sam/api-release/packaged.yaml --stack-name "$STACK" --region "$REGION" \
   --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset \
-  --parameter-overrides "InitialPasswordSecretName=youtube-audio-library/registration-password" "StemImageUri=$STEM_IMAGE" "ScoreImageUri=$SCORE_IMAGE"
+  --parameter-overrides "InitialPasswordSecretName=youtube-audio-library/registration-password" "StemImageUri=$STEM_IMAGE" "SplitImageUri=$SPLIT_IMAGE" "ScoreImageUri=$SCORE_IMAGE"
