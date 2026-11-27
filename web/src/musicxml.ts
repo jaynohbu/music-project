@@ -9,7 +9,9 @@ export interface ScoreMeasure { number: string; start: number; length: number; b
 // Repeat signs on a measure, from every part: a repeat starts here (forward) or goes back from its end (backward, the
 // times it is played in all), and the endings (first and second time bars) begun or ended on it, by number.
 export interface MeasureMarks { forward?: boolean; backward?: number; endingStart?: number[]; endingStop?: number[] }
-export interface ScoreChord { start: number; pitchClasses: number[] }
+// A chord symbol as printed: its root, the kind as written (m7, sus2…), and its bass (the root unless after a slash),
+// as pitch classes; measure: where it is printed.
+export interface ScoreChord { start: number; pitchClasses: number[]; root: number; quality: string; bass: number; measure: number }
 export interface ScorePart { id: string; name: string }
 export interface Score {
   title: string;
@@ -64,6 +66,13 @@ const numberOf = (element: XmlElement | undefined, name: string, fallback: numbe
 };
 
 const STEPS: Record<string, number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+// How each chord kind is written after its root, when the score does not say.
+const SUFFIXES: Record<string, string> = {
+  major: '', minor: 'm', augmented: 'aug', diminished: 'dim', dominant: '7', 'major-seventh': 'maj7', 'minor-seventh': 'm7',
+  'diminished-seventh': 'dim7', 'augmented-seventh': 'aug7', 'half-diminished': 'm7b5', 'major-minor': 'm(maj7)', 'major-sixth': '6',
+  'minor-sixth': 'm6', 'dominant-ninth': '9', 'major-ninth': 'maj9', 'minor-ninth': 'm9', 'suspended-second': 'sus2',
+  'suspended-fourth': 'sus4', power: '5', 'dominant-11th': '11', 'dominant-13th': '13', 'major-11th': 'maj11', 'minor-11th': 'm11',
+};
 // Semitones above the root of each chord kind (MusicXML's kind values); unknown kinds are major.
 const KINDS: Record<string, number[]> = {
   major: [0, 4, 7], minor: [0, 3, 7], augmented: [0, 4, 8], diminished: [0, 3, 6], dominant: [0, 4, 7, 10],
@@ -123,14 +132,24 @@ export function parseMusicXml(source: string): Score {
           const sound = element.name === 'sound' ? element : child(element, 'sound');
           const marked = Number(sound?.attributes['tempo']);
           if (tempo === undefined && marked > 0) tempo = marked;
-        } else if (element.name === 'harmony' && part === 0) {
+        } else if (element.name === 'harmony') {
+          // Chord symbols may be printed over any part; one at a moment.
           const root = child(element, 'root');
           const step = STEPS[textOf(root, 'root-step') ?? ''];
-          if (step !== undefined) {
-            const base = step + numberOf(root, 'root-alter', 0) + transpose;
-            const kind = KINDS[textOf(element, 'kind') ?? 'major'] ?? KINDS['major'];
-            const offset = numberOf(element, 'offset', 0) / divisions;
-            chords.push({ start: start + at + offset, pitchClasses: kind.map(step => (((base + step) % 12) + 12) % 12) });
+          const offset = numberOf(element, 'offset', 0) / divisions, when = start + at + offset;
+          if (step !== undefined && !chords.some(chord => Math.abs(chord.start - when) < 1e-6)) {
+            const pitchClass = (value: number) => ((value % 12) + 12) % 12;
+            const base = pitchClass(step + numberOf(root, 'root-alter', 0) + transpose);
+            const kindElement = child(element, 'kind'), kindName = kindElement?.text.trim() || 'major';
+            const kind = KINDS[kindName] ?? KINDS['major'];
+            const written = kindElement?.attributes['text'];
+            const bassElement = child(element, 'bass'), bassStep = STEPS[textOf(bassElement, 'bass-step') ?? ''];
+            chords.push({
+              start: when, pitchClasses: kind.map(interval => pitchClass(base + interval)), root: base,
+              quality: written !== undefined ? written : SUFFIXES[kindName] ?? '',
+              bass: bassStep !== undefined ? pitchClass(bassStep + numberOf(bassElement, 'bass-alter', 0) + transpose) : base,
+              measure: index,
+            });
           }
         } else if (element.name === 'note') {
           const length = numberOf(element, 'duration', 0) / divisions;
@@ -219,7 +238,7 @@ export function scoreExcerpt(score: Score, from: number, to: number): Score {
     measures: measures.map(measure => ({ ...measure, start: measure.start - start })),
     notes: score.notes.filter(note => inside(note.start))
       .map(note => ({ ...note, start: note.start - start, length: Math.min(note.length, end - note.start), measure: note.measure - (first - 1) })),
-    chords: score.chords.filter(chord => inside(chord.start)).map(chord => ({ ...chord, start: chord.start - start })),
+    chords: score.chords.filter(chord => inside(chord.start)).map(chord => ({ ...chord, start: chord.start - start, measure: chord.measure - (first - 1) })),
   };
 }
 
@@ -286,7 +305,7 @@ export function unrollRepeats(score: Score): Score {
       if (note.measure === printed) notes.push({ ...note, start: note.start - measure.start + at, measure: played });
     }
     for (const chord of score.chords) {
-      if (chord.start >= measure.start - 1e-6 && chord.start < end - 1e-6) chords.push({ ...chord, start: chord.start - measure.start + at });
+      if (chord.start >= measure.start - 1e-6 && chord.start < end - 1e-6) chords.push({ ...chord, start: chord.start - measure.start + at, measure: played });
     }
     at += measure.length;
   });

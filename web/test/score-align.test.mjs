@@ -51,7 +51,10 @@ test('MusicXML: chords, ties across a bar line, two staves with backup, a pickup
     [74, 3, 3, 0, 1],                        // D5 held over the bar line: one note, three quarters.
     [66, 7, 2, 0, 1], [74, 7, 2, 1, 1],      // The grace note is left out; the clarinet sounds a tone below written.
   ]);
-  assert.deepEqual(score.chords, [{ start: 1, pitchClasses: [0, 4, 7] }, { start: 5, pitchClasses: [10, 1, 5, 8] }]);
+  assert.deepEqual(score.chords, [
+    { start: 1, pitchClasses: [0, 4, 7], root: 0, quality: '', bass: 0, measure: 1 },
+    { start: 5, pitchClasses: [10, 1, 5, 8], root: 10, quality: 'm7', bass: 10, measure: 2 },
+  ]);
 });
 
 test('MusicXML: a compressed .mxl is unzipped through its container, and what is not a score is refused', async () => {
@@ -383,4 +386,18 @@ test('with the score aligned, every score note is kept: one the stem leaves out 
   // Nothing is extracted for a note that was not heard.
   const kept = align.scoreMask(filled, spectrograms.other.frames, 22050);
   assert.equal(kept.some(value => value), false);
+});
+
+test('chord symbols as printed: their written kind and slash bass, and in a laid score the printed ones win where they are', () => {
+  const harmony = (step, alter, kind, text, bass = '') => `<harmony><root><root-step>${step}</root-step>${alter ? `<root-alter>${alter}</root-alter>` : ''}</root>`
+    + `<kind${text === undefined ? '' : ` text="${text}"`}>${kind}</kind>${bass}</harmony>`;
+  const part = '<part id="P1"><measure number="1"><attributes><divisions>1</divisions></attributes>'
+    + harmony('E', 0, 'minor-seventh', 'm7') + note('E', 3, 4) + '</measure>'
+    + '<measure number="2">' + note('C', 3, 4) + '</measure>'
+    + '<measure number="3">' + harmony('D', 0, 'major', undefined, '<bass><bass-step>F</bass-step><bass-alter>1</bass-alter></bass>') + note('F#', 2, 4) + '</measure></part>';
+  const score = xml.parseMusicXml(scoreXml(part, '<score-part id="P1"><part-name>Piano</part-name></score-part>'));
+  assert.deepEqual(score.chords.map(c => [c.start, c.root, c.quality, c.bass, c.measure]), [[0, 4, 'm7', 4, 0], [8, 2, '', 6, 2]]);
+  // Laid four semitones up: the printed chords moved, the measure without one named from its notes.
+  const chords = align.scoreChords(score, [true, true, true], quarter => quarter, 4, () => null);
+  assert.deepEqual(chords.map(c => [c.start, align.chordName(c, 'B')]), [[0, 'G#m7'], [4, 'E'], [8, 'F#/A#']]);
 });

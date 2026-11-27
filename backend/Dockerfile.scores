@@ -17,6 +17,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends libfreetype6 fo
       libxext6 libxrender1 libxtst6 libxi6 libasound2 libgtk-3-0 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=audiveris /extracted/opt/audiveris /opt/audiveris
+# English text recognition for Audiveris (chord symbols, titles): Tesseract's full data, which its legacy engine needs
+# (the fast and best sets have only the LSTM model).
+RUN python3 -c "import hashlib, urllib.request, os; os.makedirs('/opt/tessdata', exist_ok=True); data = urllib.request.urlopen('https://github.com/tesseract-ocr/tessdata/raw/4.1.0/eng.traineddata').read(); assert hashlib.sha256(data).hexdigest() == 'daa0c97d651c19fba3b25e81317cd697e9908c8208090c94c3905381c23fc047'; open('/opt/tessdata/eng.traineddata', 'wb').write(data)"
+ENV TESSDATA_PREFIX=/opt/tessdata
 RUN pip install --no-cache-dir awslambdaric==3.1.1 boto3==1.35.99
 WORKDIR /function
 COPY read_score.py .

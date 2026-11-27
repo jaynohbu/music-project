@@ -29,7 +29,9 @@ function kindOf(bytes) {
 function run(input, output, sheets) {
   return new Promise((resolve, reject) => {
     const options = sheets ? ['-sheets', ...sheets.map(String)] : [];
-    const child = spawn(AUDIVERIS, ['-batch', '-export', ...options, '-output', output, input], { stdio: ['ignore', 'pipe', 'pipe'] });
+    // Chord symbols need Tesseract's full English data (../.tools/tessdata, as in Dockerfile.scores).
+    const env = { ...process.env, TESSDATA_PREFIX: process.env.TESSDATA_PREFIX ?? new URL('../../../.tools/tessdata', import.meta.url).pathname };
+    const child = spawn(AUDIVERIS, ['-batch', '-export', ...options, '-output', output, input], { stdio: ['ignore', 'pipe', 'pipe'], env });
     let log = '';
     const keep = chunk => { log += chunk; };
     child.stdout.on('data', keep);

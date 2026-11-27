@@ -19,7 +19,7 @@
 // written end), its velocity from how loud the attack is; a part given to the vocals is left to them. Notes the other stem does not play are listed with the
 // stems that do. Pure functions only (no DOM), so they can be unit-tested.
 import { HOP, LOWEST_PITCH, ROWS, ROWS_PER_SEMITONE, type Spectrogram } from './spectrogram';
-import type { Score, ScoreMeasure, ScoreNote } from './musicxml';
+import type { Score, ScoreChord, ScoreMeasure, ScoreNote } from './musicxml';
 import type { HarmonyGrid, HarmonyNote, HarmonyPart } from './services';
 
 export type AlignStem = 'vocals' | 'bass' | 'drums' | 'other';
@@ -910,7 +910,7 @@ export function fitMeasures({ score, spectrograms, beats, target }: AlignInput &
   const newFirstBar = first + pickupBeats;
 
   // The score as laid: its measures in song order (free bars empty), restored on the corrected beats.
-  const measures: ScoreMeasure[] = [], notes: ScoreNote[] = [];
+  const measures: ScoreMeasure[] = [], notes: ScoreNote[] = [], printedChords: ScoreChord[] = [];
   let at = 0;
   placed.forEach((place, index) => {
     const quarters = place.measure !== null ? Math.max(1, Math.round(score.measures[place.measure].length)) : 4;
@@ -919,11 +919,14 @@ export function fitMeasures({ score, spectrograms, beats, target }: AlignInput &
       for (const note of score.notes) {
         if (note.measure === place.measure) notes.push({ ...note, start: note.start - measure.start + at, measure: index });
       }
+      for (const chord of score.chords) {
+        if (chord.measure === place.measure) printedChords.push({ ...chord, start: chord.start - measure.start + at, measure: index });
+      }
     }
     measures.push({ number: place.number, start: at, length: quarters, beats: quarters, beatType: 4 });
     at += quarters;
   });
-  const laid: Score = { ...score, measures, notes, chords: [] };
+  const laid: Score = { ...score, measures, notes, chords: printedChords };
   const timeAt = (quarter: number) => timeAtBeat(newBeats, first + quarter);
   const beatGap = (time: number) => {
     const position = beatPosition(newBeats, time), index = Math.max(0, Math.min(newBeats.length - 2, Math.floor(position)));
@@ -1018,7 +1021,8 @@ export function harmonyFromScore(analysis: HarmonyDocument, alignment: Alignment
   };
 }
 
-// Chords named from a score's notes, a measure at a time: the pitch classes sounding (as long as they sound; the
+// Chords as the score prints them, and where it prints none (or its symbols could not be read), named from its
+// notes, a measure at a time: the pitch classes sounding (as long as they sound; the
 // sung line counts half), matched to the chord shapes below (the closest shape wins; a seventh or a suspension must
 // earn its place by CHORD_EXTRA), and the lowest note as the bass when it is not the root. A measure's second half
 // gets its own chord where it is clearly another. Measures the score does not have (`written` false) are N.C.
@@ -1058,6 +1062,12 @@ export function scoreChords(laid: Score, written: boolean[], timeAt: (quarter: n
   };
   laid.measures.forEach((measure, index) => {
     if (!written[index]) { add(timeAt(measure.start), null); return; }
+    // The chord symbols printed in the measure, where printed (moved to the song's key).
+    const printed = laid.chords.filter(chord => chord.measure === index);
+    if (printed.length) {
+      for (const chord of printed) add(timeAt(chord.start), { root: (chord.root + shift + 12) % 12, quality: chord.quality, bass: (chord.bass + shift + 12) % 12 });
+      return;
+    }
     const span = (from: number, to: number) => {
       const weights = new Array(12).fill(0);
       let lowest: number | null = null, lowestPitch = Infinity;
