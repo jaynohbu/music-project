@@ -189,3 +189,19 @@ export async function unzipMusicXml(bytes: Uint8Array): Promise<string> {
   if (!path || !files.has(path)) throw new Error('No score found inside the .mxl file.');
   return text(path);
 }
+
+// Measures `from` to `to` (1-based, as counted from the score's first measure, both included) as a score of their
+// own, starting at zero.
+export function scoreExcerpt(score: Score, from: number, to: number): Score {
+  const first = Math.max(1, Math.min(from, score.measures.length)), last = Math.max(first, Math.min(to, score.measures.length));
+  const measures = score.measures.slice(first - 1, last);
+  const start = measures[0].start, end = measures[measures.length - 1].start + measures[measures.length - 1].length;
+  const inside = (at: number) => at >= start - 1e-6 && at < end - 1e-6;
+  return {
+    ...score,
+    measures: measures.map(measure => ({ ...measure, start: measure.start - start })),
+    notes: score.notes.filter(note => inside(note.start))
+      .map(note => ({ ...note, start: note.start - start, length: Math.min(note.length, end - note.start), measure: note.measure - (first - 1) })),
+    chords: score.chords.filter(chord => inside(chord.start)).map(chord => ({ ...chord, start: chord.start - start })),
+  };
+}

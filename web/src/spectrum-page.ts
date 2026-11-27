@@ -11,7 +11,7 @@
 import { ChangeDetectionStrategy, Component, ElementRef, OnDestroy, OnInit, inject, signal, viewChild } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { StemsService, errorMessage, type HarmonyGrid, type Job } from './services';
-import { type Score, parseMusicXml, unzipMusicXml } from './musicxml';
+import { type Score, parseMusicXml, scoreExcerpt, unzipMusicXml } from './musicxml';
 import { type AlignStem, type Alignment, alignScore, restoredScore } from './score-align';
 import { harmonyMidi } from './score-export';
 import { renderNotes } from './accompaniment-player';
@@ -28,6 +28,8 @@ const ZOOMS = [40, 80, 160, 320, 640];
 const COLORS = heatColors();
 // The other stems the score is compared with, besides the Harmonic stem itself.
 const COMPARED: AlignStem[] = ['vocals', 'bass', 'drums'];
+// A long score is aligned up to MOST_MEASURES measures at a time (the alignment's table grows with both lengths).
+const MOST_MEASURES = 40, DEFAULT_MEASURES = 16;
 type Listen = 'all' | 'meaningful' | 'rest' | 'restored' | 'both';
 
 // The loudest sample (absolute) in each block of a signal.
@@ -81,6 +83,10 @@ function blockPeaks(signal: Float32Array, block: number) {
           <label class="button-link secondary spectrum-file">{{ score() ? 'Another score…' : 'Upload a score…' }}
             <input type="file" accept=".pdf,.png,.jpg,.jpeg,.musicxml,.xml,.mxl,application/pdf" (change)="chooseScore($event)" [disabled]="!ready() || aligning()">
           </label>
+          <label>PDF pages to read
+            <input type="text" class="spectrum-pages" inputmode="numeric" placeholder="all" [value]="pages()" (change)="pages.set($any($event.target).value.trim())"
+              [disabled]="aligning()" title="Page numbers and ranges, such as 2 or 2-3; each page takes the score reader ten seconds or more">
+          </label>
           <label>The score is
             <select (change)="setIntro($any($event.target).value === 'intro')" [disabled]="aligning()">
               <option value="intro" [selected]="intro()">the song's beginning (intro)</option>
@@ -97,6 +103,18 @@ function blockPeaks(signal: Float32Array, block: number) {
           comparing it with every stem; the Harmonic stem is then restored from it: the score's notes the stem plays, as it plays them.</p>
         @if (scoreError()) { <p class="error" role="alert">{{ scoreError() }}</p> }
         @if (scoreStatus()) { <p class="hint" role="status">{{ scoreStatus() }}</p> }
+        @if (wholeScore(); as whole) {
+          <div class="spectrum-heading">
+            <label>Measures
+              <input type="number" class="spectrum-measure-input" min="1" [max]="whole.measures.length" [value]="fromMeasure()"
+                (change)="setRange(+$any($event.target).value, toMeasure())" [disabled]="aligning()">
+              to
+              <input type="number" class="spectrum-measure-input" min="1" [max]="whole.measures.length" [value]="toMeasure()"
+                (change)="setRange(fromMeasure(), +$any($event.target).value)" [disabled]="aligning()">
+              of {{ whole.measures.length }}
+            </label>
+          </div>
+        }
         @if (alignment(); as found) {
           <p><strong>{{ score()?.title || scoreName() }}</strong>: {{ found.measures.length }} measures, {{ clock(found.measures[0].start) }} to
             {{ clock(found.measures[found.measures.length - 1].end) }}, about {{ tempoOf(found) }} quarters a minute{{ shiftText(found) }};
@@ -175,6 +193,10 @@ export class SpectrumPage implements OnInit, OnDestroy {
   readonly rendering = signal(false);
   readonly showNotes = signal(true);
   readonly intro = signal(true);
+  readonly pages = signal('');
+  readonly wholeScore = signal<Score | null>(null);
+  readonly fromMeasure = signal(1);
+  readonly toMeasure = signal(1);
   private restored?: AudioBuffer;
   private both?: AudioBuffer;
   private compared = new Map<AlignStem, Promise<Spectrogram>>();
@@ -418,10 +440,14 @@ export class SpectrumPage implements OnInit, OnDestroy {
     this.scoreName.set(file.name);
     try {
       this.scoreStatus.set(/\.(pdf|png|jpe?g)$/i.test(file.name) ? 'Reading the score (this can take a minute)…' : 'Reading the score…');
-      const score = parseMusicXml(await this.scoreText(file));
-      if (!score.notes.length) throw new Error('No notes were found in the score.');
-      this.score.set(score);
-      await this.align(score);
+      const whole = parseMusicXml(await this.scoreText(file));
+      if (!whole.notes.length) throw new Error('No notes were found in the score.');
+      this.wholeScore.set(whole);
+      this.alignment.set(null);
+      // A long score is aligned a part at a time: its first DEFAULT_MEASURES measures to begin with.
+      this.fromMeasure.set(1);
+      this.toMeasure.set(whole.measures.length <= MOST_MEASURES ? whole.measures.length : DEFAULT_MEASURES);
+      await this.alignRange();
     } catch (error) {
       this.scoreError.set(`Could not use the score: ${errorMessage(error)}`);
     } finally {
@@ -435,7 +461,8 @@ export class SpectrumPage implements OnInit, OnDestroy {
     if (!/\.(pdf|png|jpe?g)$/i.test(file.name)) return file.text();
     let response: Response;
     try {
-      response = await fetch('/omr', { method: 'POST', body: file, headers: { 'content-type': 'application/octet-stream' } });
+      const pages = this.pages();
+      response = await fetch(`/omr${pages ? `?pages=${encodeURIComponent(pages)}` : ''}`, { method: 'POST', body: file, headers: { 'content-type': 'application/octet-stream' } });
     } catch {
       throw new Error('the score reader could not be reached.');
     }
@@ -449,15 +476,17 @@ export class SpectrumPage implements OnInit, OnDestroy {
     return unzipMusicXml(new Uint8Array(await response.arrayBuffer()));
   }
 
-  // How much of the song to search: two and a half times the score at the song's tempo, at least two minutes.
+  // How much of the song to search: for an intro two and a half times the score at the song's tempo, at least
+  // two minutes; otherwise all of it.
   private searchSeconds(score: Score): number {
+    if (!this.intro()) return this.duration();
     const last = score.measures[score.measures.length - 1];
     const beats = this.grid()?.beats;
     const beat = beats && beats.length > 2 ? (beats[beats.length - 1] - beats[0]) / (beats.length - 1) : score.tempo ? 60 / score.tempo : 0.6;
     return Math.min(this.duration(), Math.max(120, (last.start + last.length) * beat * 2.5 + 20));
   }
 
-  private comparedSpectrogram(stem: AlignStem, seconds: number, progress: (share: number) => void): Promise<Spectrogram> {
+  private comparedSpectrogram(stem: AlignStem, progress: (share: number) => void): Promise<Spectrogram> {
     let found = this.compared.get(stem);
     if (!found) {
       found = (async () => {
@@ -466,9 +495,9 @@ export class SpectrumPage implements OnInit, OnDestroy {
         const response = await fetch(url);
         if (!response.ok) throw new Error(`the ${stem} stem request failed (HTTP ${response.status}).`);
         const decoded = await this.context!.decodeAudioData(await response.arrayBuffer());
-        // The whole stem, so a later, longer search needs no second pass.
+        // The whole stem, so a later search elsewhere needs no second pass.
         const channels = Array.from({ length: decoded.numberOfChannels }, (_, index) => decoded.getChannelData(index));
-        const { signal } = monoSignal(channels.map(channel => channel.subarray(0, Math.ceil(Math.max(seconds, 180) * decoded.sampleRate))), decoded.sampleRate);
+        const { signal } = monoSignal(channels, decoded.sampleRate);
         return spectrogramOf(signal, this.rate, progress);
       })();
       found.catch(() => this.compared.delete(stem));
@@ -484,18 +513,13 @@ export class SpectrumPage implements OnInit, OnDestroy {
     const spectrograms: Partial<Record<AlignStem, Spectrogram>> = { other };
     for (const [index, stem] of COMPARED.entries()) {
       try {
-        spectrograms[stem] = await this.comparedSpectrogram(stem, seconds, share =>
+        spectrograms[stem] = await this.comparedSpectrogram(stem, share =>
           this.scoreStatus.set(`Looking at the ${stem} stem (${index + 1} of ${COMPARED.length})… ${(share * 100).toFixed(0)}%`));
       } catch (error) {
         // Alignment works with fewer stems.
         console.warn(`Score alignment without the ${stem} stem: ${errorMessage(error)}`);
       }
       if (this.destroyed) return;
-    }
-    // Usable stems only: covering the stretch searched.
-    for (const stem of COMPARED) {
-      const found = spectrograms[stem];
-      if (found && found.frames * HOP / found.rate < Math.min(seconds, 180) - 1) delete spectrograms[stem];
     }
     this.scoreStatus.set('Finding the score in the song…');
     await new Promise(resolve => setTimeout(resolve, 30));
@@ -543,15 +567,38 @@ export class SpectrumPage implements OnInit, OnDestroy {
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
   }
 
+  private async alignRange(): Promise<void> {
+    const whole = this.wholeScore();
+    if (!whole) return;
+    const score = scoreExcerpt(whole, this.fromMeasure(), this.toMeasure());
+    if (!score.notes.length) throw new Error('Those measures have no notes.');
+    this.score.set(score);
+    await this.align(score);
+  }
+
   // Aligned again with the score already given.
-  setIntro(value: boolean): void {
-    this.intro.set(value);
-    const score = this.score();
-    if (!score || this.aligning()) return;
+  private realign(): void {
+    if (!this.wholeScore() || this.aligning()) return;
     this.aligning.set(true);
     this.scoreError.set('');
-    void this.align(score).catch(error => this.scoreError.set(`Could not use the score: ${errorMessage(error)}`))
+    void this.alignRange().catch(error => this.scoreError.set(`Could not use the score: ${errorMessage(error)}`))
       .finally(() => { this.scoreStatus.set(''); this.aligning.set(false); });
+  }
+
+  setIntro(value: boolean): void {
+    this.intro.set(value);
+    this.realign();
+  }
+
+  setRange(from: number, to: number): void {
+    const count = this.wholeScore()?.measures.length ?? 1;
+    const first = Math.max(1, Math.min(count, Math.round(from) || 1));
+    const last = Math.max(first, Math.min(count, Math.round(to) || first, first + MOST_MEASURES - 1));
+    this.fromMeasure.set(first);
+    this.toMeasure.set(last);
+    // Past the first measures the score is no longer the song's beginning.
+    if (first > 1) this.intro.set(false);
+    this.realign();
   }
 
   setShowNotes(value: boolean): void {

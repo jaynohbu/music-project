@@ -526,6 +526,8 @@ footer { text-align: center; color: #64748b; padding: 20px var(--page-gutter); f
 .spectrum-heading label.spectrum-file { cursor: pointer; padding: 8px 14px; }
 .spectrum-file input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .spectrum-file:focus-within { outline: 2px solid #3459c9; outline-offset: 2px; }
+.spectrum-pages { width: 6em; }
+.spectrum-measure-input { width: 4.5em; }
 .spectrum-measures { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .spectrum-measures button { min-width: 2.6em; padding: 4px 8px; font-variant-numeric: tabular-nums; }
 .spectrum-measures button.off-beat { border-style: dashed; }

@@ -184,3 +184,14 @@ test('warp: a sequence found inside a longer one, slower', () => {
   assert.ok(path[6] >= 15 && path[6] <= 16);
   for (let i = 1; i < path.length; i++) assert.ok(path[i] >= path[i - 1]);
 });
+
+test('an excerpt of a score: measures from one to another, starting at zero, notes cut at its end', () => {
+  const score = songScore();
+  score.notes.push({ pitch: 40, start: 11, length: 3, measure: 2, part: 2, staff: 1 });
+  const part = xml.scoreExcerpt(score, 3, 4);
+  assert.deepEqual(part.measures.map(m => [m.number, m.start]), [['3', 0], ['4', 4]]);
+  assert.ok(part.notes.every(n => n.start >= 0 && n.start + n.length <= 8 + 1e-9));
+  assert.equal(part.notes.filter(n => n.part === 1).length, 8);
+  assert.equal(part.notes.find(n => n.pitch === 40).length, 3);
+  assert.deepEqual(xml.scoreExcerpt(score, 7, 99).measures.map(m => m.number), ['7', '8']);
+});

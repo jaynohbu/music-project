@@ -1,6 +1,8 @@
 // Reads a score PDF (or image) into MusicXML with Audiveris, for the spectrum page's score alignment while it runs
 // locally: `npm run omr` in web/, next to `npm run start` or `npm run start:aws` (the dev proxy sends /omr here).
-//   POST /omr  body: the PDF  ->  the compressed MusicXML (.mxl) Audiveris exports
+//   POST /omr?pages=2-3  body: the PDF  ->  the compressed MusicXML (.mxl) Audiveris exports
+// pages (optional): which pages to read, as numbers and ranges ("2", "2-3 5"); every page takes Audiveris about
+// ten seconds or more.
 // Audiveris (https://github.com/Audiveris/audiveris, AGPL) is run as a separate program, found at $AUDIVERIS or
 // ../.tools/Audiveris.app next to the repository. Only one score is read at a time.
 import { createServer } from 'node:http';
@@ -12,7 +14,7 @@ import { join } from 'node:path';
 
 const PORT = Number(process.env.OMR_PORT ?? 3005);
 const LARGEST = 40 * 1024 * 1024;
-const TIMEOUT_MS = 5 * 60 * 1000;
+const TIMEOUT_MS = 10 * 60 * 1000;
 const AUDIVERIS = process.env.AUDIVERIS
   ?? new URL('../../../.tools/Audiveris.app/Contents/MacOS/Audiveris', import.meta.url).pathname;
 const KINDS = { '%PDF': '.pdf', '\x89PNG': '.png', '\xff\xd8\xff': '.jpg' };
@@ -24,11 +26,12 @@ function kindOf(bytes) {
   return Object.entries(KINDS).find(([magic]) => head.startsWith(magic))?.[1];
 }
 
-function run(input, output) {
+function run(input, output, sheets) {
   return new Promise((resolve, reject) => {
-    const child = spawn(AUDIVERIS, ['-batch', '-export', '-output', output, input], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const options = sheets ? ['-sheets', ...sheets.map(String)] : [];
+    const child = spawn(AUDIVERIS, ['-batch', '-export', ...options, '-output', output, input], { stdio: ['ignore', 'pipe', 'pipe'] });
     let log = '';
-    const keep = chunk => { log = (log + chunk).slice(-4000); };
+    const keep = chunk => { log += chunk; };
     child.stdout.on('data', keep);
     child.stderr.on('data', keep);
     const timer = setTimeout(() => child.kill('SIGKILL'), TIMEOUT_MS);
@@ -69,7 +72,19 @@ createServer(async (request, response) => {
     const input = join(directory, `score${kind}`), output = join(directory, 'out');
     await writeFile(input, bytes);
     const started = Date.now();
-    const { code, log } = await run(input, output);
+    const asked = new URL(request.url, 'http://local').searchParams.get('pages')?.trim();
+    const chosen = asked && /^\d+(-\d+)?([ ,]+\d+(-\d+)?)*$/.test(asked) ? asked.split(/[ ,]+/) : undefined;
+    let { code, log } = await run(input, output, chosen);
+    // Audiveris exports nothing when any page cannot be read (a cover or a page of text): those are left out and
+    // the rest read again.
+    const pages = Number(/(\d+) sheets? in /.exec(log)?.[1] ?? 0);
+    const unread = new Set([...log.matchAll(/Sheet \S+#(\d+) flagged as invalid/g)].map(match => Number(match[1])));
+    if (!chosen && !(existsSync(output) && (await scores(output)).length) && pages > 1 && unread.size && unread.size < pages) {
+      const sheets = Array.from({ length: pages }, (_, index) => index + 1).filter(sheet => !unread.has(sheet));
+      console.log(`omr: pages ${[...unread].join(', ')} have no music; reading ${sheets.join(' ')}`);
+      ({ code, log } = await run(input, output, sheets));
+    }
+    log = log.slice(-4000);
     const found = existsSync(output) ? await scores(output) : [];
     console.log(`omr: ${bytes.length} bytes, exit ${code}, ${found.length} score(s), ${((Date.now() - started) / 1000).toFixed(1)} s`);
     if (!found.length) return send(response, 422, { message: 'No music could be read from the file.', log: log.slice(-1500) });

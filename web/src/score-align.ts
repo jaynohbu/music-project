@@ -16,7 +16,7 @@
 // The restoration then looks at the other stem alone: a score note is kept where the stem has its pitch (or an
 // octave either side, much louder) standing above that pitch's usual level while the note lasts; its start is the
 // stem's own attack near the written one, its end where the stem's sound dies away (no later than a little after the
-// written end), its velocity from how loud the attack is. Notes the other stem does not play are listed with the
+// written end), its velocity from how loud the attack is; a part given to the vocals is left to them. Notes the other stem does not play are listed with the
 // stems that do. Pure functions only (no DOM), so they can be unit-tested.
 import { HOP, LOWEST_PITCH, ROWS, ROWS_PER_SEMITONE, type Spectrogram } from './spectrogram';
 import type { Score, ScoreNote } from './musicxml';
@@ -52,6 +52,7 @@ const ATTACK_RISE_DB = 3;
 const LEAST_LENGTH = 0.06;
 const VELOCITY_DB = 36;
 const DECAY_DB = 25;
+const SPILL_DB = 24;                      // Another stem this much louder at a pitch: the other stem only has its spill.
 
 export interface StemFeatures { chroma: Float32Array; loudness: Float32Array; onsets: Float32Array; steps: number }
 export interface AlignedMeasure { index: number; number: string; start: number; end: number; onBeat: boolean }
@@ -485,11 +486,10 @@ export function alignScore({ score, spectrograms, seconds, beats, intro }: Align
   for (let i = 0; i < best.drawn.steps; i++) likeness += dot(best.drawn.chroma, i, heard, Math.max(0, Math.min(columns - 1, Math.round(timeAt(i * step / guess) / step))));
   likeness /= best.drawn.steps;
 
-  const elsewhere = (note: ScoreNote) => {
-    const stem = parts.find(part => part.part === note.part && part.staff === note.staff)?.stem;
-    return !!stem && stem !== 'other';
-  };
-  const { notes, missing } = restore(score, spectrograms, timeAt, best.shift, beatGap, elsewhere);
+  // A melody is the singer's, though the other stem's overtones sound at its pitches; a bass line the other stem
+  // also plays (a piano's left hand, a guitar's low strings) is restored where it has it.
+  const stemOf = (note: ScoreNote) => parts.find(part => part.part === note.part && part.staff === note.staff)?.stem ?? null;
+  const { notes, missing } = restore(score, spectrograms, timeAt, best.shift, beatGap, stemOf);
   return { measures, shift: best.shift, secondsPerQuarter, likeness, parts, notes, missing, timeAt };
 }
 
@@ -513,7 +513,7 @@ function floorsOf(spectrogram: Spectrogram, frames: number): Float32Array {
 }
 
 function restore(score: Score, spectrograms: Partial<Record<AlignStem, Spectrogram>>, timeAt: (quarter: number) => number,
-  shift: number, beatGap: (time: number) => number, elsewhere: (note: ScoreNote) => boolean): { notes: RestoredNote[]; missing: MissingNote[] } {
+  shift: number, beatGap: (time: number) => number, stemOf: (note: ScoreNote) => AlignStem | null): { notes: RestoredNote[]; missing: MissingNote[] } {
   const other = spectrograms.other!;
   const perSecond = other.rate / HOP;
   const frameAt = (time: number) => Math.round(time * perSecond);
@@ -546,9 +546,12 @@ function restore(score: Score, spectrograms: Partial<Record<AlignStem, Spectrogr
       const there = above('other', pitch + moved, from, to);
       if (there > level + OCTAVE_BETTER_DB && there >= PRESENT_DB) { octave = moved; level = there; }
     }
-    // A part given to another stem (a melody to the vocals) is that stem's, though the other stem's overtones or a
-    // doubling may sound at its pitches.
-    if (level < PRESENT_DB || elsewhere(note)) {
+    // A part given to another stem: the vocals' is theirs (the other stem's overtones sound at a melody's pitches);
+    // another's (a piano's left hand, given to the bass) is restored where the other stem has it, not where what it
+    // has is only the other stem's faint spill of that stem.
+    const own = stemOf(note);
+    const spill = !!own && own !== 'other' && (heard[own] ?? -Infinity) - level > SPILL_DB;
+    if (level < PRESENT_DB || own === 'vocals' || spill) {
       missing.push({ pitch, start, end, measure: note.measure, stems: stems.filter(stem => (heard[stem] ?? -Infinity) >= PRESENT_DB) });
       continue;
     }
