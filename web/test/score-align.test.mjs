@@ -275,3 +275,51 @@ test('MusicXML: repeat barlines and endings are read from every part, and taken'
   assert.deepEqual(score.marks, { 1: { forward: true }, 2: { endingStart: [1], endingStop: [1], backward: 2 }, 3: { endingStart: [2], endingStop: [2] } });
   assert.deepEqual(xml.unrollRepeats(score).measures.map(m => m.number), ['1', '2', '3', '2', '4']);
 });
+
+test('measure by measure: a repeat and a bar the score lacks are found, a drum bar with a beat too many is corrected', async () => {
+  // Eight bars, each its own chord (guitar, part 0) and melody (voice, part 1).
+  const chords = [[60, 64, 67], [57, 60, 64], [53, 57, 60], [55, 59, 62], [52, 55, 59], [50, 53, 57], [58, 62, 65], [52, 56, 59]];
+  const melodies = [[72, 74, 76, 74], [72, 71, 69, 71], [69, 72, 77, 76], [74, 71, 67, 74], [71, 67, 64, 67], [69, 65, 62, 65], [70, 74, 77, 74], [68, 71, 76, 71]];
+  const score = { title: '', parts: [{ id: 'P1', name: 'Guitar' }, { id: 'P2', name: 'Voice' }], chords: [], notes: [],
+    measures: chords.map((_, bar) => ({ number: String(bar + 1), start: bar * 4, length: 4, beats: 4, beatType: 4 })) };
+  chords.forEach((chord, bar) => {
+    for (const half of [0, 2]) for (const pitch of chord) score.notes.push({ pitch, start: bar * 4 + half, length: 2, measure: bar, part: 0, staff: 1 });
+    melodies[bar].forEach((pitch, q) => score.notes.push({ pitch, start: bar * 4 + q, length: 1, measure: bar, part: 1, staff: 1 }));
+  });
+  score.notes.sort((a, b) => a.start - b.start || a.pitch - b.pitch);
+  // As played: 1 2 3 4, a bar of its own (C# minor, no voice), 1 2 3 4 again, 5 6 7 8; from 2 s, half a second a beat.
+  const order = [0, 1, 2, 3, null, 0, 1, 2, 3, 4, 5, 6, 7], offset = 2, beat = 0.5;
+  const played = { ...score, measures: order.map((_, k) => ({ number: String(k + 1), start: k * 4, length: 4, beats: 4, beatType: 4 })), notes: [] };
+  order.forEach((bar, k) => {
+    const notes = bar === null ? [61, 64, 68].flatMap(pitch => [0, 2].map(half => ({ pitch, start: half, length: 2, part: 0 })))
+      : score.notes.filter(n => n.measure === bar).map(n => ({ ...n, start: n.start - bar * 4 }));
+    for (const n of notes) played.notes.push({ ...n, start: n.start + k * 4, measure: k, staff: 1 });
+  });
+  const seconds = offset + order.length * 4 * beat + 2;
+  const spectrograms = await spectrogramsOf(synthesize(played, { offset, beat, seconds }));
+  // The drum analysis's beats: right, but one too many in the third bar, and its bars counted from the second beat.
+  const truth = Array.from({ length: Math.floor((seconds - 0.5) / beat) }, (_, k) => k * beat);
+  const drum = [...truth.slice(0, 13), offset + 8 * beat + 0.25, ...truth.slice(13)].sort((a, b) => a - b);
+  const base = align.alignScore({ score, spectrograms, seconds, beats: drum, intro: true });
+  const fit = align.fitMeasures({ score, spectrograms, seconds, beats: drum }, base, 1);
+  assert.deepEqual(fit.placed.map(p => p.number), ['1', '2', '3', '4', '–', '1', '2', '3', '4', '5', '6', '7', '8']);
+  assert.equal(fit.corrections.extraBeats, 1);
+  assert.equal(fit.placed[2].corrected, 'extra-beat');
+  assert.equal(fit.placed[0].corrected, 'moved');   // The drum analysis's bars started a beat late.
+  // The corrected beats are the true ones from the first measure on, bars of four from it.
+  const first = fit.beats.findIndex(time => Math.abs(time - offset) < 0.03);
+  assert.equal(fit.firstBar, first);
+  for (let k = 0; k < order.length * 4; k++) assert.ok(Math.abs(fit.beats[first + k] - (offset + k * beat)) < 0.03, `beat ${k} at ${fit.beats[first + k]}`);
+  // The guitar is restored in every bar it plays; the free bar has no score notes.
+  assert.ok(fit.alignment.notes.length >= 70);
+  assert.ok(!fit.alignment.notes.some(n => n.measure === 4));
+});
+
+test('drum hits moved to corrected beats: the same moments, on the new grid', () => {
+  const from = [0, 0.5, 1, 1.25, 1.5, 2, 2.5];   // A false beat at 1.25.
+  const to = [0, 0.5, 1, 1.5, 2, 2.5];
+  const hits = [{ unit: 0, drum: 'kick' }, { unit: 8, drum: 'snare' }, { unit: 16, drum: 'kick' }, { unit: 20, drum: 'snare' }];
+  assert.deepEqual(align.regridHits(hits, from, to).map(hit => hit.unit), [0, 8, 12, 16]);
+  assert.deepEqual(align.measureBeats(from, 0, 5, 4), [0, 0.5, 1, 1.5]);
+  assert.deepEqual(align.measureBeats([0, 0.5, 1.5, 2], 0, 3, 4), [0, 0.5, 1, 1.5]);
+});

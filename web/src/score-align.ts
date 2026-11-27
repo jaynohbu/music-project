@@ -19,7 +19,7 @@
 // written end), its velocity from how loud the attack is; a part given to the vocals is left to them. Notes the other stem does not play are listed with the
 // stems that do. Pure functions only (no DOM), so they can be unit-tested.
 import { HOP, LOWEST_PITCH, ROWS, ROWS_PER_SEMITONE, type Spectrogram } from './spectrogram';
-import type { Score, ScoreNote } from './musicxml';
+import type { Score, ScoreMeasure, ScoreNote } from './musicxml';
 import type { HarmonyGrid, HarmonyNote } from './services';
 
 export type AlignStem = 'vocals' | 'bass' | 'drums' | 'other';
@@ -647,4 +647,263 @@ export function scoreMask(notes: RestoredNote[], frames: number, rate: number): 
     }
   }
   return kept;
+}
+
+// Measure by measure: the score's measures laid on the song, each over the drum analysis's beats it fits best, the
+// drum bars corrected to them.
+//
+// The song is gone through once (dynamic programming over its beats). Each step lays a score measure over the next
+// beats: as many as the measure has quarters, or one or two more or fewer where the drum analysis has a beat too
+// many or too few (each such beat costs STRETCH), and costs how unlike the song it is there (each stem against the
+// parts given to it, an eighth note at a time; a pitched stem no part is for, playing loud, costs too). The next
+// measure in the score costs nothing more; any other (a repeat, a jump, the same measure again) costs JUMP. Where
+// the song has bars the score does not (a longer interlude, an outro), a free bar of about four beats is laid,
+// costing FREE_BAR as loud as the song is there. The cheapest way through is taken.
+//
+// The beats are then made again from it: each measure as many beats as its quarters, spread evenly over the drum
+// beats it was laid on, every free bar four; the beats before the first measure stay as they were. A drum bar is
+// counted corrected where its measure was laid over more or fewer beats than it has, or where it starts on a beat
+// that was not a downbeat before.
+export interface PlacedMeasure {
+  measure: number | null;                 // Index of the score measure; null for a bar the score does not have.
+  number: string;
+  from: number;                           // The drum beat it starts on (index in the drum analysis's beats).
+  drumBeats: number;                      // How many of those beats it covers.
+  start: number; end: number;             // Song seconds.
+  cost: number;
+  corrected: '' | 'extra-beat' | 'missing-beat' | 'moved';
+}
+export interface MeasureFit {
+  placed: PlacedMeasure[];
+  beats: number[]; firstBar: number;      // The corrected beats; bars of four from firstBar.
+  corrections: { bars: number; extraBeats: number; missingBeats: number; moved: number; checked: number };
+  alignment: Alignment;                   // The score as laid (measures in song order), restored.
+}
+const STRETCH = 0.3, JUMP = 0.5, FREE_BAR = 0.75, FREE_QUIET = 0.1, SLOTS_PER_QUARTER = 2;
+
+// The beat times of a measure of `quarters` laid over drum beats from..from + count: the drum beats themselves, less
+// the ones that most break their even spacing where there are too many, with one in the middle of the widest gap
+// where there are too few.
+export function measureBeats(beats: number[], from: number, count: number, quarters: number): number[] {
+  const times = Array.from({ length: count + 1 }, (_, k) => timeAtBeat(beats, from + k));
+  const spread = (list: number[]) => {
+    const gaps = list.slice(1).map((time, k) => time - list[k]), mean = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+    return gaps.reduce((total, gap) => total + (gap - mean) ** 2, 0);
+  };
+  while (times.length - 1 > quarters) {
+    let best = 1, least = Infinity;
+    for (let k = 1; k < times.length - 1; k++) {
+      const value = spread([...times.slice(0, k), ...times.slice(k + 1)]);
+      if (value < least) { least = value; best = k; }
+    }
+    times.splice(best, 1);
+  }
+  while (times.length - 1 < quarters) {
+    let widest = 0;
+    for (let k = 1; k < times.length - 1; k++) if (times[k + 1] - times[k] > times[widest + 1] - times[widest]) widest = k;
+    times.splice(widest + 1, 0, (times[widest] + times[widest + 1]) / 2);
+  }
+  return times.slice(0, quarters);
+}
+
+export function fitMeasures({ score, spectrograms, beats, target }: AlignInput & { beats: number[] }, base: Alignment, firstBar: number): MeasureFit {
+  const other = spectrograms.other!;
+  const step = FEATURE_FRAMES * HOP / other.rate;
+  const stems = PITCHED_STEMS.filter(stem => spectrograms[stem] && spectrograms[stem]!.rate === other.rate);
+  const features = Object.fromEntries(stems.map(stem => [stem, stemFeatures(spectrograms[stem]!)])) as Partial<Record<AlignStem, StemFeatures>>;
+  const steps = Math.min(...stems.map(stem => features[stem]!.steps));
+  const stemOf = (note: ScoreNote) => base.parts.find(part => part.part === note.part && part.staff === note.staff)?.stem ?? null;
+  const assigned = stems.filter(stem => base.parts.some(part => part.stem === stem));
+  const unassigned = base.parts.some(part => !part.stem);
+  const uncovered = unassigned ? [] : stems.filter(stem => !assigned.includes(stem));
+  // The song's pitch classes over a stretch of drum beats, per stem, as loud as played (mean over its steps), from
+  // running sums over the steps.
+  const sums = Object.fromEntries(stems.map(stem => {
+    const loudness = features[stem]!.loudness, running = new Float64Array((steps + 1) * PITCH_CLASSES);
+    for (let j = 0; j < steps; j++) for (let d = 0; d < PITCH_CLASSES; d++) running[(j + 1) * PITCH_CLASSES + d] = running[j * PITCH_CLASSES + d] + loudness[j * PITCH_CLASSES + d];
+    return [stem, running];
+  })) as Partial<Record<AlignStem, Float64Array>>;
+  const songSlot = (stem: AlignStem, from: number, to: number, out: Float64Array) => {
+    const first = Math.max(0, Math.min(steps - 1, Math.floor(timeAtBeat(beats, from) / step)));
+    const last = Math.min(steps, Math.max(first + 1, Math.floor(timeAtBeat(beats, to) / step)));
+    const running = sums[stem]!;
+    for (let d = 0; d < PITCH_CLASSES; d++) out[d] = (running[last * PITCH_CLASSES + d] - running[first * PITCH_CLASSES + d]) / (last - first);
+    return out;
+  };
+  // Each score measure's pitch classes per eighth, per group of parts (a stem's, or those given to none).
+  type Group = AlignStem | 'together';
+  const groups: Group[] = [...assigned, ...(unassigned ? ['together' as const] : [])];
+  const measureSlots = score.measures.map((measure, index) => {
+    const slots = Math.max(1, Math.round(measure.length * SLOTS_PER_QUARTER));
+    const table = new Map<Group, Float64Array[]>(groups.map(group => [group, Array.from({ length: slots }, () => new Float64Array(PITCH_CLASSES))]));
+    for (const note of score.notes) {
+      if (note.measure !== index) continue;
+      const group: Group = stemOf(note) ?? 'together';
+      const rows = table.get(group);
+      if (!rows) continue;
+      const pitchClass = (((note.pitch + base.shift) % 12) + 12) % 12;
+      for (let slot = 0; slot < slots; slot++) {
+        const q0 = measure.start + slot / SLOTS_PER_QUARTER, q1 = q0 + 1 / SLOTS_PER_QUARTER;
+        const overlap = Math.min(q1, note.start + note.length) - Math.max(q0, note.start);
+        if (overlap > 0) rows[slot][pitchClass] += overlap * SLOTS_PER_QUARTER * (note.start >= q0 - 1e-6 && note.start < q1 ? 1 : 0.6);
+      }
+    }
+    return { slots, table };
+  });
+  const cosine = (a: Float64Array, b: Float64Array) => {
+    let ab = 0, aa = 0, bb = 0;
+    for (let d = 0; d < PITCH_CLASSES; d++) { ab += a[d] * b[d]; aa += a[d] * a[d]; bb += b[d] * b[d]; }
+    return aa > 0 && bb > 0 ? ab / Math.sqrt(aa * bb) : 0;
+  };
+  const sum = (a: Float64Array) => a.reduce((total, value) => total + value, 0);
+  const heard = new Float64Array(PITCH_CLASSES), part = new Float64Array(PITCH_CLASSES);
+  // How unlike the song a measure is laid over drum beats from..from + count.
+  const unlike = (index: number, from: number, count: number) => {
+    const { slots, table } = measureSlots[index];
+    let total = 0, counted = 0;
+    for (let slot = 0; slot < slots; slot++) {
+      const b0 = from + slot / slots * count, b1 = from + (slot + 1) / slots * count;
+      for (const group of groups) {
+        const written = table.get(group)![slot];
+        if (group === 'together') {
+          heard.fill(0);
+          for (const stem of stems) { songSlot(stem, b0, b1, part); for (let d = 0; d < PITCH_CLASSES; d++) heard[d] += part[d]; }
+        } else songSlot(group, b0, b1, heard);
+        const writtenSum = sum(written), heardSum = sum(heard);
+        if (writtenSum === 0 && heardSum < QUIET) continue;
+        total += writtenSum === 0 ? Math.min(1, heardSum) : heardSum < QUIET ? 1 : 1 - cosine(written, heard);
+        counted++;
+      }
+      for (const stem of uncovered) { total += UNCOVERED_WEIGHT * Math.min(1, sum(songSlot(stem, b0, b1, heard))); }
+    }
+    return counted ? total / counted : 0.5;
+  };
+  // How loud the pitched stems are over drum beats (0 to 1), for a free bar's cost.
+  const loudness = (from: number, count: number) => {
+    let total = 0;
+    for (const stem of stems) total += sum(songSlot(stem, from, from + count, heard));
+    return Math.min(1, total);
+  };
+
+  // States: 0..M-1 after measure m; M..2M-1 in free bars after measure m - M; 2M before any measure.
+  const M = score.measures.length, N = beats.length, S = 2 * M + 1, START = 2 * M;
+  const total = new Float64Array(N * S).fill(Infinity);
+  const back = new Int32Array(N * S).fill(-1), backBeats = new Int8Array(N * S);
+  // The first measure may start on any of the first few beats... or anywhere, after free bars.
+  for (let i = 0; i < Math.min(N, 8); i++) total[i * S + START] = 0;
+  const lengths = (quarters: number) => [-1, 0, 1].map(change => Math.round(quarters) + change).filter(count => count >= 1);
+  for (let i = 0; i < N - 1; i++) {
+    let cheapest = Infinity;
+    for (let s = 0; s < S; s++) cheapest = Math.min(cheapest, total[i * S + s]);
+    if (cheapest === Infinity) continue;
+    const relax = (to: number, state: number, cost: number, from: number, count: number) => {
+      if (to >= N || cost >= total[to * S + state]) return;
+      total[to * S + state] = cost; back[to * S + state] = from; backBeats[to * S + state] = count;
+    };
+    for (let m = 0; m < M; m++) {
+      // The cheapest way into measure m from here: after the measure before it (or free bars after it), or a jump.
+      const previous = m > 0 ? Math.min(total[i * S + m - 1], total[i * S + M + m - 1]) : total[i * S + START];
+      let into = previous, from = m > 0 ? (total[i * S + m - 1] <= total[i * S + M + m - 1] ? m - 1 : M + m - 1) : START;
+      const jump = cheapest + JUMP;
+      if (jump < into) {
+        into = jump;
+        for (let s = 0; s < S; s++) if (total[i * S + s] === cheapest) { from = s; break; }
+      }
+      if (into === Infinity) continue;
+      const quarters = score.measures[m].length;
+      for (const count of lengths(quarters)) {
+        if (i + count >= N) continue;
+        const cost = into + unlike(m, i, count) + STRETCH * Math.abs(count - Math.round(quarters));
+        relax(i + count, m, cost, i * S + from, count);
+      }
+    }
+    // A free bar after whatever came last.
+    for (let s = 0; s < S; s++) {
+      const here = total[i * S + s];
+      if (here === Infinity) continue;
+      const free = s === START ? START : s < M ? M + s : s;
+      for (const count of [3, 4, 5]) {
+        if (i + count >= N) continue;
+        relax(i + count, free, here + FREE_QUIET + FREE_BAR * loudness(i, count) + STRETCH * Math.abs(count - 4), i * S + s, count);
+      }
+    }
+  }
+  // The end: the cheapest state on one of the last beats.
+  let end = -1, best = Infinity;
+  for (let i = Math.max(0, N - 6); i < N; i++) for (let s = 0; s < S; s++) if (total[i * S + s] < best) { best = total[i * S + s]; end = i * S + s; }
+  if (end < 0) throw new Error('The score could not be laid on the song\'s beats.');
+  const steps_: { from: number; count: number; state: number; to: number }[] = [];
+  for (let at = end; back[at] >= 0; at = back[at]) {
+    const to = Math.floor(at / S), count = backBeats[at];
+    steps_.push({ from: to - count, count, state: at % S, to });
+  }
+  steps_.reverse();
+
+  // The corrected beats and what changed.
+  const oldDownbeats = new Set<number>();
+  for (let b = ((firstBar % 4) + 4) % 4; b < N; b += 4) oldDownbeats.add(b);
+  const first = steps_.length ? steps_[0].from : 0;
+  const newBeats = beats.slice(0, first);
+  const placed: PlacedMeasure[] = [];
+  const corrections = { bars: 0, extraBeats: 0, missingBeats: 0, moved: 0, checked: 0 };
+  let pickupBeats = 0;
+  for (const { from, count, state } of steps_) {
+    const real = state < M ? state : null;
+    const quarters = real !== null ? Math.max(1, Math.round(score.measures[real].length)) : 4;
+    if (real !== null && placed.length === 0 && quarters < 4) pickupBeats = quarters;
+    newBeats.push(...measureBeats(beats, from, count, quarters));
+    const corrected: PlacedMeasure['corrected'] = count > quarters ? 'extra-beat' : count < quarters ? 'missing-beat'
+      : !oldDownbeats.has(from) && !(placed.length === 0 && pickupBeats) ? 'moved' : '';
+    corrections.checked++;
+    if (corrected) {
+      corrections.bars++;
+      if (corrected === 'extra-beat') corrections.extraBeats++;
+      else if (corrected === 'missing-beat') corrections.missingBeats++;
+      else corrections.moved++;
+    }
+    placed.push({
+      measure: real, number: real !== null ? score.measures[real].number : '–', from, drumBeats: count,
+      start: timeAtBeat(beats, from), end: timeAtBeat(beats, from + count), cost: 0, corrected,
+    });
+  }
+  const last = steps_.length ? steps_[steps_.length - 1].to : N;
+  newBeats.push(...beats.slice(last));
+  const newFirstBar = first + pickupBeats;
+
+  // The score as laid: its measures in song order (free bars empty), restored on the corrected beats.
+  const measures: ScoreMeasure[] = [], notes: ScoreNote[] = [];
+  let at = 0;
+  placed.forEach((place, index) => {
+    const quarters = place.measure !== null ? Math.max(1, Math.round(score.measures[place.measure].length)) : 4;
+    if (place.measure !== null) {
+      const measure = score.measures[place.measure];
+      for (const note of score.notes) {
+        if (note.measure === place.measure) notes.push({ ...note, start: note.start - measure.start + at, measure: index });
+      }
+    }
+    measures.push({ number: place.number, start: at, length: quarters, beats: quarters, beatType: 4 });
+    at += quarters;
+  });
+  const laid: Score = { ...score, measures, notes, chords: [] };
+  const timeAt = (quarter: number) => timeAtBeat(newBeats, first + quarter);
+  const beatGap = (time: number) => {
+    const position = beatPosition(newBeats, time), index = Math.max(0, Math.min(newBeats.length - 2, Math.floor(position)));
+    return newBeats[index + 1] - newBeats[index];
+  };
+  const restored = restore(laid, spectrograms, target ?? { spectrogram: other, stems: ['other'] }, timeAt, base.shift, beatGap, stemOf);
+  const aligned: AlignedMeasure[] = placed.map((place, index) => ({ index, number: place.number, start: place.start, end: place.end, onBeat: !place.corrected }));
+  const span = placed.length ? placed[placed.length - 1].end - placed[0].start : 0;
+  return {
+    placed, beats: newBeats, firstBar: newFirstBar, corrections,
+    alignment: {
+      ...base, measures: aligned, notes: restored.notes, missing: restored.missing, timeAt,
+      secondsPerQuarter: at > 0 ? span / at : base.secondsPerQuarter,
+    },
+  };
+}
+
+// Drum hits (sixteenths from the first beat) moved from one set of beats to another: each at its time on the old
+// beats, as a sixteenth of the new.
+export function regridHits<Hit extends { unit: number }>(hits: Hit[], from: number[], to: number[]): Hit[] {
+  return hits.map(hit => ({ ...hit, unit: Math.max(0, Math.round(beatPosition(to, timeAtBeat(from, hit.unit / 4)) * 4)) }));
 }

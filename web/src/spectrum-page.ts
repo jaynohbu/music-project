@@ -12,7 +12,9 @@ import { ChangeDetectionStrategy, Component, ElementRef, OnDestroy, OnInit, inje
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { StemsService, errorMessage, type HarmonyGrid, type Job } from './services';
 import { type Score, parseMusicXml, scoreExcerpt, unrollRepeats, unzipMusicXml } from './musicxml';
-import { type AlignStem, type Alignment, alignScore, restoredScore, scoreMask } from './score-align';
+import { type AlignStem, type Alignment, type MeasureFit, alignScore, fitMeasures, regridHits, restoredScore, scoreMask } from './score-align';
+import { scoreSheet } from './score-sheet';
+import type { DrumHit } from './services';
 import { harmonyMidi } from './score-export';
 import { renderNotes } from './accompaniment-player';
 import {
@@ -86,6 +88,12 @@ function blockPeaks(signal: Float32Array, block: number) {
             <input type="text" class="spectrum-pages" inputmode="numeric" placeholder="all" [value]="pages()" (change)="pages.set($any($event.target).value.trim())"
               [disabled]="aligning()" title="Page numbers and ranges, such as 2 or 2-3; each page takes the score reader ten seconds or more">
           </label>
+          <label>Lay the score
+            <select (change)="setPlacement($any($event.target).value)" [disabled]="aligning()">
+              <option value="bars" [selected]="placement() === 'bars'">measure by measure on the drum bars</option>
+              <option value="warp" [selected]="placement() === 'warp'">as written, from start to end</option>
+            </select>
+          </label>
           <label>Extract from
             <select (change)="setExtractFrom($any($event.target).value)" [disabled]="aligning()">
               <option value="other+bass" [selected]="extractFrom() === 'other+bass'">the Harmonic and bass stems</option>
@@ -121,6 +129,13 @@ function blockPeaks(signal: Float32Array, block: number) {
             @if (repeatText()) { <span class="hint">{{ repeatText() }}</span> }
           </div>
         }
+        @if (fit(); as laid) {
+          <p>Drum bars checked: {{ laid.corrections.checked }}; corrected {{ laid.corrections.bars }}
+            ({{ laid.corrections.extraBeats }} had a beat too many, {{ laid.corrections.missingBeats }} a beat too few,
+            {{ laid.corrections.moved }} started off the downbeat). {{ freeBars(laid) }} bars of the song are not in the score.
+            <button type="button" class="secondary" (click)="openDrumScore(false)">Drum score as analysed</button>
+            <button type="button" class="secondary" (click)="openDrumScore(true)">Drum score corrected</button></p>
+        }
         @if (alignment(); as found) {
           <p><strong>{{ score()?.title || scoreName() }}</strong>: {{ found.measures.length }} measures, {{ clock(found.measures[0].start) }} to
             {{ clock(found.measures[found.measures.length - 1].end) }}, about {{ tempoOf(found) }} quarters a minute{{ shiftText(found) }};
@@ -147,7 +162,7 @@ function blockPeaks(signal: Float32Array, block: number) {
             light blue, and the overtones above them), and everything else; both play together, each can be muted while playing.</p>
           <div class="spectrum-measures" role="group" aria-label="Measures">
             @for (measure of found.measures; track measure.index) {
-              <button type="button" class="secondary" [class.off-beat]="!measure.onBeat" (click)="seekTo(measure.start)"
+              <button type="button" class="secondary" [class.off-beat]="!measure.onBeat" [title]="measure.onBeat ? '' : 'Drum bar corrected here'" (click)="seekTo(measure.start)"
                 [attr.aria-label]="'Measure ' + measure.number + ' at ' + clock(measure.start)">{{ measure.number }}</button>
             }
           </div>
@@ -233,6 +248,10 @@ export class SpectrumPage implements OnInit, OnDestroy {
   readonly pages = signal('');
   readonly wholeScore = signal<Score | null>(null);
   readonly repeatText = signal('');
+  readonly placement = signal<'bars' | 'warp'>('bars');
+  readonly fit = signal<MeasureFit | null>(null);
+  private printedScore?: Score;
+  private drumHits: DrumHit[] = [];
   readonly fromMeasure = signal(1);
   readonly toMeasure = signal(1);
   private restored?: AudioBuffer;
@@ -327,9 +346,10 @@ export class SpectrumPage implements OnInit, OnDestroy {
     try {
       const response = await fetch(shown.url);
       if (!response.ok) return;
-      const { beats, firstBar } = await response.json() as HarmonyGrid;
+      const { beats, firstBar, stems } = await response.json() as HarmonyGrid & { stems?: Record<string, { hits?: DrumHit[] } | undefined> };
       if (!this.destroyed && beats?.length > 1) {
         this.grid.set({ beats, firstBar });
+        this.drumHits = stems?.['drums']?.hits ?? [];
         this.draw();
       }
     } catch { /* The page works without beats. */ }
@@ -510,6 +530,7 @@ export class SpectrumPage implements OnInit, OnDestroy {
       // The score as played: its repeats taken, so it follows the song from start to end.
       const printed = parseMusicXml(await this.scoreText(file));
       if (!printed.notes.length) throw new Error('No notes were found in the score.');
+      this.printedScore = printed;
       const whole = unrollRepeats(printed);
       this.repeatText.set(whole.measures.length > printed.measures.length
         ? `Repeats taken: ${printed.measures.length} printed measures are played as ${whole.measures.length}.` : '');
@@ -588,12 +609,24 @@ export class SpectrumPage implements OnInit, OnDestroy {
       beats: this.grid()?.beats, intro: this.intro(),
       target: mixed ? { spectrogram: mixed.spectrogram, stems: ['other', 'bass'] } : undefined,
     });
-    this.alignment.set(found);
+    // Measure by measure on the drum bars, from the printed score (its repeats are found, not read), with the key and
+    // parts the alignment found.
+    const grid = this.grid();
+    let fit: MeasureFit | null = null;
+    if (this.placement() === 'bars' && grid && this.printedScore) {
+      this.scoreStatus.set('Laying the score on the song measure by measure…');
+      await new Promise(resolve => setTimeout(resolve, 30));
+      fit = fitMeasures({ score: this.printedScore, spectrograms, seconds, beats: grid.beats,
+        target: mixed ? { spectrogram: mixed.spectrogram, stems: ['other', 'bass'] } : undefined }, found, grid.firstBar);
+    }
+    this.fit.set(fit);
+    this.alignment.set(fit?.alignment ?? found);
     this.restored = this.both = this.scorePart = this.scoreRest = this.extracted = undefined;
     this.separatedShare.set(null);
-    void this.separate(found);
-    this.seekTo(Math.max(0, found.measures[0].start - 1));
-    void this.renderRestored(found);
+    const shown = this.alignment()!;
+    void this.separate(shown);
+    this.seekTo(Math.max(0, shown.measures[0].start - 1));
+    void this.renderRestored(shown);
   }
 
   // The other and bass stems as one signal (the other stem's length) and its spectrogram, made once.
@@ -699,6 +732,29 @@ export class SpectrumPage implements OnInit, OnDestroy {
     this.scoreError.set('');
     void this.alignRange().catch(error => this.scoreError.set(`Could not use the score: ${errorMessage(error)}`))
       .finally(() => { this.scoreStatus.set(''); this.aligning.set(false); });
+  }
+
+  setPlacement(value: 'bars' | 'warp'): void {
+    this.placement.set(value);
+    this.realign();
+  }
+
+  freeBars(laid: MeasureFit): number {
+    return laid.placed.filter(place => place.measure === null).length;
+  }
+
+  // The drum part's score, on the drum analysis's beats or on the corrected ones, in a new tab to see or print.
+  openDrumScore(corrected: boolean): void {
+    const grid = this.grid(), laid = this.fit();
+    if (!grid || !laid) return;
+    const hits = corrected ? regridHits(this.drumHits, grid.beats, laid.beats) : this.drumHits;
+    const html = scoreSheet({ chords: [], notes: [], hits }, 'drums', corrected ? { beats: laid.beats, firstBar: laid.firstBar } : grid, {
+      title: this.job()?.title || 'Drums', subtitle: corrected ? `Drums · bars corrected by the score (${laid.corrections.bars})` : 'Drums · as analysed',
+      page: (page, pages) => `${page} / ${pages}`,
+    });
+    const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+    window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
   }
 
   setExtractFrom(value: 'other' | 'other+bass'): void {
@@ -934,7 +990,8 @@ export class SpectrumPage implements OnInit, OnDestroy {
     for (const measure of found.measures) {
       const at = Math.round(x(measure.start));
       if (at < -40 || at > width) continue;
-      context.fillStyle = 'rgba(255, 214, 10, 0.9)';
+      // Orange where the drum bars were corrected (or, as written, the measure is off the beats).
+      context.fillStyle = measure.onBeat ? 'rgba(255, 214, 10, 0.9)' : 'rgba(255, 120, 40, 0.95)';
       context.fillRect(at, 0, 2, SPECTRUM_HEIGHT);
       context.fillText(measure.number, at + 4, 14);
     }
