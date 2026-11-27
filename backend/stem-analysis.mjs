@@ -53,7 +53,8 @@ function checkAccompaniment(value) {
   if (value === undefined) return true;
   const ranked = part => part && Array.isArray(part.styles) && part.styles.every(name => typeof name === 'string')
     && Array.isArray(part.sounds) && part.sounds.every(Number.isInteger);
-  return typeof value === 'object' && typeof value.genre === 'string' && ranked(value.guitar) && ranked(value.keys);
+  return typeof value === 'object' && typeof value.genre === 'string' && ranked(value.guitar) && ranked(value.keys)
+    && (value.closest === undefined || ['guitar', 'keys'].includes(value.closest));
 }
 
 export function checkHarmony(value, duration) {

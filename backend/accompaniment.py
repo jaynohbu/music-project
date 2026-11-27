@@ -120,7 +120,11 @@ def choose(stems, beats, first_bar, title=''):
     heard = audio_embedding(clap, clips(other, 8)).mean(axis=0)
     target = playing(stems['other'], beats, first_bar)
     result = {'genre': genres[0][0], 'genres': [[name, round(score, 3)] for name, score in genres[:4]]}
+    nearest = {}
     for family in ('guitar', 'keys'):
         sounds = sorted(group[family], key=lambda program: -float(np.array(fingerprints[str(program)]) @ heard))
         result[family] = {'styles': rank_styles(group['styles'], styles['profiles'], target, family), 'sounds': sounds}
+        nearest[family] = float(np.array(fingerprints[str(sounds[0])]) @ heard) if sounds else -1.0
+    # The family whose closest sound is nearer the stem: what a part playing the score starts with.
+    result['closest'] = max(nearest, key=nearest.get)
     return result

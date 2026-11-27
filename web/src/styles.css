@@ -531,3 +531,14 @@ footer { text-align: center; color: #64748b; padding: 20px var(--page-gutter); f
 .spectrum-measures { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .spectrum-measures button { min-width: 2.6em; padding: 4px 8px; font-variant-numeric: tabular-nums; }
 .spectrum-measures button.off-beat { border-style: dashed; }
+
+/* The Harmonic track's score: upload, and the part that plays it. */
+.score-upload { position: relative; cursor: pointer; }
+.score-upload.disabled { opacity: .55; cursor: default; }
+.score-upload input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.score-upload:focus-within { outline: 2px solid #3459c9; outline-offset: 2px; }
+.score-pages { display: inline-flex; align-items: center; gap: 6px; font-size: .85rem; }
+.score-pages input { width: 5.5em; }
+.score-part { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 10px 0 4px; font-size: .9rem; }
+.score-part label { display: inline-flex; align-items: center; gap: 6px; }
+.score-part select { max-width: 16em; }

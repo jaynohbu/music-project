@@ -333,7 +333,7 @@ export interface RegeneratedPart extends Lyrics { resultId?: string }
 // fromScore: the Harmonic score comes from an uploaded score aligned with the stems, not from the analysis.
 export interface Harmony extends Lyrics {
   stems?: Record<string, RegeneratedPart | undefined>; stale?: boolean; previous?: Lyrics;
-  fromScore?: { title: string; measures: number; notes: number; correctedBars: number };
+  fromScore?: { title: string; measures: number; notes: number; correctedBars: number; family?: 'guitar' | 'keys' };
 }
 export interface LyricWord { start: number; end: number; text: string }
 export interface LyricLine { start: number; end: number; words: LyricWord[] }
@@ -351,6 +351,8 @@ export interface HarmonyPart {
   // shifts: how many semitones each playing is moved from the first (a riff played on the fourth).
   repeats?: { family: number; bars: number; members: number[]; shifts?: number[] }[];
   corrections?: { added: number; removed: { unit: number; pitch: number; length: number }[] };
+  // Set on a part made from an uploaded score: its sung line (the part given to the vocals), at its written places.
+  melody?: HarmonyNote[];
 }
 // start and end: as played, in song seconds (unit and length: as written on the grid); confidence: how surely the
 // note was heard, 0 to 1; velocity: how loud it was played, 1 to 127; voted: added by the vote among repeated passages.

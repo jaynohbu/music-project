@@ -67,7 +67,8 @@ export interface RestoredNote {
   heard: Partial<Record<AlignStem, number>>;
   octave: number;                         // Semitones moved to the octave the stem plays: -12, 0 or 12.
 }
-export interface MissingNote { pitch: number; start: number; end: number; measure: number; stems: AlignStem[] }
+// part: the stem the note's part was given to (a melody: the vocals).
+export interface MissingNote { pitch: number; start: number; end: number; measure: number; stems: AlignStem[]; part?: AlignStem | null }
 export interface Alignment {
   measures: AlignedMeasure[];
   shift: number;                          // Semitones the song is from the score's written key.
@@ -570,7 +571,7 @@ function restore(score: Score, spectrograms: Partial<Record<AlignStem, Spectrogr
     const own = stemOf(note);
     const spill = !!own && !target.stems.includes(own) && (heard[own] ?? -Infinity) - level > SPILL_DB;
     if (level < PRESENT_DB || own === 'vocals' || spill) {
-      missing.push({ pitch, start, end, measure: note.measure, stems: stems.filter(stem => (heard[stem] ?? -Infinity) >= PRESENT_DB) });
+      missing.push({ pitch, start, end, measure: note.measure, stems: stems.filter(stem => (heard[stem] ?? -Infinity) >= PRESENT_DB), part: own });
       continue;
     }
     const played = pitch + octave;
@@ -584,7 +585,7 @@ function restore(score: Score, spectrograms: Partial<Record<AlignStem, Spectrogr
     if (rise < ATTACK_RISE_DB) {
       // The same pitch sounding on from the note before it is not this note unless the stem strikes it again.
       if (struck.has(note)) {
-        missing.push({ pitch, start, end, measure: note.measure, stems: stems.filter(stem => !target.stems.includes(stem) && (heard[stem] ?? -Infinity) >= PRESENT_DB) });
+        missing.push({ pitch, start, end, measure: note.measure, stems: stems.filter(stem => !target.stems.includes(stem) && (heard[stem] ?? -Infinity) >= PRESENT_DB), part: own });
         continue;
       }
       attack = from;
@@ -918,7 +919,7 @@ export interface HarmonyDocument {
   [field: string]: unknown;
 }
 export function harmonyFromScore(analysis: HarmonyDocument, alignment: Alignment, fit: MeasureFit | null,
-  fromScore: { title: string; correctedBars: number }): HarmonyDocument {
+  fromScore: { title: string; correctedBars: number; family?: 'guitar' | 'keys' }): HarmonyDocument {
   const beats = fit?.beats ?? analysis.beats, firstBar = fit?.firstBar ?? analysis.firstBar;
   const unitAt = (time: number) => Math.round(beatPosition(beats, time) * 4);
   const moved = (part: HarmonyPart | undefined): HarmonyPart | undefined => part && {
@@ -934,11 +935,19 @@ export function harmonyFromScore(analysis: HarmonyDocument, alignment: Alignment
     const end = unitAt(alignment.timeAt(note.written.start + note.written.length));
     return { start: note.start, end: note.end, pitch: note.pitch, unit, length: Math.max(1, end - unit), velocity: note.velocity, confidence: 1 };
   }).sort((a, b) => a.start - b.start || a.pitch - b.pitch);
+  // The score's sung line (the parts given to the vocals), where the score writes it, for parts that play the score.
+  const melody: HarmonyNote[] = alignment.missing.filter(note => note.part === 'vocals').map(note => {
+    const unit = Math.max(0, unitAt(note.start));
+    return { start: note.start, end: note.end, pitch: note.pitch, unit, length: Math.max(1, unitAt(note.end) - unit), velocity: 100, confidence: 1 };
+  }).sort((a, b) => a.start - b.start || a.pitch - b.pitch);
   const { second: _second, repeats: _repeats, corrections: _corrections, ...ensemble } = analysis.ensemble ?? { chords: [], notes: [] };
   return {
     ...analysis, beats, firstBar,
-    ensemble: { ...ensemble, chords: ensemble.chords ?? [], notes },
+    ensemble: { ...ensemble, chords: ensemble.chords ?? [], notes, ...(melody.length ? { melody } : {}) },
     stems: Object.fromEntries(Object.entries(analysis.stems ?? {}).map(([name, part]) => [name, moved(part)])),
-    fromScore: { title: fromScore.title, measures: alignment.measures.length, notes: notes.length, correctedBars: fromScore.correctedBars },
+    fromScore: {
+      title: fromScore.title, measures: alignment.measures.length, notes: notes.length, correctedBars: fromScore.correctedBars,
+      ...(fromScore.family ? { family: fromScore.family } : {}),
+    },
   };
 }

@@ -332,18 +332,21 @@ test('the harmony result from a score: only the restored notes, on the corrected
   };
   const beats = [0, 0.5, 1, 1.5, 2, 2.5, 3];
   const alignment = {
-    measures: [{ index: 0, number: '1', start: 0, end: 2, onBeat: true }], shift: 0, secondsPerQuarter: 0.5, likeness: 1, parts: [], missing: [],
+    measures: [{ index: 0, number: '1', start: 0, end: 2, onBeat: true }], shift: 0, secondsPerQuarter: 0.5, likeness: 1, parts: [],
+    missing: [{ pitch: 72, start: 1, end: 1.5, measure: 0, stems: ['vocals'], part: 'vocals' }, { pitch: 40, start: 0, end: 2, measure: 0, stems: [], part: 'other' }],
     notes: [{ pitch: 60, start: 0.52, end: 0.98, velocity: 80, measure: 0, written: { pitch: 60, start: 1, length: 1 }, heard: {}, octave: 0 }],
     timeAt: quarter => quarter * 0.5,
   };
   const fit = { beats, firstBar: 0, placed: [], corrections: { bars: 1, extraBeats: 1, missingBeats: 0, moved: 0, checked: 1 }, alignment };
-  const made = align.harmonyFromScore(analysis, alignment, fit, { title: 'Song', correctedBars: 1 });
+  const made = align.harmonyFromScore(analysis, alignment, fit, { title: 'Song', correctedBars: 1, family: 'keys' });
   assert.deepEqual(made.beats, beats);
   assert.deepEqual(made.ensemble.notes, [{ start: 0.52, end: 0.98, pitch: 60, unit: 4, length: 4, velocity: 80, confidence: 1 }]);
   assert.equal(made.ensemble.second, undefined);
+  // The score's sung line goes with it, for parts that play the score; a note the stem does not play does not.
+  assert.deepEqual(made.ensemble.melody, [{ start: 1, end: 1.5, pitch: 72, unit: 8, length: 4, velocity: 100, confidence: 1 }]);
   assert.deepEqual(made.ensemble.chords, [{ start: 0, name: 'C' }]);
   assert.deepEqual(made.stems.bass.notes.map(n => [n.unit, n.length]), [[12, 4]]);
   assert.deepEqual(made.stems.drums.hits.map(h => h.unit), [12]);
   assert.deepEqual(made.accompaniment, { genre: 'rock' });
-  assert.deepEqual(made.fromScore, { title: 'Song', measures: 1, notes: 1, correctedBars: 1 });
+  assert.deepEqual(made.fromScore, { title: 'Song', measures: 1, notes: 1, correctedBars: 1, family: 'keys' });
 });

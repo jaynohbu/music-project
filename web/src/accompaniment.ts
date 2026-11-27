@@ -24,6 +24,8 @@ export interface StyleLibrary {
 // The analysis's choices for a song, closest first.
 export interface AccompanimentChoices {
   genre: string;
+  // The family whose closest sound is nearer the Harmonic stem (analyses from 2026-11-27 on).
+  closest?: Family;
   genres?: [string, number][];
   guitar: { styles: string[]; sounds: number[] };
   keys: { styles: string[]; sounds: number[] };
@@ -236,9 +238,10 @@ export function playedNotes(notes: HarmonyNote[]): NoteEvent[] {
 
 // Every note of a part, in song seconds, moved by the key change.
 export function accompanimentEvents(kind: AccompanimentKind, part: HarmonyPart, grid: HarmonyGrid, pattern: Stroke[][], semitones = 0): NoteEvent[] {
-  const events = !styled(kind) ? playedNotes(part.notes)
+  // A part from an uploaded score carries its sung line: played with every note, and as the melody over a style.
+  const events = !styled(kind) ? playedNotes([...part.notes, ...(part.melody ?? [])])
     : kind.endsWith('rhythm') ? comping(part, grid, pattern, familyOf(kind))
-    : withMelody(comping(part, grid, pattern, familyOf(kind)), melodyLine(part.notes));
+    : withMelody(comping(part, grid, pattern, familyOf(kind)), part.melody?.length ? part.melody : melodyLine(part.notes));
   return events.map(event => ({ ...event, pitch: event.pitch + semitones })).sort((a, b) => a.time - b.time);
 }
 
