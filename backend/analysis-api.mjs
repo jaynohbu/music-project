@@ -163,7 +163,9 @@ export function createAnalysisRoutes({ database, storage, orchestrator, signer }
   // score already going is returned instead of a second; so is the result when it is already from this score.
   // Every score the song has is laid in the one run (score_run.mjs: drums, then Harmonic, then bass); a run is the
   // same as another when it lays the same saved scores (scoreSavedAt names them all).
-  async function startScored({ userId, parent }) {
+  // again: laid once more even when the present scores were laid already (unless that is still running), so a
+  // result made before the engine measured something (the score check's similarity) is made again.
+  async function startScored({ userId, parent, again = false }) {
     const owned = songScores(parent), parts = SCORE_PARTS.filter(part => owned[part]);
     if (!parts.length) return null;
     const records = await visibleRecords('harmony', parent, database);
@@ -171,7 +173,7 @@ export function createAnalysisRoutes({ database, storage, orchestrator, signer }
     const analysed = whole.find(record => record.status === 'completed' && !record.fromScore && !record.scoreKey && record.key);
     if (!analysed) return null;
     const savedAt = parts.length === 1 && parts[0] === 'other' ? owned.other.savedAt : parts.map(part => `${part}:${owned[part].savedAt}`).join(' ');
-    const same = whole.find(record => record.scoreSavedAt === savedAt && record.status !== 'failed');
+    const same = whole.find(record => record.scoreSavedAt === savedAt && record.status !== 'failed' && (!again || RUNNING.includes(record.status)));
     if (same) return publicAnalysis(same, signer, storage);
     const now = Date.now(), id = randomUUID();
     const newest = whole[0]?.generatedAt;
@@ -231,7 +233,7 @@ export function createAnalysisRoutes({ database, storage, orchestrator, signer }
     // A song with its own scores has its parts from them: the whole result, or a part with a score regenerated.
     const owned = songScores(parent);
     if (type === 'harmony' && Object.keys(owned).length && (input.useScore === true || input.stem === undefined || owned[input.stem])) {
-      const started = await startScored({ userId, parent });
+      const started = await startScored({ userId, parent, again: input.useScore === true && input.again === true });
       if (started) return reply(started.status === 'queued' ? 202 : 200, { harmony: started });
     }
     const { stem, cleaned } = type === 'harmony' ? input : {};

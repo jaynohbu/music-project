@@ -1221,6 +1221,14 @@ test('a song\'s score is laid on it by the stem worker: started when saved (once
   assert.deepEqual(JSON.parse(storage.objects.get(child.key)), document);
   assert.equal(storage.objects.get(`users/owner/scores/${parentId}/extracted.wav`).toString(), 'RIFFWAVE');
   assert.equal((await call(parentId, undefined, 'GET')).body.job.harmony.id, child.jobId);
+  // Laid once more when asked again: a new run on the same scores (while one runs, that one).
+  assert.equal((await call(`${parentId}/harmony`, { useScore: true })).body.harmony.id, child.jobId);
+  const again = (await call(`${parentId}/harmony`, { useScore: true, again: true })).body.harmony;
+  assert.notEqual(again.id, child.jobId);
+  assert.equal(again.status, 'queued');
+  assert.equal(database.get('owner', again.id).scoreSavedAt, child.scoreSavedAt);
+  assert.equal((await call(`${parentId}/harmony`, { useScore: true, again: true })).body.harmony.id, again.id);
+  assert.equal(started.length, 2);
 });
 
 test('a song keeps bass and drum scores too, each by part, and one run lays them all', async () => {

@@ -261,7 +261,8 @@ test('a failed AAC upload removes the copies already uploaded and keeps the WAVs
   const puts = stored.filter(item => item.kind === 'PutObjectCommand');
   const deletes = stored.filter(item => item.kind === 'DeleteObjectCommand').map(item => item.Key);
   assert.equal(puts.filter(item => item.Key.endsWith('.wav')).length, 4);
-  assert.deepEqual(deletes, puts.filter(item => item.Key.endsWith('.m4a')).map(item => item.Key));
+  // The copies upload together, so they finish (and are removed) in any order.
+  assert.deepEqual([...deletes].sort(), puts.filter(item => item.Key.endsWith('.m4a')).map(item => item.Key).sort());
   const fields = completionFields(updates.at(-1));
   assert.equal(fields.status, 'completed');
   assert.ok(Object.values(fields.stems).every(stem => !('playKey' in stem)));

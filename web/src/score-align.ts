@@ -752,7 +752,7 @@ export interface PlacedMeasure {
   from: number;                           // The drum beat it starts on (index in the drum analysis's beats).
   drumBeats: number;                      // How many of those beats it covers.
   start: number; end: number;             // Song seconds.
-  cost: number;
+  cost: number;                           // How unlike the song the measure is there (0 to 1); 0 for a free bar.
   corrected: '' | 'extra-beat' | 'missing-beat' | 'moved';
 }
 export interface MeasureFit {
@@ -1046,7 +1046,7 @@ export function layOnBeats(score: Score, beats: number[], firstBar: number,
     }
     placed.push({
       measure: real, number: real !== null ? score.measures[real].number : '–', from, drumBeats: count,
-      start, end, cost: 0, corrected,
+      start, end, cost: real !== null ? Math.max(0, Math.min(1, unlike(real, from, count))) : 0, corrected,
     });
   }
   const last = steps_.length ? steps_[steps_.length - 1].to : N;
@@ -1134,8 +1134,9 @@ export function harmonyFromScore(analysis: HarmonyDocument, alignment: Alignment
       heard: alignment.notes.filter(note => note.found !== false).length,
       ...(fromScore.family ? { family: fromScore.family } : {}),
       ...(fromScore.scoreSavedAt ? { scoreSavedAt: fromScore.scoreSavedAt } : {}),
+      ...(fit ? similarity(fit.placed) : {}),
       // Where each of the score's measures is in the song (– for a bar it does not have), for the spectrum page.
-      bars: alignment.measures.map(measure => ({ number: measure.number, start: Math.round(measure.start * 1000) / 1000,
+      bars: fit ? barsOf(fit.placed) : alignment.measures.map(measure => ({ number: measure.number, start: Math.round(measure.start * 1000) / 1000,
         end: Math.round(measure.end * 1000) / 1000, ...(measure.onBeat ? {} : { corrected: true }) })),
     },
   };
@@ -1169,13 +1170,21 @@ export function moveDocument(document: HarmonyDocument, beats: number[], firstBa
 
 // What a score laid on the song tells of itself, for the page: its measures, notes (hits for drums), how many were
 // heard in the stem, how many drum bars it corrected, and where each of its measures is in the song.
+// similarity: how like the stem the score is where it was laid (one less how unlike, the measure being laid by),
+// over its measures and for each (a bar the score does not have has none).
 export interface ScoreSummary {
   title: string; measures: number; notes: number; heard: number; correctedBars: number;
-  family?: 'guitar' | 'keys'; scoreSavedAt?: string;
-  bars: { number: string; start: number; end: number; corrected?: true }[];
+  family?: 'guitar' | 'keys'; scoreSavedAt?: string; similarity?: number;
+  bars: { number: string; start: number; end: number; corrected?: true; similarity?: number }[];
 }
 const barsOf = (placed: PlacedMeasure[]) => placed.map(place => ({ number: place.number, start: Math.round(place.start * 1000) / 1000,
-  end: Math.round(place.end * 1000) / 1000, ...(place.corrected ? { corrected: true as const } : {}) }));
+  end: Math.round(place.end * 1000) / 1000, ...(place.corrected ? { corrected: true as const } : {}),
+  ...(place.measure !== null ? { similarity: Math.round((1 - place.cost) * 1000) / 1000 } : {}) }));
+export function similarityOf(placed: PlacedMeasure[]): number | undefined {
+  const laid = placed.filter(place => place.measure !== null);
+  return laid.length ? Math.round(laid.reduce((total, place) => total + 1 - place.cost, 0) / laid.length * 1000) / 1000 : undefined;
+}
+const similarity = (placed: PlacedMeasure[]) => { const value = similarityOf(placed); return value === undefined ? {} : { similarity: value }; };
 
 // A drum score laid measure by measure on the drum beats (layOnBeats), each measure compared with the drum
 // transcription's hits over the beats it is laid on: a written hit counts as found where the same drum is heard on
@@ -1237,7 +1246,7 @@ export function drumsFromScore(document: HarmonyDocument, fit: DrumFit, title: s
   return {
     document: { ...moved, stems: { ...moved.stems, drums: { ...rest, notes: [], hits: fit.hits } } },
     summary: { title, measures: fit.placed.filter(place => place.measure !== null).length, notes: fit.hits.length, heard: fit.heard,
-      correctedBars: fit.corrections.bars, ...(scoreSavedAt ? { scoreSavedAt } : {}), bars: barsOf(fit.placed) },
+      correctedBars: fit.corrections.bars, ...(scoreSavedAt ? { scoreSavedAt } : {}), ...similarity(fit.placed), bars: barsOf(fit.placed) },
   };
 }
 
@@ -1257,7 +1266,7 @@ export function bassFromScore(document: HarmonyDocument, fit: MeasureFit, title:
     document: { ...moved, stems: { ...moved.stems, bass: { ...rest, chords: moved.ensemble?.chords ?? part.chords, notes } } },
     summary: { title, measures: fit.placed.filter(place => place.measure !== null).length, notes: notes.length,
       heard: fit.alignment.notes.filter(note => note.found !== false).length, correctedBars: fit.corrections.bars,
-      ...(scoreSavedAt ? { scoreSavedAt } : {}), bars: barsOf(fit.placed) },
+      ...(scoreSavedAt ? { scoreSavedAt } : {}), ...similarity(fit.placed), bars: barsOf(fit.placed) },
   };
 }
 

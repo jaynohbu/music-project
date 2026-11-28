@@ -531,10 +531,11 @@ export class StemsService {
   }
 
   // The song's chords & notes from its own score, laid on it by the server (when it has its analysis).
-  async useSongScore(jobId: string): Promise<{ harmony: Harmony }> {
+  // again: laid once more although the result is from these scores already.
+  async useSongScore(jobId: string, again = false): Promise<{ harmony: Harmony }> {
     const token = await this.auth.token();
     return firstValueFrom(this.http.post<{ harmony: Harmony }>(
-      `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/harmony`, { useScore: true },
+      `${this.config.apiBaseUrl}/stems/jobs/${encodeURIComponent(jobId)}/harmony`, { useScore: true, ...(again ? { again: true } : {}) },
       { headers: { Authorization: `Bearer ${token}` } }));
   }
 

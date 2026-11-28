@@ -15,6 +15,7 @@ import {
 import { AccompanimentVoice, type PlayClock, loadLibrary, loadSound, matchLoudness } from './accompaniment-player';
 import type { AlignStem, HarmonyDocument } from './score-align';
 import { LyricsStrip } from './lyrics-strip';
+import { type ScoreCheck, type ScoreCheckSummary, ScoreCheckDialog } from './score-check';
 import { LyricsEditor, firstChange } from './lyrics-editor';
 import {
   EffectControl, EffectSettings, FaderControl, FADER_CONTROLS,
@@ -398,7 +399,7 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
 @Component({
   selector: 'app-stem-mixer',
   standalone: true,
-  imports: [RouterLink, FormsModule, NgTemplateOutlet, LyricsStrip, LyricsEditor, HarmonyStrip],
+  imports: [RouterLink, FormsModule, NgTemplateOutlet, LyricsStrip, LyricsEditor, HarmonyStrip, ScoreCheckDialog],
   template: `
     <section class="card mixer-page">
       <div class="section-heading">
@@ -507,6 +508,10 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                   @if (isHarmonic(track.name) && harmonyGrid() && hasMusic(harmonyParts()?.[track.name])) {
                     <button type="button" class="secondary" (click)="openScore(track)"
                       [attr.aria-label]="'See the whole ' + track.label + ' score'">Full score</button>
+                  }
+                  @if (checkable(track.name)) {
+                    <button type="button" class="secondary" (click)="openCheck(track)"
+                      [attr.aria-label]="'Compare the uploaded ' + track.label + ' score with what was matched with the stem'">Check score</button>
                   }
                   @if (track.hasCleaned) {
                     <div class="version-switch" role="group" [attr.aria-label]="track.label + ' version'">
@@ -797,6 +802,7 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
       <!-- The score asked for by Chords & notes. -->
       <input #scoreFile type="file" class="visually-hidden" accept=".pdf,.png,.jpg,.jpeg,.musicxml,.xml,.mxl,application/pdf"
         (change)="uploadScore($event)" aria-label="Upload a score of this song" tabindex="-1">
+      <app-score-check [check]="scoreCheck()" (closed)="scoreCheck.set(null)" (started)="pause()" (relay)="relayScore()"></app-score-check>
       <dialog #scoreDialog class="score-preview" aria-labelledby="score-preview-title">
         <header><h2 id="score-preview-title">{{ scoreHeading() }}</h2></header>
         <iframe #scoreFrame title="Full score"></iframe>
@@ -1442,6 +1448,45 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     this.scoreHeading.set(`${this.sceneTitle || this.job()?.title || 'Score'} · ${track.label}`);
     this.scoreFrame.nativeElement.srcdoc = html;
     this.scoreDialog.nativeElement.showModal();
+  }
+
+  // The uploaded score of a part laid on the song, beside what was matched with its stem.
+  readonly scoreCheck = signal<ScoreCheck | null>(null);
+  private laidSummary(part: ScorePartName): ScoreCheckSummary | undefined {
+    const fromScore = this.harmonyDocument?.['fromScore'] as (ScoreCheckSummary & { parts?: Partial<Record<ScorePartName, ScoreCheckSummary>> }) | undefined;
+    return fromScore?.parts ? fromScore.parts[part] : part === 'other' ? fromScore : undefined;
+  }
+  checkable(name: string): boolean {
+    const part = name as ScorePartName, url = this.job()?.scores?.[part]?.url ?? (part === 'other' ? this.job()?.score?.url : undefined);
+    return this.isScored(name) && !!url && !!this.laidSummary(part) && !!this.harmonyGrid() && this.hasMusic(this.harmonyParts()?.[name]);
+  }
+  openCheck(track: { name: string; label: string }): void {
+    const part = track.name as ScorePartName, job = this.job(), grid = this.harmonyGrid(), laid = this.harmonyParts()?.[part];
+    const url = job?.scores?.[part]?.url ?? (part === 'other' ? job?.score?.url : undefined);
+    if (!url || !grid || !laid) return;
+    const family = part === 'other' ? 'keys' : part, library = this.accompanimentLibrary();
+    const sound = this.scoreParts()[family]?.sound ?? (library ? offered(library, this.accompanimentChoices(), family).sounds[0] : undefined) ?? 0;
+    this.scoreCheck.set({
+      part, label: track.label, title: this.sceneTitle || job?.title || 'Score', url, laid, grid, songKey: this.songKey(),
+      summary: this.laidSummary(part), stem: this.runtimes.get(part)?.buffer, sound,
+    });
+  }
+
+  // The song's scores laid on it once more (from the score check, for a result laid before similarity was measured).
+  async relayScore(): Promise<void> {
+    if (this.scoreBusy) return;
+    const generation = this.generation;
+    this.scoreBusy = true;
+    this.scoreImportError.set('');
+    try {
+      await this.stems.useSongScore(this.jobId, true);
+      await this.refreshJob(generation);
+      this.watchRestorations(generation);
+    } catch (error) {
+      if (!this.destroyed && generation === this.generation) this.scoreImportError.set(`Could not lay the score again: ${errorMessage(error)}`);
+    } finally {
+      this.scoreBusy = false;
+    }
   }
 
   printScore(): void { this.scoreFrame?.nativeElement.contentWindow?.print(); }

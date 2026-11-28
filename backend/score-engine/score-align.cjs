@@ -16,6 +16,7 @@ exports.regridHits = regridHits;
 exports.harmonyFromScore = harmonyFromScore;
 exports.movePart = movePart;
 exports.moveDocument = moveDocument;
+exports.similarityOf = similarityOf;
 exports.fitDrumScore = fitDrumScore;
 exports.drumsFromScore = drumsFromScore;
 exports.bassFromScore = bassFromScore;
@@ -1111,7 +1112,7 @@ function layOnBeats(score, beats, firstBar, unlike, loudness, jumpCost = JUMP, o
         }
         placed.push({
             measure: real, number: real !== null ? score.measures[real].number : '–', from, drumBeats: count,
-            start, end, cost: 0, corrected,
+            start, end, cost: real !== null ? Math.max(0, Math.min(1, unlike(real, from, count))) : 0, corrected,
         });
     }
     const last = steps_.length ? steps_[steps_.length - 1].to : N;
@@ -1189,8 +1190,9 @@ function harmonyFromScore(analysis, alignment, fit, fromScore) {
             heard: alignment.notes.filter(note => note.found !== false).length,
             ...(fromScore.family ? { family: fromScore.family } : {}),
             ...(fromScore.scoreSavedAt ? { scoreSavedAt: fromScore.scoreSavedAt } : {}),
+            ...(fit ? similarity(fit.placed) : {}),
             // Where each of the score's measures is in the song (– for a bar it does not have), for the spectrum page.
-            bars: alignment.measures.map(measure => ({ number: measure.number, start: Math.round(measure.start * 1000) / 1000,
+            bars: fit ? barsOf(fit.placed) : alignment.measures.map(measure => ({ number: measure.number, start: Math.round(measure.start * 1000) / 1000,
                 end: Math.round(measure.end * 1000) / 1000, ...(measure.onBeat ? {} : { corrected: true }) })),
         },
     };
@@ -1222,7 +1224,13 @@ function moveDocument(document, beats, firstBar) {
     };
 }
 const barsOf = (placed) => placed.map(place => ({ number: place.number, start: Math.round(place.start * 1000) / 1000,
-    end: Math.round(place.end * 1000) / 1000, ...(place.corrected ? { corrected: true } : {}) }));
+    end: Math.round(place.end * 1000) / 1000, ...(place.corrected ? { corrected: true } : {}),
+    ...(place.measure !== null ? { similarity: Math.round((1 - place.cost) * 1000) / 1000 } : {}) }));
+function similarityOf(placed) {
+    const laid = placed.filter(place => place.measure !== null);
+    return laid.length ? Math.round(laid.reduce((total, place) => total + 1 - place.cost, 0) / laid.length * 1000) / 1000 : undefined;
+}
+const similarity = (placed) => { const value = similarityOf(placed); return value === undefined ? {} : { similarity: value }; };
 // A drum score laid measure by measure on the drum beats (layOnBeats), each measure compared with the drum
 // transcription's hits over the beats it is laid on: a written hit counts as found where the same drum is heard on
 // that sixteenth or the next either side (a hi-hat for a cymbal, or a tom for a snare, half); unlike is one less
@@ -1291,7 +1299,7 @@ function drumsFromScore(document, fit, title, scoreSavedAt) {
     return {
         document: { ...moved, stems: { ...moved.stems, drums: { ...rest, notes: [], hits: fit.hits } } },
         summary: { title, measures: fit.placed.filter(place => place.measure !== null).length, notes: fit.hits.length, heard: fit.heard,
-            correctedBars: fit.corrections.bars, ...(scoreSavedAt ? { scoreSavedAt } : {}), bars: barsOf(fit.placed) },
+            correctedBars: fit.corrections.bars, ...(scoreSavedAt ? { scoreSavedAt } : {}), ...similarity(fit.placed), bars: barsOf(fit.placed) },
     };
 }
 // A bass score's notes laid on the song (fitMeasures, with the bass stem in the Harmonic stem's place), every one,
@@ -1310,7 +1318,7 @@ function bassFromScore(document, fit, title, scoreSavedAt) {
         document: { ...moved, stems: { ...moved.stems, bass: { ...rest, chords: moved.ensemble?.chords ?? part.chords, notes } } },
         summary: { title, measures: fit.placed.filter(place => place.measure !== null).length, notes: notes.length,
             heard: fit.alignment.notes.filter(note => note.found !== false).length, correctedBars: fit.corrections.bars,
-            ...(scoreSavedAt ? { scoreSavedAt } : {}), bars: barsOf(fit.placed) },
+            ...(scoreSavedAt ? { scoreSavedAt } : {}), ...similarity(fit.placed), bars: barsOf(fit.placed) },
     };
 }
 // Chords as the score prints them, and where it prints none (or its symbols could not be read), named from its

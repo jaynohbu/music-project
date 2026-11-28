@@ -16,11 +16,11 @@ Replace the WebView wrapper with a native Expo app that plays stems from its own
 | Sign-in | Email + device ID, as designed. Codes now go through SES, which is in sandbox (see Constraints) | `mobile/src/auth.ts`, `backend/accounts.mjs` |
 | Audio engine | Four stems streamed from disk, full effects, key change through a library patch | `mobile/src/player.ts`, `mobile/patches/` |
 | Score analysis | Version 10: Harmonic score (key from the notes, extended chords spelled in the key, every chord tone played, no chord where it is silent), bass and drum parts, hi-hat filling. Found automatically when a song is first opened. Versions up to 16 since (see Harmonic notes) | `backend/analyze_harmony.py`, `backend/note_lines.py` |
-| Song scores | A song's own Harmonic, bass and drum scores (PDF or MusicXML), laid on it by the stem worker and used instead of the transcription; each made on the server as a stem in a chosen sound (66 in the library; the closest when the score is laid) and played as a mixer channel | `web/src/score-align.ts`, `backend/score_run.mjs`, `backend/score-render.mjs`, `mobile/src/score-parts.ts` |
+| Song scores | A song's own Harmonic, bass and drum scores (PDF or MusicXML), laid on it by the stem worker and used instead of the transcription; each made on the server as a stem in a chosen sound (66 in the library; the closest when the score is laid) and played as a mixer channel; on the website each can be checked against its stem (Check score) | `web/src/score-align.ts`, `web/src/score-check.ts`, `backend/score_run.mjs`, `backend/score-render.mjs`, `mobile/src/score-parts.ts` |
 | Live input | A mixer channel like a stem; instrument detected automatically; take saved per song | `mobile/src/live-*.ts`, `mobile/src/instrument-detect.ts`, [live-follow.md](./live-follow.md) |
 | Scenes | Mix, live mix and key change saved per scene entry; nothing saved from Music | `backend/scene-api.mjs`, `mobile/src/mixer-settings.ts` |
 | Themes | Heavy metal (default), Rock, Pop, Jazz club, Worship, Simple, with backgrounds, in app and website | `mobile/src/theme.tsx`, `web/src/themes.ts` |
-| Website | Deployed 2026-11-27 (sound list served without caching) with song scores, the spectrum page, sampled sounds and their credits, besides the ensemble score, themes, usage and store links | `web/src/` |
+| Website | Deployed 2026-11-28 (score check) with song scores, the spectrum page, sampled sounds and their credits, besides the ensemble score, themes, usage and store links | `web/src/` |
 | Worker images | Analysis `cpu-20261127213704` (`backend/Dockerfile.stems`); split `split-20261127175341` (`backend/Dockerfile.split`), see Two worker containers | `backend/` |
 | Not built | Score editor, website languages and live input, account deletion, billing, store submission | see Build order |
 
@@ -537,6 +537,15 @@ The user asked that, where a score has several layers, the layer matching the vo
 - The scroll rails are gone; pages inset by EDGE = 16. `controlHold` (was `railCover`) keeps the page still while a control is held.
 - iPhone staging build `25c87f87`.
 - **Bleed removal and Regenerate (2026-11-27, later):** "Clean" is now "Remove bleed" (Korean 다른 소리 제거; the switch reads Original / Bleed removed), since `restore_stem.py` lowers the other stems' sound bleeding into the stem, not noise; in the app it sits in the stem's button row with the other buttons, not in the header. "Regenerate chords & notes" is gone from the Harmonic and bass tracks (app and website): their notes come from an uploaded score; only "Regenerate drum score" remains.
+
+### Score check (2026-11-28, website only)
+
+The user could not tell whether an uploaded score was being played correctly, so each stem with an uploaded score laid on it has **Check score** on the website (not the app, by the user's choice): a dialog with the score **As uploaded** (drawn as printed, repeats not taken, in its written key from the MusicXML signature, at its marked tempo or else the song's; Play renders it in the browser in the part's sound) and under it **Matched with the stem** (the song's part made from it, drawn on the song's bars; Play plays its notes, Play with the stem plays them together with the stem, as loud as it), with the **similarity** measured while laying it and a chip for each bar laid (the score's measure number and its similarity, coloured red to green; choosing one plays notes and stem from there).
+
+- **Similarity** is one less how unlike the song each measure is where `layOnBeats` laid it (the cost it already minimised: for the Harmonic and bass scores the pitch classes per eighth against each stem, for drums one less the Dice overlap of written and heard hits). `PlacedMeasure.cost` now keeps it (it was 0); the summary has `similarity` (mean over the score's measures; free bars have none) and each of `bars` its own. The record's `fromScore` keeps the mean (bars stay in the result).
+- **Older results** have no similarity: the dialog offers **Lay the score again**, `POST …/harmony {useScore: true, again: true}` (a new run on the same scores even though they were laid; while one runs, that one).
+- Files: `web/src/score-check.ts` (the dialog), `web/src/score-written.ts` (pure parts, `web/test/score-written.test.mjs`). Analysis image `cpu-20261128044216`.
+- Not done: the three songs with uploaded scores (Amazing Grace, Psalm 139, Our God) were laid before this; each needs Lay the score again once (relaying them from the terminal was not allowed).
 
 ### Score parts made on the server (2026-11-27, evening)
 

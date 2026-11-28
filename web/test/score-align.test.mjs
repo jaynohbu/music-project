@@ -316,6 +316,10 @@ test('measure by measure: a repeat and a bar the score lacks are found, a drum b
   // The guitar is restored in every bar it plays; the free bar has no score notes.
   assert.ok(fit.alignment.notes.length >= 70);
   assert.ok(!fit.alignment.notes.some(n => n.measure === 4));
+  // Each measure is as like the song as it was found where it was laid; the synthesized guitar is close everywhere.
+  assert.ok(fit.placed.filter(p => p.measure !== null).every(p => p.cost >= 0 && p.cost < 0.5), JSON.stringify(fit.placed.map(p => p.cost)));
+  assert.equal(fit.placed[4].cost, 0);
+  assert.ok(align.similarityOf(fit.placed) > 0.5);
 });
 
 test('drum hits moved to corrected beats: the same moments, on the new grid', () => {
@@ -340,7 +344,7 @@ test('the harmony result from a score: only the restored notes, on the corrected
     notes: [{ pitch: 60, start: 0.52, end: 0.98, velocity: 80, measure: 0, written: { pitch: 60, start: 1, length: 1 }, heard: {}, octave: 0 }],
     timeAt: quarter => quarter * 0.5,
   };
-  const fit = { beats, firstBar: 0, placed: [], corrections: { bars: 1, extraBeats: 1, missingBeats: 0, moved: 0, checked: 1 }, alignment,
+  const fit = { beats, firstBar: 0, placed: [{ measure: 0, number: '1', from: 0, drumBeats: 4, start: 0, end: 2, cost: 0.25, corrected: '' }], corrections: { bars: 1, extraBeats: 1, missingBeats: 0, moved: 0, checked: 1 }, alignment,
     chords: [{ start: 0, root: 9, quality: 'm7', bass: 9 }, { start: 1, root: 2, quality: '', bass: 6 }, { start: 2, root: 0, quality: 'N.C.', bass: 0 }],
     bass: [{ pitch: 33, start: 0.5, end: 1, velocity: 70, measure: 0, written: { pitch: 45, start: 1, length: 1 }, heard: {}, octave: -12 }] };
   const made = align.harmonyFromScore(analysis, alignment, fit, { title: 'Song', correctedBars: 1, family: 'keys' });
@@ -355,7 +359,8 @@ test('the harmony result from a score: only the restored notes, on the corrected
   assert.deepEqual(made.stems.bass.notes, [{ start: 0.5, end: 1, pitch: 33, unit: 4, length: 4, velocity: 70, confidence: 1 }]);
   assert.deepEqual(made.stems.drums.hits.map(h => h.unit), [12]);
   assert.deepEqual(made.accompaniment, { genre: 'rock' });
-  assert.deepEqual(made.fromScore, { title: 'Song', measures: 1, notes: 1, heard: 1, correctedBars: 1, family: 'keys', bars: [{ number: '1', start: 0, end: 2 }] });
+  assert.deepEqual(made.fromScore, { title: 'Song', measures: 1, notes: 1, heard: 1, correctedBars: 1, family: 'keys',
+    similarity: 0.75, bars: [{ number: '1', start: 0, end: 2, similarity: 0.75 }] }, 'how like the stem each measure is where it was laid');
 });
 
 test('chords named from a score\'s notes: the shape that fits, on the lowest note when two fit alike, a slash for another bass', () => {
@@ -461,6 +466,7 @@ test('a drum score is laid on the drum transcription bar by bar, and a beat the 
   assert.equal(fit.corrections.missingBeats, 1);
   assert.equal(fit.hits.length, score.hits.length);
   assert.equal(fit.heard, score.hits.length);
+  assert.ok(laid.every(place => place.cost < 0.05), 'every written hit heard: each measure all but the same as the drums');
 });
 
 test('a staff in layers: the layer that sounds like the singer is the vocals\', and its notes are not the Harmonic stem\'s', async () => {
