@@ -1,8 +1,8 @@
 // A page for checking a song's uploaded score against its stem, a part at a time (Harmonic, bass or drums): the PDF's
 // transcript as it is (the score as printed, at its own tempo, in its written key) and the transcript made from it
 // for the song (what the mixer plays: the score unfolded as played, every measure as written, laid on the song from
-// its anchor, score-align.ts layFromAnchor), each drawn and played. Each bar is marked over both transcripts: how like
-// the stem the PDF's measure is where it was laid, or "estimated" for a measure outside the anchor (its time from the
+// its anchor, score-align.ts layFromAnchor), each drawn and played. Each bar is marked over both transcripts with how
+// like the stem the PDF's measure is where it was laid, "est." for a measure outside the anchor (its time from the
 // beats around, not synced with the stem). Choosing a bar plays the PDF's measure, the stem there, the made bar, or
 // the made bar with the stem.
 import { ChangeDetectionStrategy, Component, ElementRef, OnDestroy, OnInit, computed, inject, signal, viewChild } from '@angular/core';
@@ -66,8 +66,8 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.fl
         <div class="score-check-bar-panel" aria-live="polite">
           <strong>Song bar {{ bar.bar }}</strong>
           <span>{{ bar.measure !== undefined ? 'PDF measure ' + bar.number : 'Not in the PDF' }} · {{ clockOf(bar.start) }}–{{ clockOf(bar.end) }}</span>
+          <span class="score-check-like" [style.color]="colorOf(bar.similarity)">Similarity {{ percentOf(bar.similarity) }}</span>
           @if (bar.estimated) { <span class="hint">Estimated: outside the passage synced with the stem</span> }
-          @else { <span class="score-check-like" [style.color]="colorOf(bar.similarity)">Similarity {{ percentOf(bar.similarity) }}</span> }
           @if (bar.corrected) { <span class="hint">drum bar corrected</span> }
           <div class="score-check-buttons">
             @if (bar.measure !== undefined) {
@@ -264,8 +264,8 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
     this.bars.set(songBars);
     // The made transcript: each song bar marked with the PDF measure laid there and how like the stem it is.
     const madeMarks = new Map<number, BarMark>(songBars.map(bar => [bar.bar, bar.measure === undefined
-      ? { text: 'not in PDF' } : bar.estimated ? { text: `m.${bar.number} estimated` }
-      : { text: `m.${bar.number} ${percent(bar.similarity)}`, ...(bar.similarity !== undefined ? { level: bar.similarity } : {}) }]));
+      ? { text: 'not in PDF' }
+      : { text: `m.${bar.number} ${percent(bar.similarity)}${bar.estimated ? ' est.' : ''}`, ...(bar.similarity !== undefined ? { level: bar.similarity } : {}) }]));
     const madeLines = sheetLines(laid, name, grid, key, madeMarks);
     const madeHits = (laid.hits ?? []).map(hit => ({ unit: hit.unit, time: beatTime(grid.beats, hit.unit / 4) }));
     this.timing = { made: { notes: laid.notes, hits: madeHits,
