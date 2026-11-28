@@ -512,6 +512,8 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                   @if (checkable(track.name)) {
                     <a class="button-link secondary" [routerLink]="['/score-check', job()!.jobId]" [queryParams]="{ part: track.name }"
                       [attr.aria-label]="'Compare the uploaded ' + track.label + ' score with the transcript made from it, bar by bar'">Check score</a>
+                    <button type="button" class="secondary" (click)="regenerateScore()" [disabled]="scoring() || regeneratingScore()"
+                      [attr.aria-label]="'Lay the uploaded scores on the song again'">{{ scoring() || regeneratingScore() ? 'Regenerating score…' : 'Regenerate score' }}</button>
                   }
                   @if (track.hasCleaned) {
                     <div class="version-switch" role="group" [attr.aria-label]="track.label + ' version'">
@@ -1359,6 +1361,22 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
 
 
 
+
+  // The song's uploaded scores laid on it again (the server makes the result anew, about LAYING_SECONDS).
+  readonly regeneratingScore = signal(false);
+  async regenerateScore(): Promise<void> {
+    const generation = this.generation;
+    this.regeneratingScore.set(true);
+    this.scoreImportError.set('');
+    try {
+      await this.stems.useSongScore(this.jobId, true);
+      await this.refreshJob(generation);
+      this.watchRestorations(generation);
+    } catch (error) {
+      if (!this.destroyed && generation === this.generation) this.scoreImportError.set(`Could not regenerate the score: ${errorMessage(error)}`);
+    }
+    this.regeneratingScore.set(false);
+  }
 
   soundName(sound: number): string { return this.accompanimentLibrary()?.sounds[String(sound)]?.name ?? `Sound ${sound}`; }
 

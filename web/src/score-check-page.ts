@@ -53,7 +53,7 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.fl
       }
       <p class="hint">
         @if (outdated()) { This score was laid by an earlier version, so it is being laid again. }
-        <button type="button" class="secondary" (click)="layAgain()" [disabled]="laying()">{{ laying() ? 'Laying the score again… about 4 min' : 'Lay the score again' }}</button></p>
+        <button type="button" class="secondary" (click)="layAgain()" [disabled]="laying()">{{ laying() ? 'Regenerating score… about 4 min' : 'Regenerate score' }}</button></p>
 
       <div class="score-check-controls">
       <div class="score-check-player" role="status">
