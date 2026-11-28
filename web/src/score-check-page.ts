@@ -63,7 +63,9 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.fl
 
       <div class="score-check-controls">
       <div class="score-check-player" role="status">
-        @if (playing()) { <span>Playing {{ playingLabel() }} · {{ position() }}</span> <button type="button" (click)="stop()">Stop</button> }
+        @if (playing()) { <span>Playing {{ playingLabel() }} · {{ position() }}</span>
+          @if (canSwitchStem()) { <button type="button" class="secondary" (click)="toggleStem()" [attr.aria-pressed]="playing() === 'together'">{{ playing() === 'together' ? 'Score only' : 'With the stem' }}</button> }
+          <button type="button" (click)="stop()">Stop</button> }
         @else if (preparing()) { <span class="busy">Preparing the sound… (the first time takes a few seconds)</span> }
         @else if (warming()) { <span class="busy">Getting the sound ready…</span> }
       </div>
@@ -118,6 +120,7 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.fl
           <h2 id="score-check-made">Made for the song (as the mixer plays it)</h2>
           <button type="button" (click)="toggle('made')" [disabled]="!made()" [class.busy]="preparingKey() === 'made'">{{ buttonLabel('made', 'Play') }}</button>
           <button type="button" class="secondary" (click)="toggle('together')" [disabled]="!made() || !stem" [class.busy]="preparingKey() === 'together'">{{ buttonLabel('together', 'Play with the stem') }}</button>
+          @if (canSwitchStem()) { <button type="button" class="secondary" (click)="toggleStem()" [attr.aria-pressed]="playing() === 'together'">{{ playing() === 'together' ? 'Score only' : 'With the stem' }}</button> }
         </div>
         <p class="hint">{{ madeNote() }}</p>
         <div class="score-check-lines" #madeLines>
@@ -193,6 +196,17 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
   private laidPart?: HarmonyPart;
   private context?: AudioContext;
   private sources: AudioBufferSourceNode[] = [];
+  private stemGain?: GainNode;
+  // While the made transcript plays: the stem heard with it or not, switched without stopping.
+  readonly canSwitchStem = computed(() => (this.playing() === 'made' || this.playing() === 'together') && !!this.stem);
+  toggleStem(): void {
+    const playing = this.playing(), context = this.context;
+    if (!this.stemGain || !context || (playing !== 'made' && playing !== 'together')) return;
+    const next = playing === 'made' ? 'together' : 'made';
+    this.stemGain.gain.setTargetAtTime(next === 'together' ? 1 : 0, context.currentTime, 0.01);
+    this.playing.set(next);
+    this.playingKey.update(key => key.replace(/^(made|together)/, next));
+  }
   private buffers = new Map<string, Promise<AudioBuffer>>();
   private token = 0;
   private destroyed = false;
@@ -433,18 +447,24 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
     this.preparing.set(true); this.preparingKey.set(key);
     await context.resume();
     try {
+      // The made transcript plays with the stem beside it, heard or not (toggleStem switches it while playing).
+      const made = kind === 'made' || kind === 'together';
       const buffers = kind === 'stem' ? [this.stem!] : kind === 'pdf' ? [await this.sound('pdf')]
-        : kind === 'made' ? [await this.sound('made')] : [await this.sound('made'), this.stem!];
-      if (token !== this.token || play !== this.play || !buffers.every(Boolean)) return;
+        : [await this.sound('made'), ...(this.stem ? [this.stem] : [])];
+      if (token !== this.token || play !== this.play || !buffers.every(Boolean) || (kind === 'together' && buffers.length < 2)) return;
       const at = context.currentTime + 0.05, end = Math.max(...buffers.map(buffer => buffer.duration));
-      this.sources = buffers.map(buffer => {
+      this.sources = buffers.map((buffer, index) => {
         const source = context.createBufferSource();
         source.buffer = buffer;
-        source.connect(context.destination);
+        if (made && index === 1) {
+          this.stemGain = context.createGain();
+          this.stemGain.gain.value = kind === 'together' ? 1 : 0;
+          source.connect(this.stemGain).connect(context.destination);
+        } else source.connect(context.destination);
         source.start(at, Math.min(from, buffer.duration), length);
         return source;
       });
-      this.sources[0].onended = () => { if (this.playing() === kind) this.stop(); };
+      this.sources[0].onended = () => { if (play === this.play) this.stop(); };
       this.playing.set(kind);
       this.playingKey.set(key);
       const view = kind === 'pdf' ? 'pdf' : 'made', until = length ? from + length : end;
@@ -452,7 +472,7 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
       const delay = (context.baseLatency || 0) + (context.outputLatency || 0);
       const tick = () => {
         const time = from + Math.max(0, context.currentTime - delay - at);
-        this.resume = { kind, time };
+        this.resume = { kind: this.playing() ?? kind, time };
         this.position.set(`${clock(time)} / ${clock(until)}`);
         this.light(view, time);
         this.frame = requestAnimationFrame(tick);
@@ -470,6 +490,7 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
     this.preparing.set(false); this.preparingKey.set('');
     for (const source of this.sources) { source.onended = null; try { source.stop(); } catch { /* not started */ } source.disconnect(); }
     this.sources = [];
+    this.stemGain?.disconnect(); this.stemGain = undefined;
     cancelAnimationFrame(this.frame);
     this.unlight();
     this.playing.set(null);
