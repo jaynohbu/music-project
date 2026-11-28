@@ -51,3 +51,13 @@ test('the written key from the signature, and the notes laid on the song as play
   assert.equal(written.percent(0.734), '73%');
   assert.equal(written.percent(undefined), '–');
 });
+
+test('the bar a moment is in, numbered as the drawn score numbers bars (from 1 at the first bar, a pickup before it)', () => {
+  const beats = Array.from({ length: 20 }, (_, k) => k * 0.5);
+  assert.equal(written.barAtTime({ beats, firstBar: 0 }, 0), 1);
+  assert.equal(written.barAtTime({ beats, firstBar: 0 }, 1.99), 1);
+  assert.equal(written.barAtTime({ beats, firstBar: 0 }, 2), 2);
+  assert.equal(written.barAtTime({ beats, firstBar: 0 }, 6.1), 4);
+  assert.equal(written.barAtTime({ beats, firstBar: 1 }, 0.2), 0, 'the pickup');
+  assert.equal(written.barAtTime({ beats, firstBar: 1 }, 0.5), 1);
+});

@@ -43,3 +43,17 @@ export function laidEvents(check: { part: ScorePartName; laid: HarmonyPart; grid
 }
 
 export const percent = (value?: number) => value === undefined ? '–' : `${Math.round(value * 100)}%`;
+
+// The bar (numbered from 1 at the grid's first bar, as the drawn score numbers them) a moment of the grid is in.
+// Beats are found as harmony-strip.ts positionAt finds them (which counts sixteenths).
+export function barAtTime(grid: HarmonyGrid, time: number): number {
+  const beats = grid.beats;
+  if (beats.length < 2) return 1;
+  let low = 0, high = beats.length - 2;
+  while (low < high) {
+    const middle = (low + high + 1) >> 1;
+    if (beats[middle] <= time) low = middle; else high = middle - 1;
+  }
+  const beat = low + (time - beats[low]) / (beats[low + 1] - beats[low]);
+  return Math.floor((beat - grid.firstBar) / 4) + 1;
+}

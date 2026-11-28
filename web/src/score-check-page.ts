@@ -11,9 +11,8 @@ import { StemsService, errorMessage, type HarmonyGrid, type HarmonyPart, type Jo
 import type { NoteEvent, StyleLibrary } from './accompaniment';
 import { beatTime, offered } from './accompaniment';
 import { loadLibrary, matchLoudness, renderNotes } from './accompaniment-player';
-import { positionAt } from './harmony-strip';
 import { type BarMark, levelColor, sheetLines, tempo } from './score-sheet';
-import { laidEvents, percent, writtenKey, writtenPart } from './score-written';
+import { barAtTime, laidEvents, percent, writtenKey, writtenPart } from './score-written';
 import type { Score } from './musicxml';
 
 interface LaidBar { number: string; start: number; end: number; corrected?: true; similarity?: number }
@@ -225,7 +224,7 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
     const summary = this.laidOf(name)!;
     this.unmeasured.set(summary.similarity === undefined);
     const key = (ensemble as { key?: string } | undefined)?.key;
-    const barOf = (time: number) => Math.floor((Math.round(positionAt(grid.beats, time) * 4) - grid.firstBar * 4) / 16) + 1;
+    const barOf = (time: number) => barAtTime(grid, time + 0.001);
     const songBars: SongBar[] = (summary.bars ?? []).map((bar, index) => ({ ...bar, bar: barOf(bar.start), index, ...(bar.number !== '–' ? { measure: index } : {}) }));
     this.bars.set(songBars);
     // The made transcript: each song bar marked with the PDF measure laid there and how like the stem it is.
@@ -408,7 +407,7 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
   private light(view: 'pdf' | 'made', time: number): void {
     const timing = this.timing[view], container = (view === 'pdf' ? this.pdfLines() : this.madeLines())?.nativeElement;
     if (!timing || !container) return;
-    const bar = Math.floor((positionAt(timing.grid.beats, time) * 4 - timing.grid.firstBar * 4) / 16) + 1;
+    const bar = barAtTime(timing.grid, time);
     const barElement = container.querySelector(`rect.bar-now[data-bar="${bar}"]`) ?? undefined;
     if (barElement !== this.litBar) {
       this.litBar?.classList.remove('on');
