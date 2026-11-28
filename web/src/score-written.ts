@@ -57,3 +57,20 @@ export function barAtTime(grid: HarmonyGrid, time: number): number {
   const beat = low + (time - beats[low]) / (beats[low + 1] - beats[low]);
   return Math.floor((beat - grid.firstBar) / 4) + 1;
 }
+
+// The bar to light while a transcript plays: the bar the moment is in, or that of the note struck last when it is
+// further on (a bar's first note played early moves the light with it), but never past a bar with a note still to
+// strike (a note played late keeps its bar lit until it sounds). `strokes`: each note's (or drum stroke's) start in seconds and the sixteenth it is
+// drawn at.
+export function barFollower(grid: HarmonyGrid, strokes: { start: number; unit: number }[]): (time: number) => number {
+  const sorted = [...strokes].sort((a, b) => a.start - b.start);
+  const bars = sorted.map(stroke => Math.floor((stroke.unit - grid.firstBar * 4) / 16) + 1);
+  // The earliest bar among the notes from each one on.
+  const least = new Array<number>(sorted.length + 1).fill(Infinity);
+  for (let index = sorted.length - 1; index >= 0; index--) least[index] = Math.min(bars[index], least[index + 1]);
+  return time => {
+    let low = 0, high = sorted.length;
+    while (low < high) { const middle = (low + high) >> 1; if (sorted[middle].start <= time) low = middle + 1; else high = middle; }
+    return Math.min(Math.max(barAtTime(grid, time), low > 0 ? bars[low - 1] : 1), least[low]);
+  };
+}

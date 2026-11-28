@@ -12,7 +12,7 @@ import type { NoteEvent, StyleLibrary } from './accompaniment';
 import { beatTime, offered } from './accompaniment';
 import { loadLibrary, matchLoudness, renderNotes } from './accompaniment-player';
 import { type BarMark, levelColor, sheetLines, tempo } from './score-sheet';
-import { barAtTime, laidEvents, percent, writtenKey, writtenPart } from './score-written';
+import { barAtTime, barFollower, laidEvents, percent, writtenKey, writtenPart } from './score-written';
 import type { Score } from './musicxml';
 
 interface LaidBar { number: string; start: number; end: number; corrected?: true; similarity?: number }
@@ -144,7 +144,7 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
   private readonly pdfLines = viewChild<ElementRef<HTMLElement>>('pdfLines');
   private readonly madeLines = viewChild<ElementRef<HTMLElement>>('madeLines');
   // When each transcript's notes sound and where its bars are, for lighting them as they play.
-  private timing: Partial<Record<'pdf' | 'made', { grid: HarmonyGrid; notes: { start: number; end: number }[]; hits: { unit: number; time: number }[] }>> = {};
+  private timing: Partial<Record<'pdf' | 'made', { notes: { start: number; end: number }[]; hits: { unit: number; time: number }[]; barAt: (time: number) => number }>> = {};
   private frame = 0;
   private litBar?: Element;
   private litNotes: Element[] = [];
@@ -231,7 +231,9 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
     const madeMarks = new Map<number, BarMark>(songBars.map(bar => [bar.bar, bar.measure === undefined
       ? { text: 'not in PDF' } : { text: `m.${bar.number} ${percent(bar.similarity)}`, ...(bar.similarity !== undefined ? { level: bar.similarity } : {}) }]));
     const madeLines = sheetLines(laid, name, grid, key, madeMarks);
-    this.timing = { made: { grid, notes: laid.notes, hits: (laid.hits ?? []).map(hit => ({ unit: hit.unit, time: beatTime(grid.beats, hit.unit / 4) })) } };
+    const madeHits = (laid.hits ?? []).map(hit => ({ unit: hit.unit, time: beatTime(grid.beats, hit.unit / 4) }));
+    this.timing = { made: { notes: laid.notes, hits: madeHits,
+      barAt: barFollower(grid, [...laid.notes, ...madeHits.map(hit => ({ start: hit.time, unit: hit.unit }))]) } };
     this.made.set({ lines: madeLines.lines.map(line => ({ ...line, svg: this.sanitizer.bypassSecurityTrustHtml(line.svg) })), barAt: madeLines.barAt });
     const counted = name === 'drums' ? 'hits' : 'notes';
     this.madeNote.set(`${summary.measures ?? '–'} PDF measures laid on ${songBars.length} bars of the song; ${summary.heard ?? '–'} of ${summary.notes ?? '–'} ${counted} heard in the stem`
@@ -246,7 +248,9 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
       const qpm = score.tempo ?? tempo(grid.beats) ?? 90;
       const pdf = writtenPart(score, name, qpm, written, chordName);
       this.written = { events: pdf.events, seconds: pdf.seconds, quarter: 60 / qpm, grid: pdf.grid };
-      this.timing.pdf = { grid: pdf.grid, notes: pdf.part.notes, hits: (pdf.part.hits ?? []).map(hit => ({ unit: hit.unit, time: hit.unit / 4 * (60 / qpm) })) };
+      const pdfHits = (pdf.part.hits ?? []).map(hit => ({ unit: hit.unit, time: hit.unit / 4 * (60 / qpm) }));
+      this.timing.pdf = { notes: pdf.part.notes, hits: pdfHits,
+        barAt: barFollower(pdf.grid, [...pdf.part.notes, ...pdfHits.map(hit => ({ start: hit.time, unit: hit.unit }))]) };
       // The PDF: each measure marked with how like the stem it is where it was laid (each time, when laid more than once).
       const byNumber = new Map<string, SongBar[]>();
       for (const bar of songBars) if (bar.measure !== undefined) byNumber.set(bar.number, [...byNumber.get(bar.number) ?? [], bar]);
@@ -379,8 +383,10 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
       this.playing.set(kind);
       this.playingKey.set(key);
       const view = kind === 'pdf' ? 'pdf' : 'made', until = length ? from + length : end;
+      // What is heard now: the context's clock less the time its sound takes to reach the speakers.
+      const delay = (context.baseLatency || 0) + (context.outputLatency || 0);
       const tick = () => {
-        const time = from + Math.max(0, context.currentTime - at);
+        const time = from + Math.max(0, context.currentTime - delay - at);
         this.position.set(`${clock(time)} / ${clock(until)}`);
         this.light(view, time);
         this.frame = requestAnimationFrame(tick);
@@ -407,7 +413,7 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
   private light(view: 'pdf' | 'made', time: number): void {
     const timing = this.timing[view], container = (view === 'pdf' ? this.pdfLines() : this.madeLines())?.nativeElement;
     if (!timing || !container) return;
-    const bar = barAtTime(timing.grid, time);
+    const bar = timing.barAt(time);
     const barElement = container.querySelector(`rect.bar-now[data-bar="${bar}"]`) ?? undefined;
     if (barElement !== this.litBar) {
       this.litBar?.classList.remove('on');

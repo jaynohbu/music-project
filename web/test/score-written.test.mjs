@@ -61,3 +61,18 @@ test('the bar a moment is in, numbered as the drawn score numbers bars (from 1 a
   assert.equal(written.barAtTime({ beats, firstBar: 1 }, 0.2), 0, 'the pickup');
   assert.equal(written.barAtTime({ beats, firstBar: 1 }, 0.5), 1);
 });
+
+test('a bar stays lit until every note drawn in it is struck, then the bar of the moment', () => {
+  const grid = { beats: Array.from({ length: 20 }, (_, k) => k * 0.5), firstBar: 0 };   // A bar every 2 s.
+  // Bar 1's last note is played late, at 2.3 s (in bar 2's time); bar 2's first at 2.1 s.
+  const follow = written.barFollower(grid, [{ start: 0, unit: 0 }, { start: 1.5, unit: 12 }, { start: 2.3, unit: 14 }, { start: 2.1, unit: 16 }, { start: 4.2, unit: 32 }]);
+  assert.equal(follow(1), 1);
+  assert.equal(follow(2.2), 1, 'bar 1 still has a note to strike');
+  assert.equal(follow(2.3), 2);
+  assert.equal(follow(4.1), 3);
+  assert.equal(follow(9), 5, 'after the last note, the bar of the moment');
+  // A bar's first note played early moves the light on with it.
+  const early = written.barFollower(grid, [{ start: 0, unit: 0 }, { start: 1.95, unit: 16 }]);
+  assert.equal(early(1.9), 1);
+  assert.equal(early(1.96), 2);
+});
