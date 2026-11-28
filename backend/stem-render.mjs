@@ -71,8 +71,16 @@ export async function renderClosest({ userId, parentJobId, harmonyId, result, se
     console.error('Score renderings could not be chosen', { harmonyId, name: error.name });
     return { start: async () => {} };
   }
-  const children = wanted.map(item => renderingRecord({ userId, parentJobId, harmonyId, ...item, status: 'processing', auto: true }));
-  for (const child of children) await database.send(new PutCommand({ TableName: process.env.TABLE_NAME, Item: child }));
+  const children = [];
+  // A rendering that cannot be recorded is left out (the app asks for it); the score is laid all the same.
+  for (const child of wanted.map(item => renderingRecord({ userId, parentJobId, harmonyId, ...item, status: 'processing', auto: true }))) {
+    try {
+      await database.send(new PutCommand({ TableName: process.env.TABLE_NAME, Item: child }));
+      children.push(child);
+    } catch (error) {
+      console.error('Score rendering could not be recorded', { harmonyId, family: child.family, name: error.name });
+    }
+  }
   // Made after the result is recorded, so the score is heard as soon as it is laid.
   return { start: async () => { for (const child of children) await runRendering(child, { result, seconds, directory, database, storage, render }); } };
 }

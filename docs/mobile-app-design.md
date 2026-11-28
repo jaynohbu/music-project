@@ -544,7 +544,8 @@ The user could not tell whether an uploaded score was being played correctly, so
 
 - **Similarity** is one less how unlike the song each measure is where `layOnBeats` laid it (the cost it already minimised: for the Harmonic and bass scores the pitch classes per eighth against each stem, for drums one less the Dice overlap of written and heard hits). `PlacedMeasure.cost` now keeps it (it was 0); the summary has `similarity` (mean over the score's measures; free bars have none) and each of `bars` its own. The record's `fromScore` keeps the mean (bars stay in the result).
 - **Older results** have no similarity: the dialog offers **Lay the score again**, `POST …/harmony {useScore: true, again: true}` (a new run on the same scores even though they were laid; while one runs, that one).
-- Files: `web/src/score-check.ts` (the dialog), `web/src/score-written.ts` (pure parts, `web/test/score-written.test.mjs`). Analysis image `cpu-20261128044216`.
+- Files: `web/src/score-check.ts` (the dialog), `web/src/score-written.ts` (pure parts, `web/test/score-written.test.mjs`). Analysis image `cpu-20261128050115`.
+- Fixed the same day: laying a score failed at its end (AccessDenied) since the closest-sound renderings came in on 2026-11-27, because the worker role could not PutItem their records; the role has it now, and a rendering that cannot be recorded no longer fails the score. Amazing Grace laid again: similarity 0.588, 1209 of 1536 notes heard.
 - Not done: the three songs with uploaded scores (Amazing Grace, Psalm 139, Our God) were laid before this; each needs Lay the score again once (relaying them from the terminal was not allowed).
 
 ### Score parts made on the server (2026-11-27, evening)

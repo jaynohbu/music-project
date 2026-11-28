@@ -638,6 +638,10 @@ Resources:
               - Effect: Allow
                 Action: [dynamodb:GetItem, dynamodb:UpdateItem]
                 Resource: !GetAtt Jobs.Arn
+              # Score parts made in their closest sounds are recorded by the run that lays the score (stem-render.mjs).
+              - Effect: Allow
+                Action: dynamodb:PutItem
+                Resource: !GetAtt Jobs.Arn
               - Effect: Allow
                 Action: s3:GetObject
                 Resource:
