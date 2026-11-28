@@ -92,6 +92,10 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.fl
         </div>
         <p class="hint">{{ pdfNote() }}</p>
         <div class="score-check-lines" #pdfLines>
+          @if (floating()?.view === 'pdf') {
+            <button type="button" class="score-check-float" [style.left.px]="floating()!.left" [style.top.px]="floating()!.top"
+              (click)="floatPress()" [attr.aria-label]="playing() ? 'Stop' : 'Play from here'">{{ playing() ? '■ Stop' : '▶ Play' }}</button>
+          }
           @for (line of pdf()?.lines ?? []; track $index) {
             <div class="score-check-line" [innerHTML]="line.svg" (click)="pickPdf($index, $event)"></div>
           }
@@ -106,6 +110,10 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.fl
         </div>
         <p class="hint">{{ madeNote() }}</p>
         <div class="score-check-lines" #madeLines>
+          @if (floating()?.view === 'made') {
+            <button type="button" class="score-check-float" [style.left.px]="floating()!.left" [style.top.px]="floating()!.top"
+              (click)="floatPress()" [attr.aria-label]="playing() ? 'Stop' : 'Play from here'">{{ playing() ? '■ Stop' : '▶ Play' }}</button>
+          }
           @for (line of made()?.lines ?? []; track $index) {
             <div class="score-check-line" [innerHTML]="line.svg" (click)="pickMade($index, $event)"></div>
           }
@@ -149,6 +157,11 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
   private litBar?: Element;
   private litNotes: Element[] = [];
   private litKey = '';
+  // A Stop (or, once stopped, Play from there) button over the bar playing, following it.
+  readonly floating = signal<{ view: 'pdf' | 'made'; left: number; top: number } | null>(null);
+  private floatBar?: Element;
+  private resume?: { kind: Playing; time: number };
+  private readonly placeFloat = () => this.moveFloat();
   readonly preparing = signal(false);
   readonly position = signal('');
   readonly playingLabel = computed(() => ({ pdf: 'the PDF', made: 'the made transcript', together: 'the made transcript with the stem', stem: 'the stem' })[this.playing() ?? 'pdf']);
@@ -164,10 +177,14 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
   private token = 0;
   private destroyed = false;
 
-  ngOnInit(): void { void this.load(); }
+  ngOnInit(): void {
+    window.addEventListener('resize', this.placeFloat);
+    void this.load();
+  }
 
   ngOnDestroy(): void {
     this.destroyed = true;
+    window.removeEventListener('resize', this.placeFloat);
     this.stop();
     void this.context?.close();
   }
@@ -213,6 +230,7 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
     this.stop();
     this.buffers.clear();
     const token = ++this.token, document = this.document!, job = this.job()!;
+    this.floating.set(null); this.floatBar = undefined; this.resume = undefined;
     // The stem heard is the part's own.
     if (name !== this.part()) this.stem = undefined;
     this.part.set(name); this.pdf.set(null); this.made.set(null); this.selected.set(null); this.error.set('');
@@ -387,6 +405,7 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
       const delay = (context.baseLatency || 0) + (context.outputLatency || 0);
       const tick = () => {
         const time = from + Math.max(0, context.currentTime - delay - at);
+        this.resume = { kind, time };
         this.position.set(`${clock(time)} / ${clock(until)}`);
         this.light(view, time);
         this.frame = requestAnimationFrame(tick);
@@ -420,6 +439,7 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
       barElement?.classList.add('on');
       this.litBar = barElement;
       barElement?.closest('.score-check-line')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      if (barElement) { this.floatBar = barElement; this.moveFloat(view); }
     }
     const selectors: string[] = [];
     timing.notes.forEach((note, index) => { if (note.start <= time && time < Math.max(note.end, note.start + 0.12)) selectors.push(`g.note[data-i="${index}"]`); });
@@ -430,6 +450,19 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
     this.litNotes = key ? Array.from(container.querySelectorAll(key)) : [];
     for (const element of this.litNotes) element.classList.add('on');
     this.litKey = key;
+  }
+
+  private moveFloat(view = this.floating()?.view): void {
+    const bar = this.floatBar, container = bar?.closest('.score-check-lines');
+    if (!bar || !container || !view) return;
+    const box = bar.getBoundingClientRect(), around = container.getBoundingClientRect();
+    this.floating.set({ view, left: box.left - around.left + box.width / 2, top: box.top - around.top });
+  }
+
+  // Stops what plays, or plays on from where it stopped.
+  floatPress(): void {
+    if (this.playing()) { this.stop(); return; }
+    if (this.resume) void this.playRange(this.resume.kind, this.resume.time, undefined, this.resume.kind);
   }
 
   private unlight(): void {
