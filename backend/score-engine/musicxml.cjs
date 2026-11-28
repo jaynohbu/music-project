@@ -389,6 +389,23 @@ function unrollRepeats(score) {
         }
         endings.push({ numbers, from: index, to });
     }
+    // An ending that ends on a backward repeat is played every time through but the last, and the ending right after it
+    // the last time, whatever numbers were read for them; one read in pieces right before it (with no repeat of its
+    // own: a first ending read as 1 then 2) is part of it.
+    for (let k = 0; k < endings.length; k++) {
+        const ending = endings[k], times = marks[ending.to]?.backward;
+        if (!times)
+            continue;
+        const before = endings[k - 1];
+        if (before && before.to + 1 === ending.from && !marks[before.to]?.backward) {
+            ending.from = before.from;
+            endings.splice(--k, 1);
+        }
+        ending.numbers = Array.from({ length: Math.max(1, times - 1) }, (_, pass) => pass + 1);
+        const after = endings[k + 1];
+        if (after && after.from === ending.to + 1 && !marks[after.to]?.backward)
+            after.numbers = [times];
+    }
     const endingAt = (index) => endings.find(ending => index >= ending.from && index <= ending.to);
     // The last ending of a repeat: none starts right after it.
     const lastEnding = (ending) => !endings.some(other => other.from === ending.to + 1);

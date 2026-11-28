@@ -277,6 +277,15 @@ test('road signs taken: D.S. al Coda (repeats not taken again on the way back), 
   assert.deepEqual(unfold({ 2: { fine: true }, 4: { daCapo: true } }), ['1', '2', '3', '4', '5', '1', '2', '3']);
 });
 
+test('a first ending read in pieces (1, then 2 holding the backward repeat) is still the first ending', () => {
+  // As Audiveris read Amazing Grace: |: 13 … 27 [1. 28] [2. 29 30 31 :|] 32 …, the second ending's mark again on 32.
+  const measures = Array.from({ length: 34 }, (_, i) => ({ number: String(i + 1), start: i * 4, length: 4, beats: 4, beatType: 4 }));
+  const marks = { 12: { forward: true }, 27: { endingStart: [1], endingStop: [1] }, 28: { endingStart: [2] }, 30: { backward: 2, endingStop: [2] }, 31: { endingStart: [2], endingStop: [2] } };
+  const numbers = xml.unrollRepeats({ title: '', parts: [], measures, notes: [], chords: [], marks }).measures.map(m => Number(m.number));
+  const range = (from, to) => Array.from({ length: to - from + 1 }, (_, k) => from + k);
+  assert.deepEqual(numbers, [...range(1, 31), ...range(13, 27), ...range(32, 34)]);
+});
+
 test('MusicXML: road signs read from symbols, words and sounds; a bare coda sign settled as "To Coda" or the coda', () => {
   const bar = (n, directions = '') => `<measure number="${n}">${directions}${note('C', 4, 4)}</measure>`;
   const words = text => `<direction><direction-type><words>${text}</words></direction-type></direction>`;
