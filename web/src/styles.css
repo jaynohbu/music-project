@@ -584,3 +584,8 @@ footer { text-align: center; color: #64748b; padding: 20px var(--page-gutter); f
   font-size: .85rem; white-space: nowrap; box-shadow: 0 2px 8px rgb(0 0 0 / 25%); transition: left 150ms ease, top 150ms ease; }
 .score-check-line { cursor: pointer; }
 .score-check-line svg { display: block; width: 100%; height: auto; }
+/* Something is being prepared: a small spinning ring before the label. */
+.busy::before { content: ''; display: inline-block; width: .85em; height: .85em; margin-right: .45em; vertical-align: -.1em;
+  border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: busy-spin .8s linear infinite; }
+@keyframes busy-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .busy::before { animation-duration: 2.4s; } }

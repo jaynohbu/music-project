@@ -705,9 +705,9 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                     <button type="button" class="secondary" (click)="previousSong.emit()" [disabled]="!hasPrevious">Previous song</button>
                     <button type="button" class="secondary" (click)="nextSong.emit()" [disabled]="!hasNext">Next song</button>
                   }
-                  <button type="button" (click)="play()" [disabled]="!canPlay() || playing()"
-                    [attr.aria-label]="track.label + ' play all stems'">
-                    {{ position() > sectionStart() && position() < sectionEndTime() ? 'Resume' : 'Play' }}
+                  <button type="button" (click)="play()" [disabled]="!canPlay() || playing()" [class.busy]="stemsLoading()" [attr.aria-busy]="stemsLoading()"
+                    [attr.aria-label]="track.label + (stemsLoading() ? ' loading the stems' : ' play all stems')">
+                    {{ stemsLoading() ? 'Loading…' : position() > sectionStart() && position() < sectionEndTime() ? 'Resume' : 'Play' }}
                   </button>
                   <button type="button" class="secondary" (click)="pause()" [disabled]="!playing()"
                     [attr.aria-label]="track.label + ' pause all stems'">Pause</button>
@@ -1941,6 +1941,12 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     this.loadedParts.clear();
     this.loadedChords = undefined;
     this.polling = false;
+  }
+
+  // Some stem still loading (none failed): Play waits for it.
+  stemsLoading(): boolean {
+    const tracks = this.tracks();
+    return !this.canPlay() && !tracks.some(track => track.status === 'error');
   }
 
   canPlay(): boolean {

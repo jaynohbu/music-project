@@ -58,7 +58,8 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.fl
       <div class="score-check-controls">
       <div class="score-check-player" role="status">
         @if (playing()) { <span>Playing {{ playingLabel() }} · {{ position() }}</span> <button type="button" (click)="stop()">Stop</button> }
-        @else if (preparing()) { <span>Preparing the sound…</span> }
+        @else if (preparing()) { <span class="busy">Preparing the sound… (the first time takes a few seconds)</span> }
+        @else if (warming()) { <span class="busy">Getting the sound ready…</span> }
       </div>
 
       @if (selected(); as bar) {
@@ -70,11 +71,11 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.fl
           @if (bar.corrected) { <span class="hint">drum bar corrected</span> }
           <div class="score-check-buttons">
             @if (bar.measure !== undefined) {
-              <button type="button" (click)="playMeasure(bar)" [disabled]="!pdf()">{{ playingKey() === 'measure:' + bar.index ? 'Stop' : 'PDF measure' }}</button>
+              <button type="button" (click)="playMeasure(bar)" [disabled]="!pdf()" [class.busy]="preparingKey() === 'measure:' + bar.index">{{ buttonLabel('measure:' + bar.index, 'PDF measure') }}</button>
             }
-            <button type="button" (click)="playBar('stem', bar)" [disabled]="!stem">{{ playingKey() === 'stem:' + bar.index ? 'Stop' : 'Stem' }}</button>
-            <button type="button" (click)="playBar('made', bar)">{{ playingKey() === 'made:' + bar.index ? 'Stop' : 'Made bar' }}</button>
-            <button type="button" (click)="playBar('together', bar)" [disabled]="!stem">{{ playingKey() === 'together:' + bar.index ? 'Stop' : 'Made bar + stem' }}</button>
+            <button type="button" (click)="playBar('stem', bar)" [disabled]="!stem" [class.busy]="preparingKey() === 'stem:' + bar.index">{{ buttonLabel('stem:' + bar.index, 'Stem') }}</button>
+            <button type="button" (click)="playBar('made', bar)" [class.busy]="preparingKey() === 'made:' + bar.index">{{ buttonLabel('made:' + bar.index, 'Made bar') }}</button>
+            <button type="button" (click)="playBar('together', bar)" [disabled]="!stem" [class.busy]="preparingKey() === 'together:' + bar.index">{{ buttonLabel('together:' + bar.index, 'Made bar + stem') }}</button>
           </div>
           @if (placements().length > 1) {
             <span class="hint">PDF measure {{ bar.number }} is laid {{ placements().length }} times:
@@ -90,7 +91,7 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.fl
       <section class="score-check-transcript" aria-labelledby="score-check-pdf">
         <div class="score-check-heading">
           <h2 id="score-check-pdf">From the PDF</h2>
-          <button type="button" (click)="toggle('pdf')" [disabled]="!pdf()">{{ playingKey() === 'pdf' ? 'Stop' : 'Play' }}</button>
+          <button type="button" (click)="toggle('pdf')" [disabled]="!pdf()" [class.busy]="preparingKey() === 'pdf'">{{ buttonLabel('pdf', 'Play') }}</button>
         </div>
         <p class="hint">{{ pdfNote() }}</p>
         <div class="score-check-lines" #pdfLines>
@@ -107,8 +108,8 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.fl
       <section class="score-check-transcript" aria-labelledby="score-check-made">
         <div class="score-check-heading">
           <h2 id="score-check-made">Made for the song (as the mixer plays it)</h2>
-          <button type="button" (click)="toggle('made')" [disabled]="!made()">{{ playingKey() === 'made' ? 'Stop' : 'Play' }}</button>
-          <button type="button" class="secondary" (click)="toggle('together')" [disabled]="!made() || !stem">{{ playingKey() === 'together' ? 'Stop' : 'Play with the stem' }}</button>
+          <button type="button" (click)="toggle('made')" [disabled]="!made()" [class.busy]="preparingKey() === 'made'">{{ buttonLabel('made', 'Play') }}</button>
+          <button type="button" class="secondary" (click)="toggle('together')" [disabled]="!made() || !stem" [class.busy]="preparingKey() === 'together'">{{ buttonLabel('together', 'Play with the stem') }}</button>
         </div>
         <p class="hint">{{ madeNote() }}</p>
         <div class="score-check-lines" #madeLines>
@@ -167,6 +168,12 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
   private resume?: { kind: Playing; time: number };
   private readonly placeFloat = () => this.moveFloat();
   readonly preparing = signal(false);
+  // The button whose sound is being prepared, and whether the sounds are being made ahead of a Play.
+  readonly preparingKey = signal('');
+  readonly warming = signal(false);
+  buttonLabel(key: string, idle: string): string {
+    return this.playingKey() === key ? 'Stop' : this.preparingKey() === key ? 'Preparing…' : idle;
+  }
   readonly position = signal('');
   readonly playingLabel = computed(() => ({ pdf: 'the PDF', made: 'the made transcript', together: 'the made transcript with the stem', stem: 'the stem' })[this.playing() ?? 'pdf']);
   stem?: AudioBuffer;
@@ -177,7 +184,7 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
   private laidPart?: HarmonyPart;
   private context?: AudioContext;
   private sources: AudioBufferSourceNode[] = [];
-  private buffers = new Map<string, AudioBuffer>();
+  private buffers = new Map<string, Promise<AudioBuffer>>();
   private token = 0;
   private destroyed = false;
 
@@ -308,9 +315,21 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
         this.stem = decoded;
       }
       this.status.set('');
+      void this.warm(token);
     } catch (error) {
       if (token === this.token) { this.status.set(''); this.error.set(`Could not read the uploaded score: ${errorMessage(error)}`); }
     }
+  }
+
+  // Both transcripts' sounds made while the page is read, so Play starts at once.
+  private async warm(token: number): Promise<void> {
+    this.context ??= new AudioContext();
+    this.warming.set(true);
+    try {
+      await this.sound('made');
+      if (token === this.token && this.written) await this.sound('pdf');
+    } catch { /* Made again when played; the error is shown then. */ }
+    if (token === this.token) this.warming.set(false);
   }
 
   colorOf(level?: number): string { return level === undefined ? '' : levelColor(level); }
@@ -359,6 +378,12 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
   private async sound(kind: 'pdf' | 'made'): Promise<AudioBuffer> {
     const known = this.buffers.get(kind);
     if (known) return known;
+    const made = this.render(kind);
+    made.catch(() => { if (this.buffers.get(kind) === made) this.buffers.delete(kind); });
+    this.buffers.set(kind, made);
+    return made;
+  }
+  private async render(kind: 'pdf' | 'made'): Promise<AudioBuffer> {
     const name = this.part(), context = this.context!;
     const sound = offered(this.library!, this.document?.['accompaniment'] as never, FAMILY[name]).sounds[0] ?? 0;
     let buffer: AudioBuffer;
@@ -369,7 +394,6 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
       buffer = await renderNotes(events, this.stem?.duration ?? (this.document!.beats.at(-1) ?? 0) + 2, context.sampleRate, sound);
       if (gain !== 1) { const data = buffer.getChannelData(0); for (let index = 0; index < data.length; index++) data[index] *= gain; }
     }
-    this.buffers.set(kind, buffer);
     return buffer;
   }
 
@@ -395,8 +419,8 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
     this.stop();
     this.context ??= new AudioContext();
     const context = this.context, token = this.token;
+    this.preparing.set(true); this.preparingKey.set(key);
     await context.resume();
-    this.preparing.set(true);
     try {
       const buffers = kind === 'stem' ? [this.stem!] : kind === 'pdf' ? [await this.sound('pdf')]
         : kind === 'made' ? [await this.sound('made')] : [await this.sound('made'), this.stem!];
@@ -426,7 +450,7 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
     } catch (error) {
       this.error.set(`Could not play: ${errorMessage(error)}`);
     } finally {
-      this.preparing.set(false);
+      this.preparing.set(false); this.preparingKey.set('');
     }
   }
 
