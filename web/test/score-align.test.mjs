@@ -384,6 +384,21 @@ test('after the anchor, a measure less like the stems than 70% is swapped for th
   assert.deepEqual(laid.measures.slice(4).map(m => [m.number, m.printed]), [['2', 1], ['2', 1], ['2', 1], ['2', 1]]);
 });
 
+test('where the song goes on past the score\'s end, its bars are filled with the measures most like them, until the music ends', () => {
+  // The score A–D; the song plays A B C D, then B and C, then nothing like any measure (its end) for two bars.
+  const letters = [...'ABCD'], song = [...'ABCDBC??'];
+  const score = { title: '', parts: [], chords: [],
+    measures: letters.map((_, k) => ({ number: String(k + 1), start: k * 4, length: 4, beats: 4, beatType: 4 })),
+    notes: letters.map((_, k) => ({ pitch: 60 + k, start: k * 4 + 1, length: 2, measure: k, part: 0, staff: 1 })) };
+  const beats = Array.from({ length: 4 * 8 + 1 }, (_, k) => k * 0.5);
+  const { placed, laid } = align.layFromAnchor(score, beats, 0, (index, beat) => song[beat / 4] === letters[index] ? 0.9 : 0.3);
+  assert.deepEqual(placed.map(p => p.number), ['1', '2', '3', '4', '2', '3']);
+  assert.deepEqual(placed.map(p => !!p.filled), [false, false, false, false, true, true]);
+  assert.ok(placed.every((p, k) => p.from === k * 4 && Math.abs(p.start - k * 2) < 1e-9));
+  assert.deepEqual(laid.measures.map(m => [m.number, m.start]), [['1', 0], ['2', 4], ['3', 8], ['4', 12], ['2', 16], ['3', 20]]);
+  assert.deepEqual(laid.notes.map(n => [n.pitch, n.start, n.measure]), [[60, 1, 0], [61, 5, 1], [62, 9, 2], [63, 13, 3], [61, 17, 4], [62, 21, 5]]);
+});
+
 test('a measure inside the anchor is kept however unlike the stems it is', () => {
   const letters = [...'ABCDEFGH'], song = [...'ABCDBFGH'];
   const score = { title: '', parts: [], chords: [], notes: [],

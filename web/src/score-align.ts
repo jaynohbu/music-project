@@ -750,6 +750,7 @@ export interface PlacedMeasure {
   // A measure less like the stems than SWAP_BELOW, swapped for the score's measure most like them there: the one
   // the score has there (its number and likeness).
   swapped?: { number: string; measure: number; cost: number };
+  filled?: boolean;                       // Past the score's end, where the song goes on: the measure most like it.
 }
 export interface MeasureFit {
   placed: PlacedMeasure[];
@@ -798,7 +799,11 @@ export function rescaleBeats(beats: number[], firstBar: number, ratio: number): 
 // than SWAP_BELOW is compared with every other measure of the score (each printed measure once, of the same length, so
 // the measures after it keep their beats) against the stems of the bar it was laid on, and swapped for the one most
 // like them when that one is more alike: the bar plays that measure, as written.
-export const SWAP_BELOW = 0.7;
+//
+// Last, where the song goes on past the score's end, its beats are filled a bar at a time (bars of the score's usual
+// length) with the measure most like the stems there, as written, until the best is less alike than FILL_LEAST (the
+// music has ended) or the beats run out.
+export const SWAP_BELOW = 0.7, FILL_LEAST = 0.4;
 export function layFromAnchor(score: Score, beats: number[], firstBar: number,
   similarity: (measure: number, beat: number, quarters: number) => number): { placed: PlacedMeasure[]; first: number; laid: Score } {
   const measures = score.measures, total = measures.reduce((sum, measure) => sum + measure.length, 0);
@@ -848,7 +853,46 @@ export function layFromAnchor(score: Score, beats: number[], firstBar: number,
     placed[index] = { ...place, swapped: { number: place.number, measure: place.measure!, cost: place.cost },
       measure: measures[chosen].printed ?? chosen, number: measures[chosen].number, cost: Math.max(0, Math.min(1, 1 - best)) };
   });
-  return { placed, first, laid: swapMeasures(score, swaps) };
+  // The fill past the score's end.
+  const lengths = [...candidates].sort((a, b) => b[1].length - a[1].length || b[0] - a[0]);
+  const fills: number[] = [];
+  if (lengths.length) {
+    const [quarters, choices] = lengths[0];
+    let end = measures.length ? startOf(measures.length - 1, first) + quartersOf(measures.length - 1) : first;
+    let quarter = total;
+    while (end >= 0 && end + quarters <= beats.length - 1) {
+      let best = -Infinity, chosen = -1;
+      for (const other of choices) {
+        const like = similarity(other, end, quarters);
+        if (like > best) { best = like; chosen = other; }
+      }
+      if (chosen < 0 || best < FILL_LEAST) break;
+      fills.push(chosen);
+      placed.push({
+        measure: measures[chosen].printed ?? chosen, number: measures[chosen].number, from: end, drumBeats: quarters,
+        played: measures.length + fills.length - 1, start: timeAtBeat(beats, first + quarter), end: timeAtBeat(beats, first + quarter + quarters),
+        cost: Math.max(0, Math.min(1, 1 - best)), corrected: '', estimated: true, filled: true,
+      });
+      end += quarters; quarter += quarters;
+    }
+  }
+  return { placed, first, laid: appendMeasures(swapMeasures(score, swaps), fills) };
+}
+
+// The score with the measures in `fills` (indices as played) played again after its end, in that order, as written.
+export function appendMeasures(score: Score, fills: number[]): Score {
+  if (!fills.length) return score;
+  const measures = [...score.measures], notes = [...score.notes], chords = [...score.chords], hits = [...score.hits ?? []];
+  let at = measures.reduce((sum, measure) => sum + measure.length, 0);
+  for (const other of fills) {
+    const measure = score.measures[other], index = measures.length, shift = at - measure.start;
+    measures.push({ ...measure, start: at, printed: measure.printed ?? other });
+    for (const note of score.notes) if (note.measure === other) notes.push({ ...note, start: note.start + shift, measure: index });
+    for (const chord of score.chords) if (chord.measure === other) chords.push({ ...chord, start: chord.start + shift, measure: index });
+    for (const hit of score.hits ?? []) if (hit.measure === other) hits.push({ ...hit, start: hit.start + shift, measure: index });
+    at += measure.length;
+  }
+  return { ...score, measures, notes, chords, ...(score.hits ? { hits } : {}) };
 }
 
 // The score with the measures in `swaps` (index as played → the measure played there instead) holding that measure's
@@ -1136,9 +1180,10 @@ export interface ScoreSummary {
   family?: 'guitar' | 'keys'; scoreSavedAt?: string; similarity?: number;
   // Every measure of the score as played. id: its index in the score as printed (numbers can repeat); estimated:
   // outside the anchor, its time only from the beats around (not synced with the stems); swapped: the measure the
-  // score has there, swapped for this one (layFromAnchor), with its similarity.
+  // score has there, swapped for this one (layFromAnchor), with its similarity; filled: past the score's end, the
+  // measure most like the song there.
   bars: { number: string; start: number; end: number; corrected?: true; similarity?: number; id?: number; estimated?: true;
-    swapped?: { number: string; id: number; similarity: number } }[];
+    swapped?: { number: string; id: number; similarity: number }; filled?: true }[];
   shift?: number;                         // Semitones the song is from the score's written key.
   vocalLayers?: string[];
 }
@@ -1146,6 +1191,7 @@ const barsOf = (placed: PlacedMeasure[]) => placed.map(place => ({ number: place
   end: Math.round(place.end * 1000) / 1000, ...(place.corrected ? { corrected: true as const } : {}),
   ...(place.measure !== null ? { id: place.measure } : {}), ...(place.estimated ? { estimated: true as const } : {}),
   ...(place.measure !== null && !place.outside ? { similarity: Math.round((1 - place.cost) * 1000) / 1000 } : {}),
+  ...(place.filled ? { filled: true as const } : {}),
   ...(place.swapped ? { swapped: { number: place.swapped.number, id: place.swapped.measure, similarity: Math.round((1 - place.swapped.cost) * 1000) / 1000 } } : {}) }));
 // How alike the synced measures (the anchor) are with the song.
 export function similarityOf(placed: PlacedMeasure[]): number | undefined {
