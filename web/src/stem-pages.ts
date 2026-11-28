@@ -366,7 +366,7 @@ const SCORE_VOICES: Record<SoundFamily, number> = { guitar: 0, keys: -1, bass: -
 const familyOfChannel = (channel: string) => SCORE_FAMILIES.find(family => family.channel === channel);
 // About how long a score takes: the reader's time a page, and laying it on the song on the server (a worker
 // starting, the stems fetched, every stem's spectrogram).
-const PAGE_SECONDS = 22, LAYING_SECONDS = 180;
+const PAGE_SECONDS = 22, LAYING_SECONDS = 240;
 
 // A PDF's pages, counted from its page objects; 1 when they cannot be told.
 async function pageCount(file: File): Promise<number> {
@@ -472,9 +472,9 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                       [attr.aria-label]="'See the ' + track.label + ' waveform and spectrogram on their own page'">Waveform & spectrum</a>
                   }
                   @if (isScored(track.name) && job()?.status === 'completed' && harmonyGrid()) {
-                    <label class="button-link secondary score-upload" [class.disabled]="!!scoreImportStatus() || !canPlay()">Upload score
+                    <label class="button-link secondary score-upload" [class.disabled]="scoreWorking() || !canPlay()">Upload score
                       <input type="file" accept=".pdf,.png,.jpg,.jpeg,.musicxml,.xml,.mxl,application/pdf"
-                        (change)="uploadScore($event, track.name)" [disabled]="!!scoreImportStatus() || !canPlay()"
+                        (change)="uploadScore($event, track.name)" [disabled]="scoreWorking() || !canPlay()"
                         [attr.aria-label]="'Upload a score (PDF or MusicXML) to be the ' + track.label + ' score'">
                     </label>
                   }
@@ -512,7 +512,7 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                   @if (checkable(track.name)) {
                     <a class="button-link secondary" [routerLink]="['/score-check', job()!.jobId]" [queryParams]="{ part: track.name }"
                       [attr.aria-label]="'Compare the uploaded ' + track.label + ' score with the transcript made from it, bar by bar'">Check score</a>
-                    <button type="button" class="secondary" (click)="regenerateScore()" [disabled]="scoring() || regeneratingScore()"
+                    <button type="button" class="secondary" (click)="regenerateScore()" [disabled]="scoreWorking()"
                       [attr.aria-label]="'Lay the uploaded scores on the song again'">{{ scoring() || regeneratingScore() ? 'Regenerating score…' : 'Regenerate score' }}</button>
                   }
                   @if (track.hasCleaned) {
@@ -541,7 +541,7 @@ const LYRICS_REPLAY_LEAD = 1; // Seconds of run-up before an edited line.
                 @if (isHarmonic(track.name) && chordsFailure()) { <span class="error">{{ chordsFailure() }}</span> }
                 @if (isHarmonic(track.name) && partFailure(track.name)) { <span class="error">{{ partFailure(track.name) }}</span> }
                 @if (track.name === scoreImportPart()) {
-                  @if (scoreImportStatus() || scoring()) { <span class="hint" role="status">{{ scoreImportStatus() || 'Processing… about ' + layingMinutes + ' min' }}</span> }
+                  @if (scoreImportStatus() || scoring()) { <span class="hint" role="status">{{ scoreImportStatus() || scoringProgress() }}</span> }
                   @if (scoreImportError()) { <span class="error" role="alert">{{ scoreImportError() }}</span> }
                 }
               </div>
@@ -1269,7 +1269,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   // own score for the part always takes them from it; otherwise the page asks whether there is a score: one is
   // uploaded and used, or they are found from the audio as before.
   async chordsAndNotes(track?: StemTrack): Promise<void> {
-    if (this.scoreBusy) return;
+    if (this.scoreWorking()) return;
     const part = (track && this.isScored(track.name) ? track.name : 'other') as ScorePartName;
     if (this.job()?.scores?.[part] || (part === 'other' && this.job()?.score)) { void this.applySavedScore(true); return; }
     const what = part === 'drums' ? 'the drum score is' : 'the chords and notes are';
@@ -1329,6 +1329,24 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   scoring(): boolean {
     const harmony = this.job()?.harmony;
     return !!harmony?.scoring && (harmony.status === 'queued' || harmony.status === 'processing');
+  }
+  // A score being read, saved or laid: no other score can be uploaded or laid meanwhile.
+  scoreWorking(): boolean { return !!this.scoreImportStatus() || this.scoring() || this.regeneratingScore() || this.scoreBusy; }
+  // How long the laying has taken, against how long it usually takes, counted every second while it runs.
+  private readonly scoringTick = signal(0);
+  private scoringTimer?: ReturnType<typeof setInterval>;
+  scoringProgress(): string {
+    this.scoringTick();
+    const started = Date.parse(this.job()?.harmony?.startedAt ?? '');
+    if (!Number.isFinite(started)) return `Processing… about ${this.layingMinutes} min`;
+    const elapsed = Math.max(0, Math.round((Date.now() - started) / 1000));
+    const clock = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, '0')}`;
+    return elapsed <= LAYING_SECONDS ? `Processing… ${clock} of about ${this.layingMinutes} min`
+      : `Processing… ${clock}, longer than usual (about ${this.layingMinutes} min)`;
+  }
+  private runClock(): void {
+    if (this.scoring() && !this.scoringTimer) this.scoringTimer = setInterval(() => this.scoringTick.update(tick => tick + 1), 1000);
+    else if (!this.scoring() && this.scoringTimer) { clearInterval(this.scoringTimer); this.scoringTimer = undefined; }
   }
 
   // A song with its own score whose chords & notes are not yet from it (its analysis just finished, or the score
@@ -1867,6 +1885,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    clearInterval(this.scoringTimer);
     if (this.reportedPlaying) { this.reportedPlaying = false; this.activity.playing(false); }
     this.destroyed = true;
     this.hydrated.set(false);
@@ -1937,6 +1956,7 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
       const job = response.job;
       this.job.set(job);
       this.error.set('');
+      this.runClock();
       // The first time a split song is opened, its chords and melody are found in the background, once per
       // song while the page is open. A failed run is not retried by itself; the button does that.
       if (job.status === 'completed' && (!job.harmony || job.harmony.stale) && !autoRequested.has(job.jobId)) {

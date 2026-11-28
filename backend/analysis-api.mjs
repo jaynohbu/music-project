@@ -84,8 +84,9 @@ async function publicAnalysis(item, signer, storage) {
   const fields = {
     id: item.jobId, status: item.status, ...(item.error ? { error: item.error } : {}),
     ...(item.fromScore ? { fromScore: item.fromScore } : {}),
-    // A run laying the song's score on it (the worker's score_run.mjs).
+    // A run laying the song's score on it (the worker's score_run.mjs), and when it began, for the time it has taken.
     ...(item.scoreKey ? { scoring: true } : {}),
+    ...(item.scoreKey && item.status !== 'completed' && item.startedAt ? { startedAt: item.startedAt } : {}),
   };
   if (item.status !== 'completed') return fields;
   return {
