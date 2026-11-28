@@ -17,7 +17,7 @@ import { SCORE_ENGINE } from './score-blast';
 import { barAtTime, barFollower, laidEvents, percent, writtenKey, writtenPart } from './score-written';
 import type { Score } from './musicxml';
 
-interface LaidBar { number: string; start: number; end: number; corrected?: true; similarity?: number; estimated?: true }
+interface LaidBar { number: string; start: number; end: number; corrected?: true; similarity?: number; estimated?: true; id?: number }
 interface Laid { title?: string; measures?: number; notes?: number; heard?: number; correctedBars?: number; similarity?: number; bars?: LaidBar[] }
 interface Drawn { lines: { svg: SafeHtml; firstBar: number }[]; barAt: (line: number, share: number) => number }
 // A bar of the song as laid: its number on the made transcript, and the PDF measure laid there.
@@ -146,7 +146,7 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
   readonly madeNote = signal('');
   readonly bars = signal<SongBar[]>([]);
   readonly selected = signal<SongBar | null>(null);
-  readonly placements = computed(() => { const bar = this.selected(); return bar?.measure === undefined ? [] : this.bars().filter(other => other.number === bar.number && other.measure !== undefined); });
+  readonly placements = computed(() => { const bar = this.selected(); return bar?.measure === undefined ? [] : this.bars().filter(other => other.measure !== undefined && (bar.id !== undefined ? other.id === bar.id : other.number === bar.number)); });
   // The result shown was laid by an earlier version of the laying (score-blast.ts SCORE_ENGINE); laid again once.
   readonly outdated = signal(false);
   private relaid = false;
@@ -277,33 +277,30 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
       + (estimated ? `, ${estimated} before or after them estimated` : '') + `; ${summary.heard ?? '–'} of ${summary.notes ?? '–'} ${counted} heard in the stem`
       + (summary.correctedBars ? `; ${summary.correctedBars} drum bars corrected` : '') + '. Choose a bar to compare it.');
     try {
-      const [{ parseMusicXml }, { chordName }] = await Promise.all([import('./musicxml'), import('./score-align')]);
+      const [{ parseMusicXml, unrollRepeats }, { chordName }] = await Promise.all([import('./musicxml'), import('./score-align')]);
       const response = await fetch(this.scoreUrl(name)!);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const musicxml = await response.text();
       if (token !== this.token) return;
-      const score = this.score = parseMusicXml(musicxml), written = name === 'drums' ? undefined : writtenKey(musicxml);
+      // The PDF as played (its repeats unfolded, as it was laid on the song): measure k is the song's bar k.
+      const printed = parseMusicXml(musicxml), score = this.score = unrollRepeats(printed), written = name === 'drums' ? undefined : writtenKey(musicxml);
       const qpm = score.tempo ?? tempo(grid.beats) ?? 90;
       const pdf = writtenPart(score, name, qpm, written, chordName);
       this.written = { events: pdf.events, seconds: pdf.seconds, quarter: 60 / qpm, grid: pdf.grid };
       const pdfHits = (pdf.part.hits ?? []).map(hit => ({ unit: hit.unit, time: hit.unit / 4 * (60 / qpm) }));
       this.timing.pdf = { notes: pdf.part.notes, hits: pdfHits,
         barAt: barFollower(pdf.grid, [...pdf.part.notes, ...pdfHits.map(hit => ({ start: hit.time, unit: hit.unit }))]) };
-      // The PDF: each measure marked with how like the stem it is where it was laid (each time, when laid more than once).
-      const byNumber = new Map<string, SongBar[]>();
-      for (const bar of songBars) if (bar.measure !== undefined) byNumber.set(bar.number, [...byNumber.get(bar.number) ?? [], bar]);
+      // The PDF: each measure marked with how like the stem it is where it was laid.
       const pdfMarks = new Map<number, BarMark>();
-      for (const measure of score.measures) {
-        const bar = Math.floor((Math.round(measure.start * 4) - pdf.grid.firstBar * 4) / 16) + 1, placed = byNumber.get(measure.number) ?? [];
-        const levels = placed.map(item => item.similarity).filter((value): value is number => value !== undefined);
-        const mean = levels.length ? levels.reduce((a, b) => a + b, 0) / levels.length : undefined;
-        pdfMarks.set(bar, !placed.length ? { text: `m.${measure.number} not laid` }
-          : { text: `m.${measure.number} ${placed.length > 1 ? levels.map(percent).join(' ') : percent(mean)}`, ...(mean !== undefined ? { level: mean } : {}) });
-      }
+      score.measures.forEach((measure, index) => {
+        const bar = Math.floor((Math.round(measure.start * 4) - pdf.grid.firstBar * 4) / 16) + 1, placed = songBars[index];
+        pdfMarks.set(bar, !placed ? { text: `m.${measure.number} not laid` }
+          : { text: `m.${measure.number} ${percent(placed.similarity)}${placed.estimated ? ' est.' : ''}`, ...(placed.similarity !== undefined ? { level: placed.similarity } : {}) });
+      });
       const pdfLines = sheetLines(pdf.part, name, pdf.grid, written, pdfMarks);
       this.pdf.set({ lines: pdfLines.lines.map(line => ({ ...line, svg: this.sanitizer.bypassSecurityTrustHtml(line.svg) })), barAt: pdfLines.barAt });
       const count = name === 'drums' ? `${pdf.part.hits?.length ?? 0} hits` : `${pdf.part.notes.length} notes`;
-      this.pdfNote.set(`${score.measures.length} measures, ${count}, as printed (repeats not taken)${written ? `, in ${written}` : ''}, `
+      this.pdfNote.set(`${printed.measures.length} printed measures played as ${score.measures.length} (repeats unfolded), ${count}${written ? `, in ${written}` : ''}, `
         + `at ♩ = ${Math.round(qpm)}${score.tempo ? ' as marked' : ' (the song\'s tempo; the score marks none)'}. Choose a measure to compare it.`);
       this.status.set('Loading the stem…');
       const url = job.stems?.[name]?.playUrl;
@@ -346,11 +343,11 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
   pickPdf(line: number, event: MouseEvent): void {
     const bar = this.pdf()?.barAt(line, this.share(event)), score = this.score, grid = this.written?.grid;
     if (bar === undefined || !score || !grid) return;
-    const measure = score.measures.find(item => Math.floor((Math.round(item.start * 4) - grid.firstBar * 4) / 16) + 1 === bar);
-    if (!measure) return;
-    const laid = this.bars().filter(item => item.measure !== undefined && item.number === measure.number);
+    const index = score.measures.findIndex(item => Math.floor((Math.round(item.start * 4) - grid.firstBar * 4) / 16) + 1 === bar);
+    if (index < 0) return;
+    const measure = score.measures[index], laid = this.bars()[index];
     // A measure never laid can still be heard on its own.
-    if (laid.length) this.selected.set(laid.sort((a, b) => (a.similarity ?? 1) - (b.similarity ?? 1))[0]);
+    if (laid) this.selected.set(laid);
     else void this.playRange('pdf', measure.start * this.written!.quarter, measure.length * this.written!.quarter);
   }
 
@@ -404,7 +401,7 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
 
   playMeasure(bar: SongBar): void {
     const key = `measure:${bar.index}`;
-    const measure = this.score?.measures.find(item => item.number === bar.number);
+    const measure = this.score?.measures[bar.index];
     if (measure && this.written) void this.playRange('pdf', measure.start * this.written.quarter, measure.length * this.written.quarter, key);
   }
 
