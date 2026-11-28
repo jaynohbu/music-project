@@ -97,7 +97,7 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.fl
         <div class="score-check-lines" #pdfLines>
           @if (floating()?.view === 'pdf') {
             <button type="button" class="score-check-float" [style.left.px]="floating()!.left" [style.top.px]="floating()!.top"
-              (click)="floatPress()" [attr.aria-label]="playing() ? 'Stop' : 'Play from here'">{{ playing() ? '■ Stop' : '▶ Play' }}</button>
+              (click)="floatPress()" [attr.aria-label]="playing() ? 'Stop' : 'Resume from here'">{{ playing() ? '■ Stop' : '▶ Resume' }}</button>
           }
           @for (line of pdf()?.lines ?? []; track $index) {
             <div class="score-check-line" [innerHTML]="line.svg" (click)="pickPdf($index, $event)"></div>
@@ -115,7 +115,7 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.fl
         <div class="score-check-lines" #madeLines>
           @if (floating()?.view === 'made') {
             <button type="button" class="score-check-float" [style.left.px]="floating()!.left" [style.top.px]="floating()!.top"
-              (click)="floatPress()" [attr.aria-label]="playing() ? 'Stop' : 'Play from here'">{{ playing() ? '■ Stop' : '▶ Play' }}</button>
+              (click)="floatPress()" [attr.aria-label]="playing() ? 'Stop' : 'Resume from here'">{{ playing() ? '■ Stop' : '▶ Resume' }}</button>
           }
           @for (line of made()?.lines ?? []; track $index) {
             <div class="score-check-line" [innerHTML]="line.svg" (click)="pickMade($index, $event)"></div>
@@ -168,11 +168,12 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
   private resume?: { kind: Playing; time: number };
   private readonly placeFloat = () => this.moveFloat();
   readonly preparing = signal(false);
+  private play = 0;
   // The button whose sound is being prepared, and whether the sounds are being made ahead of a Play.
   readonly preparingKey = signal('');
   readonly warming = signal(false);
   buttonLabel(key: string, idle: string): string {
-    return this.playingKey() === key ? 'Stop' : this.preparingKey() === key ? 'Preparing…' : idle;
+    return this.preparingKey() === key ? 'Preparing…' : idle;
   }
   readonly position = signal('');
   readonly playingLabel = computed(() => ({ pdf: 'the PDF', made: 'the made transcript', together: 'the made transcript with the stem', stem: 'the stem' })[this.playing() ?? 'pdf']);
@@ -397,34 +398,32 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
     return buffer;
   }
 
-  toggle(kind: Playing): void {
-    if (this.playingKey() === kind) { this.stop(); return; }
-    void this.playRange(kind, 0, undefined, kind);
-  }
+  // A Play button always plays its transcript from the start, stopping whatever plays; the button over the bar playing
+  // stops it, and then resumes from where it stopped.
+  toggle(kind: Playing): void { void this.playRange(kind, 0, undefined, kind); }
 
   playMeasure(bar: SongBar): void {
     const key = `measure:${bar.index}`;
-    if (this.playingKey() === key) { this.stop(); return; }
     const measure = this.score?.measures.find(item => item.number === bar.number);
     if (measure && this.written) void this.playRange('pdf', measure.start * this.written.quarter, measure.length * this.written.quarter, key);
   }
 
   playBar(kind: Playing, bar: SongBar): void {
     const key = `${kind}:${bar.index}`;
-    if (this.playingKey() === key) { this.stop(); return; }
     void this.playRange(kind, bar.start, bar.end - bar.start, key);
   }
 
   private async playRange(kind: Playing, from: number, length?: number, key: string = kind): Promise<void> {
     this.stop();
     this.context ??= new AudioContext();
-    const context = this.context, token = this.token;
+    // Only the Play pressed last is heard: one still being prepared when another is pressed is dropped.
+    const context = this.context, token = this.token, play = this.play;
     this.preparing.set(true); this.preparingKey.set(key);
     await context.resume();
     try {
       const buffers = kind === 'stem' ? [this.stem!] : kind === 'pdf' ? [await this.sound('pdf')]
         : kind === 'made' ? [await this.sound('made')] : [await this.sound('made'), this.stem!];
-      if (token !== this.token || !buffers.every(Boolean)) return;
+      if (token !== this.token || play !== this.play || !buffers.every(Boolean)) return;
       const at = context.currentTime + 0.05, end = Math.max(...buffers.map(buffer => buffer.duration));
       this.sources = buffers.map(buffer => {
         const source = context.createBufferSource();
@@ -450,11 +449,13 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
     } catch (error) {
       this.error.set(`Could not play: ${errorMessage(error)}`);
     } finally {
-      this.preparing.set(false); this.preparingKey.set('');
+      if (play === this.play) { this.preparing.set(false); this.preparingKey.set(''); }
     }
   }
 
   stop(): void {
+    this.play++;
+    this.preparing.set(false); this.preparingKey.set('');
     for (const source of this.sources) { source.onended = null; try { source.stop(); } catch { /* not started */ } source.disconnect(); }
     this.sources = [];
     cancelAnimationFrame(this.frame);
