@@ -1,9 +1,10 @@
 // A page for checking a song's uploaded score against its stem, a part at a time (Harmonic, bass or drums): the PDF's
 // transcript as it is (the score as printed, at its own tempo, in its written key) and the transcript made from it
-// for the song (what the mixer plays: the score laid on the song's bars, as the stem plays it), each drawn and played.
-// Each bar is compared on its own: how like the stem the PDF's measure is where it was laid on the song (the
-// similarity measured while laying it, score-align.ts layOnBeats), marked over the bar on both transcripts. Choosing a
-// bar plays the PDF's measure, the stem there, the made bar, or the made bar with the stem.
+// for the song (what the mixer plays: the score unfolded as played, every measure as written, laid on the song from
+// its anchor, score-align.ts layFromAnchor), each drawn and played. Each bar is marked over both transcripts: how like
+// the stem the PDF's measure is where it was laid, or "estimated" for a measure outside the anchor (its time from the
+// beats around, not synced with the stem). Choosing a bar plays the PDF's measure, the stem there, the made bar, or
+// the made bar with the stem.
 import { ChangeDetectionStrategy, Component, ElementRef, OnDestroy, OnInit, computed, inject, signal, viewChild } from '@angular/core';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { DomSanitizer, type SafeHtml } from '@angular/platform-browser';
@@ -15,7 +16,7 @@ import { type BarMark, levelColor, sheetLines, tempo } from './score-sheet';
 import { barAtTime, barFollower, laidEvents, percent, writtenKey, writtenPart } from './score-written';
 import type { Score } from './musicxml';
 
-interface LaidBar { number: string; start: number; end: number; corrected?: true; similarity?: number }
+interface LaidBar { number: string; start: number; end: number; corrected?: true; similarity?: number; estimated?: true }
 interface Laid { title?: string; measures?: number; notes?: number; heard?: number; correctedBars?: number; similarity?: number; bars?: LaidBar[] }
 interface Drawn { lines: { svg: SafeHtml; firstBar: number }[]; barAt: (line: number, share: number) => number }
 // A bar of the song as laid: its number on the made transcript, and the PDF measure laid there.
@@ -64,7 +65,8 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.fl
         <div class="score-check-bar-panel" aria-live="polite">
           <strong>Song bar {{ bar.bar }}</strong>
           <span>{{ bar.measure !== undefined ? 'PDF measure ' + bar.number : 'Not in the PDF' }} · {{ clockOf(bar.start) }}–{{ clockOf(bar.end) }}</span>
-          <span class="score-check-like" [style.color]="colorOf(bar.similarity)">Similarity {{ percentOf(bar.similarity) }}</span>
+          @if (bar.estimated) { <span class="hint">Estimated: outside the passage synced with the stem</span> }
+          @else { <span class="score-check-like" [style.color]="colorOf(bar.similarity)">Similarity {{ percentOf(bar.similarity) }}</span> }
           @if (bar.corrected) { <span class="hint">drum bar corrected</span> }
           <div class="score-check-buttons">
             @if (bar.measure !== undefined) {
@@ -247,14 +249,17 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
     this.bars.set(songBars);
     // The made transcript: each song bar marked with the PDF measure laid there and how like the stem it is.
     const madeMarks = new Map<number, BarMark>(songBars.map(bar => [bar.bar, bar.measure === undefined
-      ? { text: 'not in PDF' } : { text: `m.${bar.number} ${percent(bar.similarity)}`, ...(bar.similarity !== undefined ? { level: bar.similarity } : {}) }]));
+      ? { text: 'not in PDF' } : bar.estimated ? { text: `m.${bar.number} estimated` }
+      : { text: `m.${bar.number} ${percent(bar.similarity)}`, ...(bar.similarity !== undefined ? { level: bar.similarity } : {}) }]));
     const madeLines = sheetLines(laid, name, grid, key, madeMarks);
     const madeHits = (laid.hits ?? []).map(hit => ({ unit: hit.unit, time: beatTime(grid.beats, hit.unit / 4) }));
     this.timing = { made: { notes: laid.notes, hits: madeHits,
       barAt: barFollower(grid, [...laid.notes, ...madeHits.map(hit => ({ start: hit.time, unit: hit.unit }))]) } };
     this.made.set({ lines: madeLines.lines.map(line => ({ ...line, svg: this.sanitizer.bypassSecurityTrustHtml(line.svg) })), barAt: madeLines.barAt });
     const counted = name === 'drums' ? 'hits' : 'notes';
-    this.madeNote.set(`${summary.measures ?? '–'} PDF measures laid on ${songBars.length} bars of the song; ${summary.heard ?? '–'} of ${summary.notes ?? '–'} ${counted} heard in the stem`
+    const estimated = songBars.filter(bar => bar.estimated).length;
+    this.madeNote.set(`The PDF's ${songBars.length} measures as played (repeats unfolded), every one as written; ${songBars.length - estimated} synced with the stem`
+      + (estimated ? `, ${estimated} before or after them estimated` : '') + `; ${summary.heard ?? '–'} of ${summary.notes ?? '–'} ${counted} heard in the stem`
       + (summary.correctedBars ? `; ${summary.correctedBars} drum bars corrected` : '') + '. Choose a bar to compare it.');
     try {
       const [{ parseMusicXml }, { chordName }] = await Promise.all([import('./musicxml'), import('./score-align')]);

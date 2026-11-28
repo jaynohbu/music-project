@@ -6,10 +6,16 @@
 
 // voice: the layer the note is written in on its staff (MusicXML <voice>), 1 when not written.
 export interface ScoreNote { pitch: number; start: number; length: number; measure: number; part: number; staff: number; voice?: number }
-export interface ScoreMeasure { number: string; start: number; length: number; beats: number; beatType: number }
+// printed: in a score as played (unrollRepeats), the index of the printed measure this one is.
+export interface ScoreMeasure { number: string; start: number; length: number; beats: number; beatType: number; printed?: number }
 // Repeat signs on a measure, from every part: a repeat starts here (forward) or goes back from its end (backward, the
 // times it is played in all), and the endings (first and second time bars) begun or ended on it, by number.
-export interface MeasureMarks { forward?: boolean; backward?: number; endingStart?: number[]; endingStop?: number[] }
+// The road signs too: a segno or coda sign on it, a "To Coda" (go to the coda from its end, on the way back), D.C.
+// or D.S. (go back to the start or the segno from its end, once) and Fine (stop at its end, on the way back).
+export interface MeasureMarks {
+  forward?: boolean; backward?: number; endingStart?: number[]; endingStop?: number[];
+  segno?: boolean; coda?: boolean; toCoda?: boolean; daCapo?: boolean; dalSegno?: boolean; fine?: boolean;
+}
 // A chord symbol as printed: its root, the kind as written (m7, sus2…), and its bass (the root unless after a slash),
 // as pitch classes; measure: where it is printed.
 export interface ScoreChord { start: number; pitchClasses: number[]; root: number; quality: string; bass: number; measure: number }
@@ -170,6 +176,7 @@ export function parseMusicXml(source: string): Score {
           const sound = element.name === 'sound' ? element : child(element, 'sound');
           const marked = Number(sound?.attributes['tempo']);
           if (tempo === undefined && marked > 0) tempo = marked;
+          readRoadSigns(element, sound, marks[index] ??= {});
         } else if (element.name === 'harmony') {
           // Chord symbols may be printed over any part; one at a moment.
           const root = child(element, 'root');
@@ -236,10 +243,38 @@ export function parseMusicXml(source: string): Score {
     });
   });
   if (!measures.length) throw new Error('The score has no measures.');
+  settleCodas(marks);
+  for (const [index, mark] of Object.entries(marks)) if (!Object.keys(mark).length) delete marks[Number(index)];
   notes.sort((a, b) => a.start - b.start || a.pitch - b.pitch);
   chords.sort((a, b) => a.start - b.start);
   hits.sort((a, b) => a.start - b.start);
   return { title, parts, measures, notes, chords, ...(hits.length ? { hits } : {}), tempo, ...(Object.keys(marks).length ? { marks } : {}) };
+}
+
+// A direction's road signs, from its symbols and words and from its sound's attributes. A bare coda sign is settled
+// later (settleCodas): it may be where "To Coda" sends the music or where the coda starts.
+const bareCodas = new WeakMap<MeasureMarks, boolean>();
+function readRoadSigns(element: XmlElement, sound: XmlElement | undefined, mark: MeasureMarks): void {
+  const types = element.name === 'direction' ? children(element, 'direction-type') : [];
+  const words = types.flatMap(type => children(type, 'words').map(word => word.text.trim())).join(' ');
+  if (types.some(type => child(type, 'segno')) || sound?.attributes['segno'] !== undefined) mark.segno = true;
+  if (sound?.attributes['tocoda'] !== undefined || /\bto\s*coda\b/i.test(words)) mark.toCoda = true;
+  else if (sound?.attributes['coda'] !== undefined || /^\s*coda\b/i.test(words)) mark.coda = true;
+  else if (types.some(type => child(type, 'coda'))) bareCodas.set(mark, true);
+  if (sound?.attributes['dacapo'] === 'yes' || /\bD\.\s*C\.|\bda\s*capo\b/i.test(words)) mark.daCapo = true;
+  if (sound?.attributes['dalsegno'] !== undefined || /\bD\.\s*S\.|\bdal\s*segno\b/i.test(words)) mark.dalSegno = true;
+  if (sound?.attributes['fine'] !== undefined || /^\s*fine\s*$/i.test(words)) mark.fine = true;
+}
+// Bare coda signs: the last is where the coda starts, unless one is marked so; the ones before it send the music
+// there, unless one is marked "To Coda".
+function settleCodas(marks: Record<number, MeasureMarks>): void {
+  const bare = Object.keys(marks).map(Number).sort((a, b) => a - b).filter(index => bareCodas.has(marks[index]));
+  if (!bare.length) return;
+  const values = Object.values(marks), hasCoda = values.some(mark => mark.coda), hasTo = values.some(mark => mark.toCoda);
+  bare.forEach((index, k) => {
+    if (!hasCoda && k === bare.length - 1 && (bare.length > 1 || hasTo)) marks[index].coda = true;
+    else if (!hasTo) marks[index].toCoda = true;
+  });
 }
 
 // The score inside a compressed MusicXML (.mxl) file: a zip whose META-INF/container.xml names the score.
@@ -292,15 +327,20 @@ export function scoreExcerpt(score: Score, from: number, to: number): Score {
   };
 }
 
-// The score as played: repeats taken (a backward repeat goes back to the forward one before it, or to the start, as
-// many times as it says), and on each time through only the endings numbered for it. An ending runs from its start
-// to its stop (a stop missing or repeated, as score reading leaves them, is read sensibly: an ending lasts until the
-// next ending, a backward repeat, a stop or a forward repeat). Signs such as D.S. and Coda are not read. Measures are numbered as
-// printed; a measure played again keeps its number.
+// The score as played (score unfolding): repeats taken (a backward repeat goes back to the forward one before it, or
+// to the start, as many times as it says), and on each time through only the endings numbered for it. An ending runs
+// from its start to its stop (a stop missing or repeated, as score reading leaves them, is read sensibly: an ending
+// lasts until the next ending, a backward repeat, a stop or a forward repeat). Then the road signs: D.C. goes back to
+// the start and D.S. to the segno, once, from the end of their measure; on the way back repeats are not taken again
+// (only each repeat's last ending is played), "To Coda" goes on to the coda from the end of its measure, and the music
+// stops at Fine. Measures are numbered as printed (a measure played again keeps its number), and each keeps the index
+// of the printed measure it is (printed).
 export function unrollRepeats(score: Score): Score {
   const marks = score.marks;
   const count = score.measures.length;
-  if (!marks || !Object.values(marks).some(mark => mark.backward)) return score;
+  if (!marks || !Object.values(marks).some(mark => mark.backward || mark.daCapo || mark.dalSegno)) {
+    return { ...score, measures: score.measures.map((measure, printed) => ({ ...measure, printed })) };
+  }
   // Each ending's measures.
   const endings: { numbers: number[]; from: number; to: number }[] = [];
   for (let index = 0; index < count; index++) {
@@ -325,18 +365,34 @@ export function unrollRepeats(score: Score): Score {
     endings.push({ numbers, from: index, to });
   }
   const endingAt = (index: number) => endings.find(ending => index >= ending.from && index <= ending.to);
+  // The last ending of a repeat: none starts right after it.
+  const lastEnding = (ending: { to: number }) => !endings.some(other => other.from === ending.to + 1);
+  const segno = Object.keys(marks).map(Number).sort((a, b) => a - b).find(index => marks[index].segno) ?? 0;
+  const coda = Object.keys(marks).map(Number).sort((a, b) => a - b).find(index => marks[index].coda);
   const order: number[] = [];
   const taken = new Map<number, number>();
-  // done: a repeat has been played its last time; the next measure outside an ending is past it.
-  let start = 0, pass = 1, index = 0, done = false;
+  // done: a repeat has been played its last time; the next measure outside an ending is past it. back: the music has
+  // gone back by D.C. or D.S.
+  let start = 0, pass = 1, index = 0, done = false, back = false;
   while (index < count && order.length < count * 8) {
-    if (marks[index]?.forward && index !== start) { start = index; pass = 1; }
+    const mark = marks[index];
+    if (back) {
+      // On the way back only each repeat's last ending is played.
+      const ending = endingAt(index);
+      if (ending && !lastEnding(ending)) { index = ending.to + 1; continue; }
+      order.push(index);
+      if (mark?.fine) break;
+      if (mark?.toCoda && coda !== undefined && coda > index) { index = coda; continue; }
+      index++;
+      continue;
+    }
+    if (mark?.forward && index !== start) { start = index; pass = 1; }
     const ending = endingAt(index);
     if (done && !ending) { pass = 1; done = false; start = index; }
     // An ending skipped on a later time through is how the repeat is left.
     if (ending && !ending.numbers.includes(pass)) { index = ending.to + 1; done = true; continue; }
     order.push(index);
-    const times = marks[index]?.backward;
+    const times = mark?.backward;
     if (times && (taken.get(index) ?? 0) < times - 1) {
       taken.set(index, (taken.get(index) ?? 0) + 1);
       pass++;
@@ -344,13 +400,14 @@ export function unrollRepeats(score: Score): Score {
       continue;
     }
     if (times) done = true;
+    if (mark?.daCapo || mark?.dalSegno) { back = true; index = mark.dalSegno ? segno : 0; continue; }
     index++;
   }
   const measures: ScoreMeasure[] = [], notes: ScoreNote[] = [], chords: ScoreChord[] = [], hits: ScoreHit[] = [];
   let at = 0;
   order.forEach((printed, played) => {
     const measure = score.measures[printed], end = measure.start + measure.length;
-    measures.push({ ...measure, start: at });
+    measures.push({ ...measure, start: at, printed });
     for (const note of score.notes) {
       if (note.measure === printed) notes.push({ ...note, start: note.start - measure.start + at, measure: played });
     }

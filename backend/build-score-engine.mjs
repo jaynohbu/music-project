@@ -1,11 +1,11 @@
-// The score engine the website runs (web/src: musicxml, spectrogram, score-align, score-import), transpiled for the
+// The score engine the website runs (web/src: musicxml, spectrogram, score-blast, score-align, score-import), transpiled for the
 // stem worker's Node (score-engine/*.cjs), so the server lays a song's score on it with the very same code.
 // Run before building the stem image (build-stem-image.sh does) and after changing those files; the output is
 // committed so backend tests and the local server use it too.
 import { readFileSync, writeFileSync } from 'node:fs';
 import ts from '../web/node_modules/typescript/lib/typescript.js';
 
-const MODULES = ['musicxml', 'spectrogram', 'score-align', 'score-import'];
+const MODULES = ['musicxml', 'spectrogram', 'score-blast', 'score-align', 'score-import'];
 for (const name of MODULES) {
   const source = readFileSync(new URL(`../web/src/${name}.ts`, import.meta.url), 'utf8');
   let code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
