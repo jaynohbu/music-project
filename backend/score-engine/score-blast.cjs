@@ -22,7 +22,7 @@ exports.BACKGROUND = exports.SCORE_ENGINE = void 0;
 exports.findAnchor = findAnchor;
 // The version of the laying, kept in each result laid (fromScore.engine): a result laid by an earlier one is laid
 // again when its score check is opened. Raise it when the laying changes what is laid.
-exports.SCORE_ENGINE = 2;
+exports.SCORE_ENGINE = 3;
 exports.BACKGROUND = 0.75;
 const MIN_ANCHOR_PAIRS = 1.6;
 const MARGIN = 0.1, LEAST = 0.4;

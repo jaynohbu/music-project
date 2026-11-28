@@ -338,9 +338,12 @@ test('measure by measure: the whole score laid from its anchor, the measures the
   const firstBar = Math.round(offset / beat);
   const base = align.alignScore({ score, spectrograms, seconds, beats: truth, intro: true });
   const fit = align.fitMeasures({ score, spectrograms, seconds, beats: truth }, base, firstBar);
-  // Every measure of the score, in its order, a bar each from the song's first: none left out, none moved.
+  // Every measure of the score, in its order, a bar each from the song's first: none left out, none moved. The first
+  // falls on the song's own bar (C# minor), before the anchor: it is not swapped. The last is past the song's beats.
   assert.deepEqual(fit.placed.map(p => p.number), ['1', '2', '3', '4', '5', '6', '7', '8']);
   assert.deepEqual(fit.placed.map(p => p.measure), [0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.ok(fit.placed.every(p => !p.swapped));
+  assert.equal(fit.placed[7].outside, true);
   assert.ok(fit.placed.every((p, k) => Math.abs(p.start - (offset + k * 4 * beat)) < 1e-9), JSON.stringify(fit.placed.map(p => p.start)));
   // Measures 2 to 7 are the anchor, synced; 1 and 8 are estimated (the song does not play them).
   assert.deepEqual(fit.placed.map(p => !!p.estimated), [true, false, false, false, false, false, false, true]);
@@ -349,15 +352,46 @@ test('measure by measure: the whole score laid from its anchor, the measures the
   // The song's bars stay the drum grid's.
   assert.deepEqual(fit.beats, truth);
   assert.equal(fit.firstBar, firstBar);
-  // The song's part is every one of the score's notes as written, where it was laid.
+  // The song's part is the score's notes as written, where each measure was laid.
   const made = align.harmonyFromScore({ beats: truth, firstBar, ensemble: { chords: [], notes: [] }, stems: {} }, fit.alignment, fit, { title: '', correctedBars: 0 });
   const guitar = score.notes.filter(n => n.part === 0);
   const key = n => [n[0], Math.round(n[1] * 1000) / 1000];
+  const expected = fit.placed.flatMap((p, k) => guitar.filter(n => n.measure === p.measure).map(n => key([n.pitch, offset + (k * 4 + n.start - p.measure * 4) * beat])));
   assert.deepEqual(made.ensemble.notes.map(n => key([n.pitch, n.start])).sort((x, y) => x[1] - y[1] || x[0] - y[0]),
-    guitar.map(n => key([n.pitch, offset + n.start * beat])).sort((x, y) => x[1] - y[1] || x[0] - y[0]));
+    expected.sort((x, y) => x[1] - y[1] || x[0] - y[0]));
   assert.ok(made.ensemble.notes.every(n => n.velocity === 90));
-  assert.deepEqual(made.fromScore.bars.map(bar => [bar.number, bar.id, !!bar.estimated]),
-    fit.placed.map(p => [p.number, p.measure, !!p.estimated]));
+  assert.deepEqual(made.fromScore.bars.map(bar => [bar.number, bar.id, !!bar.estimated, bar.swapped?.number]),
+    fit.placed.map(p => [p.number, p.measure, !!p.estimated, p.swapped?.number]));
+  assert.equal(made.fromScore.bars[7].similarity, undefined);
+});
+
+test('after the anchor, a measure less like the stems than 70% is swapped for the score\'s measure most like them there', () => {
+  // The score A–H, a note each; the song plays A B C D (the anchor), then B four times where the score has E F G H.
+  const letters = [...'ABCDEFGH'], song = [...'ABCDBBBB'];
+  const score = { title: '', parts: [], chords: [],
+    measures: letters.map((_, k) => ({ number: String(k + 1), start: k * 4, length: 4, beats: 4, beatType: 4 })),
+    notes: letters.map((_, k) => ({ pitch: 60 + k, start: k * 4 + 1, length: 2, measure: k, part: 0, staff: 1 })) };
+  const beats = Array.from({ length: 4 * 8 + 1 }, (_, k) => k * 0.5);
+  const like = (index, beat) => song[beat / 4] === letters[index] ? 0.9 : 0.3;
+  const { placed, laid } = align.layFromAnchor(score, beats, 0, like);
+  // The anchor (bars 1–4) as it is; bars 5–8 each play measure 2 (B), as written, and say what the score has there.
+  assert.deepEqual(placed.map(p => p.number), ['1', '2', '3', '4', '2', '2', '2', '2']);
+  assert.deepEqual(placed.map(p => !!p.estimated), [false, false, false, false, true, true, true, true]);
+  assert.deepEqual(placed.slice(4).map(p => p.swapped.number), ['5', '6', '7', '8']);
+  assert.ok(placed.slice(4).every(p => Math.abs(p.cost - 0.1) < 1e-9 && Math.abs(p.swapped.cost - 0.7) < 1e-9));
+  assert.ok(placed.every((p, k) => p.from === k * 4));
+  assert.deepEqual(laid.notes.map(n => [n.pitch, n.start, n.measure]), letters.map((_, k) => [k >= 4 ? 61 : 60 + k, k * 4 + 1, k]));
+  assert.deepEqual(laid.measures.slice(4).map(m => [m.number, m.printed]), [['2', 1], ['2', 1], ['2', 1], ['2', 1]]);
+});
+
+test('a measure inside the anchor is kept however unlike the stems it is', () => {
+  const letters = [...'ABCDEFGH'], song = [...'ABCDBFGH'];
+  const score = { title: '', parts: [], chords: [], notes: [],
+    measures: letters.map((_, k) => ({ number: String(k + 1), start: k * 4, length: 4, beats: 4, beatType: 4 })) };
+  const beats = Array.from({ length: 4 * 8 + 1 }, (_, k) => k * 0.5);
+  const { placed } = align.layFromAnchor(score, beats, 0, (index, beat) => song[beat / 4] === letters[index] ? 0.9 : 0.3);
+  assert.deepEqual(placed.map(p => p.number), ['1', '2', '3', '4', '5', '6', '7', '8']);
+  assert.ok(placed.every(p => !p.swapped && !p.estimated));
 });
 
 test('drum hits moved to corrected beats: the same moments, on the new grid', () => {

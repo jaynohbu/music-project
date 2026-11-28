@@ -18,7 +18,7 @@
 
 // The version of the laying, kept in each result laid (fromScore.engine): a result laid by an earlier one is laid
 // again when its score check is opened. Raise it when the laying changes what is laid.
-export const SCORE_ENGINE = 2;
+export const SCORE_ENGINE = 3;
 
 export const BACKGROUND = 0.75;
 const MIN_ANCHOR_PAIRS = 1.6;

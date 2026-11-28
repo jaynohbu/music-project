@@ -3,7 +3,8 @@
 // for the song (what the mixer plays: the score unfolded as played, every measure as written, laid on the song from
 // its anchor, score-align.ts layFromAnchor), each drawn and played. Each bar is marked over both transcripts with how
 // like the stem the PDF's measure is where it was laid, "est." for a measure outside the anchor (its time from the
-// beats around, not synced with the stem). Choosing a bar plays the PDF's measure, the stem there, the made bar, or
+// beats around, not synced with the stem), and "m.27 52% → m.13 85%" for a measure after the anchor under 70% swapped
+// for the one more like the stem there. Choosing a bar plays the PDF's measure, the stem there, the made bar, or
 // the made bar with the stem.
 import { ChangeDetectionStrategy, Component, ElementRef, OnDestroy, OnInit, computed, inject, signal, viewChild } from '@angular/core';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
@@ -17,7 +18,10 @@ import { SCORE_ENGINE } from './score-blast';
 import { barAtTime, barFollower, laidEvents, percent, writtenKey, writtenPart } from './score-written';
 import type { Score } from './musicxml';
 
-interface LaidBar { number: string; start: number; end: number; corrected?: true; similarity?: number; estimated?: true; id?: number }
+interface LaidBar {
+  number: string; start: number; end: number; corrected?: true; similarity?: number; estimated?: true; id?: number;
+  swapped?: { number: string; id: number; similarity: number };   // The PDF's measure there, swapped for this one.
+}
 interface Laid { title?: string; measures?: number; notes?: number; heard?: number; correctedBars?: number; similarity?: number; bars?: LaidBar[] }
 interface Drawn { lines: { svg: SafeHtml; firstBar: number }[]; barAt: (line: number, share: number) => number }
 // A bar of the song as laid: its number on the made transcript, and the PDF measure laid there.
@@ -67,6 +71,7 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.fl
           <strong>Song bar {{ bar.bar }}</strong>
           <span>{{ bar.measure !== undefined ? 'PDF measure ' + bar.number : 'Not in the PDF' }} · {{ clockOf(bar.start) }}–{{ clockOf(bar.end) }}</span>
           <span class="score-check-like" [style.color]="colorOf(bar.similarity)">Similarity {{ percentOf(bar.similarity) }}</span>
+          @if (bar.swapped) { <span class="hint">Swapped: the PDF has m.{{ bar.swapped.number }} here ({{ percentOf(bar.swapped.similarity) }}), m.{{ bar.number }} is more like the stem</span> }
           @if (bar.estimated) { <span class="hint">Estimated: outside the passage synced with the stem</span> }
           @if (bar.corrected) { <span class="hint">drum bar corrected</span> }
           <div class="score-check-buttons">
@@ -265,7 +270,8 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
     // The made transcript: each song bar marked with the PDF measure laid there and how like the stem it is.
     const madeMarks = new Map<number, BarMark>(songBars.map(bar => [bar.bar, bar.measure === undefined
       ? { text: 'not in PDF' }
-      : { text: `m.${bar.number} ${percent(bar.similarity)}${bar.estimated ? ' est.' : ''}`, ...(bar.similarity !== undefined ? { level: bar.similarity } : {}) }]));
+      : { text: `m.${bar.number} ${percent(bar.similarity)}${bar.swapped ? ` (m.${bar.swapped.number})` : ''}${bar.estimated ? ' est.' : ''}`,
+        ...(bar.similarity !== undefined ? { level: bar.similarity } : {}) }]));
     const madeLines = sheetLines(laid, name, grid, key, madeMarks);
     const madeHits = (laid.hits ?? []).map(hit => ({ unit: hit.unit, time: beatTime(grid.beats, hit.unit / 4) }));
     this.timing = { made: { notes: laid.notes, hits: madeHits,
@@ -274,7 +280,8 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
     const counted = name === 'drums' ? 'hits' : 'notes';
     const estimated = songBars.filter(bar => bar.estimated).length;
     this.madeNote.set(`The PDF's ${songBars.length} measures as played (repeats unfolded), every one as written; ${songBars.length - estimated} synced with the stem`
-      + (estimated ? `, ${estimated} before or after them estimated` : '') + `; ${summary.heard ?? '–'} of ${summary.notes ?? '–'} ${counted} heard in the stem`
+      + (estimated ? `, ${estimated} before or after them estimated` : '')
+      + (songBars.some(bar => bar.swapped) ? `; ${songBars.filter(bar => bar.swapped).length} after the anchor under 70% swapped for a measure more like the stem` : '') + `; ${summary.heard ?? '–'} of ${summary.notes ?? '–'} ${counted} heard in the stem`
       + (summary.correctedBars ? `; ${summary.correctedBars} drum bars corrected` : '') + '. Choose a bar to compare it.');
     try {
       const [{ parseMusicXml, unrollRepeats }, { chordName }] = await Promise.all([import('./musicxml'), import('./score-align')]);
@@ -295,6 +302,8 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
       score.measures.forEach((measure, index) => {
         const bar = Math.floor((Math.round(measure.start * 4) - pdf.grid.firstBar * 4) / 16) + 1, placed = songBars[index];
         pdfMarks.set(bar, !placed ? { text: `m.${measure.number} not laid` }
+          : placed.swapped ? { text: `m.${measure.number} ${percent(placed.swapped.similarity)} → m.${placed.number} ${percent(placed.similarity)}${placed.estimated ? ' est.' : ''}`,
+            ...(placed.similarity !== undefined ? { level: placed.similarity } : {}) }
           : { text: `m.${measure.number} ${percent(placed.similarity)}${placed.estimated ? ' est.' : ''}`, ...(placed.similarity !== undefined ? { level: placed.similarity } : {}) });
       });
       const pdfLines = sheetLines(pdf.part, name, pdf.grid, written, pdfMarks);
@@ -401,7 +410,9 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
 
   playMeasure(bar: SongBar): void {
     const key = `measure:${bar.index}`;
-    const measure = this.score?.measures[bar.index];
+    // The PDF measure the bar plays (for a swapped bar, the one swapped in).
+    const at = bar.swapped && bar.id !== undefined ? this.score?.measures.findIndex(item => item.printed === bar.id) ?? -1 : bar.index;
+    const measure = this.score?.measures[at];
     if (measure && this.written) void this.playRange('pdf', measure.start * this.written.quarter, measure.length * this.written.quarter, key);
   }
 
