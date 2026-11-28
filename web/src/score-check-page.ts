@@ -508,7 +508,12 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
       this.litBar?.classList.remove('on');
       barElement?.classList.add('on');
       this.litBar = barElement;
-      barElement?.closest('.score-check-line')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      // The bar's line kept in view inside the transcript's own scrolling box (the page and its buttons stay put).
+      const line = barElement?.closest('.score-check-line') as HTMLElement | null;
+      if (line) {
+        const top = line.offsetTop, bottom = top + line.offsetHeight;
+        if (top < container.scrollTop || bottom > container.scrollTop + container.clientHeight) container.scrollTo({ top: Math.max(0, top - 8), behavior: 'smooth' });
+      }
       if (barElement) { this.floatBar = barElement; this.moveFloat(view); }
     }
     const selectors: string[] = [];
@@ -526,7 +531,8 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
     const bar = this.floatBar, container = bar?.closest('.score-check-lines');
     if (!bar || !container || !view) return;
     const box = bar.getBoundingClientRect(), around = container.getBoundingClientRect();
-    this.floating.set({ view, left: box.left - around.left + box.width / 2, top: box.top - around.top });
+    // Placed in the box's content, which scrolls.
+    this.floating.set({ view, left: box.left - around.left + container.scrollLeft + box.width / 2, top: box.top - around.top + container.scrollTop });
   }
 
   // Stops what plays, or plays on from where it stopped.
