@@ -82,7 +82,9 @@ export function lineStarts(firstBar: number, lastUnit: number): number[] {
 
 // A mark over a bar (numbered from 1 at the grid's first bar): a label, and a level from 0 (red) to 1 (green) that
 // tints the bar, or none.
-export interface BarMark { text: string; level?: number }
+// anchor: a bar the score was synced with the song on (the anchor of its laying): drawn on blue, with a blue band.
+export interface BarMark { text: string; level?: number; anchor?: boolean }
+const ANCHOR = '#2f6fdb';
 export const levelColor = (level: number) => `hsl(${Math.round(Math.max(0, Math.min(1, level)) * 120)} 70% 42%)`;
 
 // The lines of a part's score laid out (four bars each): where each starts, and each drawn as SVG at its own top.
@@ -156,7 +158,10 @@ function sheetLayout(part: HarmonyPart, stem: string, grid: HarmonyGrid, songKey
       const mark = barMarks.get(bar(unit));
       if (!mark) continue;
       const x = unit * UNIT_WIDTH - UNIT_WIDTH / 2, color = mark.level === undefined ? SECOND : levelColor(mark.level);
-      if (mark.level !== undefined) svg += `<rect x="${x}" y="${markY - 12}" width="${UNITS_PER_BAR * UNIT_WIDTH}" height="${high - markY + 12}" fill="${color}" opacity="0.12"/>`;
+      if (mark.anchor) {
+        svg += `<rect x="${x}" y="${markY - 12}" width="${UNITS_PER_BAR * UNIT_WIDTH}" height="${high - markY + 12}" fill="${ANCHOR}" opacity="0.13"/>`
+          + `<rect x="${x}" y="${markY - 16}" width="${UNITS_PER_BAR * UNIT_WIDTH}" height="3" fill="${ANCHOR}"/>`;
+      } else if (mark.level !== undefined) svg += `<rect x="${x}" y="${markY - 12}" width="${UNITS_PER_BAR * UNIT_WIDTH}" height="${high - markY + 12}" fill="${color}" opacity="0.12"/>`;
       svg += `<text x="${x + 4}" y="${markY}" font-size="12" font-weight="700" fill="${color}">${escape(mark.text)}</text>`;
     }
     for (let unit = start + UNITS_PER_BAR; unit < start + LINE_UNITS; unit += UNITS_PER_BAR) {

@@ -282,13 +282,15 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
     const summary = this.laidOf(name)!;
     const key = (ensemble as { key?: string } | undefined)?.key;
     const barOf = (time: number) => barAtTime(grid, time + 0.001);
+    // A bar of the anchor: synced with the stem (drawn on blue on both transcripts).
+    const anchored = (bar: LaidBar) => !bar.estimated && !bar.filled && bar.similarity !== undefined;
     const songBars: SongBar[] = (summary.bars ?? []).map((bar, index) => ({ ...bar, bar: barOf(bar.start), index, ...(bar.number !== '–' ? { measure: index } : {}) }));
     this.bars.set(songBars);
     // The made transcript: each song bar marked with the PDF measure laid there and how like the stem it is.
     const madeMarks = new Map<number, BarMark>(songBars.map(bar => [bar.bar, bar.measure === undefined
       ? { text: 'not in PDF' }
       : { text: `m.${bar.number} ${percent(bar.similarity)}${bar.swapped ? ` (m.${bar.swapped.number})` : ''}${bar.filled ? ' fill' : bar.estimated ? ' est.' : ''}`,
-        ...(bar.similarity !== undefined ? { level: bar.similarity } : {}) }]));
+        ...(bar.similarity !== undefined ? { level: bar.similarity } : {}), ...(anchored(bar) ? { anchor: true } : {}) }]));
     const madeLines = sheetLines(laid, name, grid, key, madeMarks);
     const madeHits = (laid.hits ?? []).map(hit => ({ unit: hit.unit, time: beatTime(grid.beats, hit.unit / 4) }));
     this.timing = { made: { notes: laid.notes, hits: madeHits,
@@ -299,6 +301,7 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
     this.madeNote.set(`The PDF's ${songBars.length - filled} measures as played (repeats unfolded), every one as written; ${songBars.length - filled - estimated} synced with the stem`
       + (estimated ? `, ${estimated} before or after them estimated` : '')
       + (filled ? `; ${filled} bars after the PDF's end filled with the PDF measures most like the stem` : '')
+      + (songBars.some(anchored) ? '; the synced bars (the anchor) are on blue' : '')
       + (songBars.some(bar => bar.swapped) ? `; ${songBars.filter(bar => bar.swapped).length} after the anchor under 70% swapped for a measure more like the stem` : '') + `; ${summary.heard ?? '–'} of ${summary.notes ?? '–'} ${counted} heard in the stem`
       + (summary.correctedBars ? `; ${summary.correctedBars} drum bars corrected` : '') + '. Choose a bar to compare it.');
     try {
@@ -322,7 +325,8 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
         pdfMarks.set(bar, !placed ? { text: `m.${measure.number} not laid` }
           : placed.swapped ? { text: `m.${measure.number} ${percent(placed.swapped.similarity)} → m.${placed.number} ${percent(placed.similarity)}${placed.estimated ? ' est.' : ''}`,
             ...(placed.similarity !== undefined ? { level: placed.similarity } : {}) }
-          : { text: `m.${measure.number} ${percent(placed.similarity)}${placed.estimated ? ' est.' : ''}`, ...(placed.similarity !== undefined ? { level: placed.similarity } : {}) });
+          : { text: `m.${measure.number} ${percent(placed.similarity)}${placed.estimated ? ' est.' : ''}`, ...(placed.similarity !== undefined ? { level: placed.similarity } : {}),
+            ...(anchored(placed) ? { anchor: true } : {}) });
       });
       const pdfLines = sheetLines(pdf.part, name, pdf.grid, written, pdfMarks);
       this.pdf.set({ lines: pdfLines.lines.map(line => ({ ...line, svg: this.sanitizer.bypassSecurityTrustHtml(line.svg) })), barAt: pdfLines.barAt });
