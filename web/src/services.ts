@@ -340,7 +340,8 @@ export interface ScoreLaid { title: string; measures: number; notes: number; hea
 export interface Harmony extends Lyrics {
   stems?: Record<string, RegeneratedPart | undefined>; stale?: boolean; previous?: Lyrics;
   // parts: each score laid (results from before the bass and drum scores have the Harmonic one only, at the top).
-  fromScore?: ScoreLaid & { parts?: Partial<Record<ScorePartName, ScoreLaid>> };
+  // engine: the version of the laying that laid it (score-blast.ts SCORE_ENGINE; none before version 2).
+  fromScore?: ScoreLaid & { parts?: Partial<Record<ScorePartName, ScoreLaid>>; engine?: number };
   // Set while (and after) the song's score is laid on it by the server.
   scoring?: boolean;
 }

@@ -10,6 +10,7 @@ import {
   fitDrumScore, fitMeasures, harmonyFromScore, scoreMask,
 } from './score-align';
 import { HOP, type Spectrogram, maskedSignal, monoSignal, spectrogramOf } from './spectrogram';
+import { SCORE_ENGINE } from './score-blast';
 
 export interface ScoreImport { document: HarmonyDocument; fit: MeasureFit; title: string; scores: number; musicxml: string; extracted: Blob }
 export type ScoreSource = { file: File; pages: string } | { musicxml: string; title: string; savedAt: string };
@@ -153,5 +154,5 @@ export async function importScores({ sources, stems, analysis, readPdf, progress
   }
   const first = parts.other ?? parts.bass ?? parts.drums;
   if (!first) throw new Error('No score was given.');
-  return { document: { ...document, fromScore: { ...first, parts } }, parts, corrections, ...(extracted ? { extracted } : {}) };
+  return { document: { ...document, fromScore: { ...first, parts, engine: SCORE_ENGINE } }, parts, corrections, ...(extracted ? { extracted } : {}) };
 }

@@ -16,6 +16,10 @@
 //   before and after it (the caller lays them; their times are estimated, not synced).
 // Pure functions only, so they can be unit-tested.
 
+// The version of the laying, kept in each result laid (fromScore.engine): a result laid by an earlier one is laid
+// again when its score check is opened. Raise it when the laying changes what is laid.
+export const SCORE_ENGINE = 2;
+
 export const BACKGROUND = 0.75;
 const MIN_ANCHOR_PAIRS = 1.6;
 const MARGIN = 0.1, LEAST = 0.4;

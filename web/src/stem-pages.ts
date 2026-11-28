@@ -15,6 +15,7 @@ import {
 import { AccompanimentVoice, type PlayClock, loadLibrary, loadSound, matchLoudness } from './accompaniment-player';
 import type { AlignStem, HarmonyDocument } from './score-align';
 import { LyricsStrip } from './lyrics-strip';
+import { SCORE_ENGINE } from './score-blast';
 import { LyricsEditor, firstChange } from './lyrics-editor';
 import {
   EffectControl, EffectSettings, FaderControl, FADER_CONTROLS,
@@ -1329,7 +1330,8 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
   }
 
   // A song with its own score whose chords & notes are not yet from it (its analysis just finished, or the score
-  // is newer): the server is asked to lay it on the song, once a page per score.
+  // is newer), or were laid by an earlier version of the laying: the server is asked to lay it on the song, once a
+  // page per score.
   readonly layingMinutes = Math.round(LAYING_SECONDS / 60);
   private appliedScore?: string;
   private scoreBusy = false;
@@ -1342,11 +1344,12 @@ export class MixerPage implements OnInit, OnChanges, OnDestroy {
     const laid = (part: ScorePartName) => (harmony.fromScore?.parts?.[part]?.scoreSavedAt
       ?? (part === 'other' ? harmony.fromScore?.scoreSavedAt : undefined)) === scores[part]!.savedAt;
     const signature = names.map(part => `${part}:${scores[part]!.savedAt}`).join(' ');
-    if (!force && (this.appliedScore === signature || names.every(laid))) return;
+    const current = harmony.fromScore?.engine === SCORE_ENGINE;
+    if (!force && (this.appliedScore === signature || (names.every(laid) && current))) return;
     this.appliedScore = signature;
     const generation = this.generation;
     try {
-      await this.stems.useSongScore(this.jobId);
+      await this.stems.useSongScore(this.jobId, names.every(laid) && !current);
       await this.refreshJob(generation);
       this.watchRestorations(generation);
     } catch (error) {

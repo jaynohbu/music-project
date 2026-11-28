@@ -13,6 +13,7 @@ import type { NoteEvent, StyleLibrary } from './accompaniment';
 import { beatTime, offered } from './accompaniment';
 import { loadLibrary, matchLoudness, renderNotes } from './accompaniment-player';
 import { type BarMark, levelColor, sheetLines, tempo } from './score-sheet';
+import { SCORE_ENGINE } from './score-blast';
 import { barAtTime, barFollower, laidEvents, percent, writtenKey, writtenPart } from './score-written';
 import type { Score } from './musicxml';
 
@@ -50,10 +51,9 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.fl
           }
         </div>
       }
-      @if (unmeasured()) {
-        <p class="hint">This score was laid before each bar's similarity was measured.
-          <button type="button" class="secondary" (click)="layAgain()" [disabled]="laying()">{{ laying() ? 'Laying the score again… about 4 min' : 'Lay the score again' }}</button></p>
-      }
+      <p class="hint">
+        @if (outdated()) { This score was laid by an earlier version, so it is being laid again. }
+        <button type="button" class="secondary" (click)="layAgain()" [disabled]="laying()">{{ laying() ? 'Laying the score again… about 4 min' : 'Lay the score again' }}</button></p>
 
       <div class="score-check-controls">
       <div class="score-check-player" role="status">
@@ -146,7 +146,9 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
   readonly bars = signal<SongBar[]>([]);
   readonly selected = signal<SongBar | null>(null);
   readonly placements = computed(() => { const bar = this.selected(); return bar?.measure === undefined ? [] : this.bars().filter(other => other.number === bar.number && other.measure !== undefined); });
-  readonly unmeasured = signal(false);
+  // The result shown was laid by an earlier version of the laying (score-blast.ts SCORE_ENGINE); laid again once.
+  readonly outdated = signal(false);
+  private relaid = false;
   readonly laying = signal(false);
   readonly playing = signal<Playing | null>(null);
   // What is playing: a whole transcript ('pdf', 'made', 'together') or a bar's ('made:<bar index>', 'measure:<bar index>'…).
@@ -216,6 +218,12 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
       this.library = await loadLibrary();
       const asked = this.route.snapshot.queryParamMap.get('part') as ScorePartName | null;
       await this.show(asked && parts.includes(asked) ? asked : parts[0]);
+      // A result from an earlier laying is laid again with the current one (once a visit; it is shown meanwhile).
+      const engine = (this.document?.['fromScore'] as { engine?: number } | undefined)?.engine;
+      if (engine !== SCORE_ENGINE && shown === job.harmony && !this.relaid && !this.laying()) {
+        this.relaid = true; this.outdated.set(true);
+        void this.layAgain();
+      } else this.outdated.set(false);
     } catch (error) {
       this.status.set('');
       this.error.set(`Could not load the score: ${errorMessage(error)}`);
@@ -242,7 +250,6 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
     const laid = (name === 'other' ? ensemble : stems?.[name]) ?? { chords: [], notes: [] };
     this.laidPart = laid;
     const summary = this.laidOf(name)!;
-    this.unmeasured.set(summary.similarity === undefined);
     const key = (ensemble as { key?: string } | undefined)?.key;
     const barOf = (time: number) => barAtTime(grid, time + 0.001);
     const songBars: SongBar[] = (summary.bars ?? []).map((bar, index) => ({ ...bar, bar: barOf(bar.start), index, ...(bar.number !== '–' ? { measure: index } : {}) }));

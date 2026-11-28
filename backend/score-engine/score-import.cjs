@@ -17,6 +17,7 @@ exports.importScores = importScores;
 const musicxml_1 = require("./musicxml.cjs");
 const score_align_1 = require("./score-align.cjs");
 const spectrogram_1 = require("./spectrogram.cjs");
+const score_blast_1 = require("./score-blast.cjs");
 async function scoreText(file, pages, readPdf) {
     if (/\.mxl$/i.test(file.name))
         return { text: await (0, musicxml_1.unzipMusicXml)(new Uint8Array(await file.arrayBuffer())), scores: 1 };
@@ -153,5 +154,5 @@ async function importScores({ sources, stems, analysis, readPdf, progress }) {
     const first = parts.other ?? parts.bass ?? parts.drums;
     if (!first)
         throw new Error('No score was given.');
-    return { document: { ...document, fromScore: { ...first, parts } }, parts, corrections, ...(extracted ? { extracted } : {}) };
+    return { document: { ...document, fromScore: { ...first, parts, engine: score_blast_1.SCORE_ENGINE } }, parts, corrections, ...(extracted ? { extracted } : {}) };
 }
