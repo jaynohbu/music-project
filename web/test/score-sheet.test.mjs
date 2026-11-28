@@ -25,3 +25,9 @@ test('notes are beamed the same as in the app', () => {
   assert.ok(block(read('../src/harmony-strip.ts')).length > 100);
   assert.equal(block(read('../src/harmony-strip.ts')), block(read('../../mobile/src/score.ts')));
 });
+
+test('the app lays a song\'s score again on the same version of the laying as the website', () => {
+  const version = (source, name) => Number(new RegExp(`export const ${name} = (\\d+);`).exec(source)?.[1]);
+  assert.ok(version(read('../src/score-blast.ts'), 'SCORE_ENGINE') > 0);
+  assert.equal(version(read('../../mobile/src/api.ts'), 'SCORE_ENGINE'), version(read('../src/score-blast.ts'), 'SCORE_ENGINE'));
+});

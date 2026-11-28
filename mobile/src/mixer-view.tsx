@@ -510,7 +510,7 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
   const failure = vocals ? tasks.lyricsFailure : tasks.chordsFailure ?? tasks.partFailure(name);
   // While a score is read or laid on the song, only that it is working and about how long.
   const note = vocals ? !tasks.lyrics && tasks.findingLyrics && t('tasks.lyricsNote')
-    : tasks.processingFor(name) ? t('tasks.processing', { minutes: tasks.processingFor(name) })
+    : tasks.processingNote(name) ? tasks.processingNote(name)
       : (parts ? regenerating || tasks.updatingChords : tasks.findingChords) && t('tasks.chordsNote');
   return <View>
     {(action || printable || harmonic || extra) && <View style={styles.taskRow}>
@@ -528,6 +528,12 @@ function StemTasks({ name, label, cleaned, tasks, position, disabled, onEditLyri
         accessibilityLabel={t('tasks.uploadScoreFor', { stem: label })} accessibilityState={{ disabled: disabled || !!tasks.processing }}
         style={[styles.taskButton, (disabled || !!tasks.processing) && { opacity: 0.5 }]}>
         <Text style={styles.taskButtonText}>{t(tasks.hasScore(name) ? 'tasks.replaceScore' : 'tasks.uploadScore')}</Text>
+      </Pressable>}
+      {/* The song's uploaded scores laid on it again, with the laying as it is now. */}
+      {harmonic && tasks.hasScore(name) && <Pressable onPress={tasks.regenerateScore} disabled={disabled || !!tasks.processing} accessibilityRole="button"
+        accessibilityLabel={t('tasks.regenerateScore')} accessibilityState={{ disabled: disabled || !!tasks.processing }}
+        style={[styles.taskButton, (disabled || !!tasks.processing) && { opacity: 0.5 }]}>
+        <Text style={styles.taskButtonText}>{t('tasks.regenerateScore')}</Text>
       </Pressable>}
       {extra}
     </View>}

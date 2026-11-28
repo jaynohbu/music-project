@@ -47,8 +47,9 @@ export interface RegeneratedPart extends Lyrics { resultId?: string }
 export interface Harmony extends Lyrics {
   stems?: Record<string, RegeneratedPart | undefined>; stale?: boolean; previous?: Lyrics;
   // parts: each score laid (results from before the bass and drum scores have the Harmonic one only, at the top).
-  fromScore?: ScoreLaid & { parts?: Partial<Record<ScorePart, ScoreLaid>> };
-  scoring?: boolean;
+  // engine: the version of the laying that laid it (SCORE_ENGINE); startedAt: while a laying runs, when it began.
+  fromScore?: ScoreLaid & { parts?: Partial<Record<ScorePart, ScoreLaid>>; engine?: number };
+  scoring?: boolean; startedAt?: string;
 }
 export interface LyricWord { start: number; end: number; text: string }
 export interface LyricLine { start: number; end: number; words: LyricWord[] }
@@ -77,7 +78,12 @@ export type ScorePart = 'other' | 'bass' | 'drums';
 export interface ScoreLaid { title: string; measures: number; notes: number; heard?: number; correctedBars: number; family?: 'guitar' | 'keys'; scoreSavedAt?: string }
 export const saveSongScore = (jobId: string, score: { title: string; musicxml?: string; reading?: string }, part: ScorePart = 'other') =>
   request<{ score: NonNullable<Song['score']>; harmony?: Harmony }>('POST', `/stems/jobs/${jobId}/score${part === 'other' ? '' : `/${part}`}`, score);
-export const laySongScore = (jobId: string) => request<{ harmony: Harmony }>('POST', `/stems/jobs/${jobId}/harmony`, { useScore: true });
+// again: laid once more even when the present scores were laid already (a result from an earlier laying, or asked).
+export const laySongScore = (jobId: string, again = false) =>
+  request<{ harmony: Harmony }>('POST', `/stems/jobs/${jobId}/harmony`, { useScore: true, ...(again ? { again: true } : {}) });
+// The version of the laying (web/src/score-blast.ts SCORE_ENGINE, the same number): a result laid by an earlier one is
+// laid again when its song is opened.
+export const SCORE_ENGINE = 4;
 
 // A score PDF (or image) read into MusicXML by the ScoreReader (backend/score-api.mjs): uploaded as the presigned
 // form post the API returns, read, and polled until done; returns the reading's id, for saveSongScore.

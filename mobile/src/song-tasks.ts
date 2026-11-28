@@ -4,7 +4,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import { File } from 'expo-file-system';
 import {
   createHarmony, createLyrics, createRendering, createRestoration, fetchResult, getSong, readScore, saveLyrics as sendLyrics, saveSongScore, laySongScore,
-  ENSEMBLE_STEMS, type HarmonyGrid, type RenderFamily, type HarmonyPart, type LyricLine, type ScorePart, type Song, type StemName,
+  ENSEMBLE_STEMS, SCORE_ENGINE, type HarmonyGrid, type RenderFamily, type HarmonyPart, type LyricLine, type ScorePart, type Song, type StemName,
 } from './api';
 import { t, type TextKey } from './i18n';
 import type { SoundChoices } from './score-parts';
@@ -14,7 +14,7 @@ import { errorText } from './ui';
 const POLL_MS = 4000;
 // About how long a score takes, as the website says it: the reader's time a page (a PDF's pages are not counted
 // here, so a few are assumed), and laying it on the song on the server.
-const READING_SECONDS = 4 * 22, LAYING_SECONDS = 180;
+const READING_SECONDS = 4 * 22, LAYING_SECONDS = 240;
 const SCORE_FILES = /\.(pdf|png|jpe?g)$/i, MUSICXML_FILES = /\.(musicxml|xml)$/i;
 
 const running = (status?: string) => status === 'queued' || status === 'processing';
@@ -134,8 +134,8 @@ export function useSongTasks(initial: Song | null) {
     }
   }, [hasParts, loadedChords, regenerated, partLoadErrors]);
 
-  // A song with its own scores whose parts are not yet from them (its analysis just finished, or a score is newer):
-  // the server is asked to lay them on the song, once per set of scores.
+  // A song with its own scores whose parts are not yet from them (its analysis just finished, or a score is newer), or
+  // were laid by an earlier version of the laying: the server is asked to lay them on the song, once per set of scores.
   const harmony = song?.harmony;
   const scores = { ...(song?.score ? { other: song.score } : {}), ...song?.scores };
   const scoreParts = Object.keys(scores) as ScorePart[];
@@ -147,13 +147,29 @@ export function useSongTasks(initial: Song | null) {
       const [part, savedAt] = [entry.slice(0, entry.indexOf(':')), entry.slice(entry.indexOf(':') + 1)] as [ScorePart, string];
       return (harmony.fromScore?.parts?.[part]?.scoreSavedAt ?? (part === 'other' ? harmony.fromScore?.scoreSavedAt : undefined)) === savedAt;
     });
-    if (laid || appliedScore.current === signature) return;
+    const current = harmony.fromScore?.engine === SCORE_ENGINE;
+    if ((laid && current) || appliedScore.current === signature) return;
     appliedScore.current = signature;
-    laySongScore(jobId).then(refresh, failure => {
+    laySongScore(jobId, laid && !current).then(refresh, failure => {
       if (alive.current) setError(t('tasks.useScoreFailed', { error: errorText(failure) }));
     });
   }, [jobId, signature, harmony, scoreMinutes, refresh]);
   const scoring = !!harmony?.scoring && running(harmony.status);
+  // While the server lays the scores, the time it has taken, counted every second.
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!scoring) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [scoring]);
+  const laying = (): string => {
+    const started = Date.parse(harmony?.startedAt ?? '');
+    const minutes = Math.round(LAYING_SECONDS / 60);
+    if (!Number.isFinite(started)) return t('tasks.processing', { minutes });
+    const seconds = Math.max(0, Math.round((now - started) / 1000));
+    const elapsed = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+    return t(seconds <= LAYING_SECONDS ? 'tasks.processingElapsed' : 'tasks.processingLong', { elapsed, minutes });
+  };
 
   const findingLyrics = startingLyrics || (!!song?.lyrics && song.lyrics.status !== 'failed' && !lyricsLoadError);
   const findingChords = startingChords || (!!song?.harmony && !song.harmony.stale && song.harmony.status !== 'failed' && !chordsLoadError);
@@ -256,6 +272,15 @@ export function useSongTasks(initial: Song | null) {
     fromScore: (name: string) => harmony?.fromScore?.parts ? !!(harmony.fromScore.parts as Record<string, unknown>)[name]
       : name === 'other' && !!harmony?.fromScore,
     uploadScore(name: string) { if (name === 'other' || name === 'bass' || name === 'drums') void uploadScore(name); },
+    // What the stem's card says while its score is read or laid: how long it has taken, while the server lays it.
+    processingNote: (name: string) => scoreMinutes ? (name === scorePart ? t('tasks.processing', { minutes: scoreMinutes }) : '')
+      : scoring && (scores as Record<string, unknown>)[name] ? laying() : '',
+    // The song's uploaded scores laid on it again.
+    regenerateScore() {
+      if (!jobId || scoreMinutes || scoring) return;
+      setError('');
+      laySongScore(jobId, true).then(refresh, failure => { if (alive.current) setError(t('tasks.useScoreFailed', { error: errorText(failure) })); });
+    },
     cleanFailure: (name: string) => cleaning(name) ? undefined
       : song?.restorations?.find(item => item.stem === name && item.status === 'failed')?.error,
     clean(name: StemName) {
