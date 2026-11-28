@@ -128,6 +128,7 @@ async function start(): Promise<void> {
         { path: 'mixer/:jobId', component: MixerPage, canActivate: [authenticated] },
         // Loaded when first opened: it brings the spectrogram, score reading and alignment.
         { path: 'spectrum/:jobId', loadComponent: () => import('./spectrum-page').then(page => page.SpectrumPage), canActivate: [authenticated] },
+        { path: 'score-check/:jobId', loadComponent: () => import('./score-check-page').then(page => page.ScoreCheckPage), canActivate: [authenticated] },
         { path: 'list', component: ListPage, canActivate: [authenticated] },
         { path: 'scenes', component: ScenesPage, canActivate: [authenticated] },
         { path: 'admin', component: AdminPage, canActivate: [authenticated, admin] },

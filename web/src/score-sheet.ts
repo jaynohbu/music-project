@@ -80,9 +80,13 @@ export function lineStarts(firstBar: number, lastUnit: number): number[] {
   return starts;
 }
 
-// Each page as an SVG document, for previews and for the printed HTML.
-// `part` is already moved to the key being heard; `songKey` is that key, for the bass part.
-export function sheetPages(part: HarmonyPart, stem: string, grid: HarmonyGrid, text: SheetText, songKey?: string): SheetPages {
+// A mark over a bar (numbered from 1 at the grid's first bar): a label, and a level from 0 (red) to 1 (green) that
+// tints the bar, or none.
+export interface BarMark { text: string; level?: number }
+export const levelColor = (level: number) => `hsl(${Math.round(Math.max(0, Math.min(1, level)) * 120)} 70% 42%)`;
+
+// The lines of a part's score laid out (four bars each): where each starts, and each drawn as SVG at its own top.
+function sheetLayout(part: HarmonyPart, stem: string, grid: HarmonyGrid, songKey?: string, barMarks?: Map<number, BarMark>) {
   const drums = stem === 'drums';
   const signature = keySignature(drums ? undefined : part.key ?? songKey);
   const voices = !drums && !!part.second?.length;
@@ -113,7 +117,7 @@ export function sheetPages(part: HarmonyPart, stem: string, grid: HarmonyGrid, t
   }
   for (const beam of drawn.beams) reach(beam.y, beam.y + BEAM_HEIGHT);
   for (const beam of noteBeams) reach(beam.y1, beam.y2, beam.y1 + BEAM_HEIGHT, beam.y2 + BEAM_HEIGHT);
-  const chordY = low - 8, top = (chords.length ? chordY - 16 : low) - 14;
+  const chordY = low - 8, markY = (chords.length ? chordY - 16 : low) - 6, top = (chords.length ? chordY - 16 : low) - 14 - (barMarks?.size ? 18 : 0);
   const lineHeight = high + 6 - top;
 
   const clef = CLEFS[stem]?.clef;
@@ -148,6 +152,13 @@ export function sheetPages(part: HarmonyPart, stem: string, grid: HarmonyGrid, t
     svg += `<text x="${left}" y="${Math.min(chordY, STAFF_LINES[4] - 16)}" font-size="10" fill="${SECOND}">${Math.max(1, bar(start))}</text>`;
     // The marks, moved so this line's first bar meets the clef, and cut at the line's ends.
     svg += `<g clip-path="url(#line)"><g transform="translate(${shift} 0)">`;
+    for (let unit = start; unit < start + LINE_UNITS && barMarks?.size; unit += UNITS_PER_BAR) {
+      const mark = barMarks.get(bar(unit));
+      if (!mark) continue;
+      const x = unit * UNIT_WIDTH - UNIT_WIDTH / 2, color = mark.level === undefined ? SECOND : levelColor(mark.level);
+      if (mark.level !== undefined) svg += `<rect x="${x}" y="${markY - 12}" width="${UNITS_PER_BAR * UNIT_WIDTH}" height="${high - markY + 12}" fill="${color}" opacity="0.12"/>`;
+      svg += `<text x="${x + 4}" y="${markY}" font-size="12" font-weight="700" fill="${color}">${escape(mark.text)}</text>`;
+    }
     for (let unit = start + UNITS_PER_BAR; unit < start + LINE_UNITS; unit += UNITS_PER_BAR) {
       const x = unit * UNIT_WIDTH - UNIT_WIDTH / 2;
       svg += `<line x1="${x}" x2="${x}" y1="${STAFF_LINES[4]}" y2="${STAFF_LINES[0]}" stroke="${INK}" stroke-width="1"/>`;
@@ -171,6 +182,15 @@ export function sheetPages(part: HarmonyPart, stem: string, grid: HarmonyGrid, t
 
   // Only lines move up and down, so one clip serves every line: it hides marks that run past either end.
   const clip = `<clipPath id="line"><rect x="${MARGIN + head + TIME_WIDTH - 12}" y="-1000" width="${staffWidth - head - TIME_WIDTH + 12}" height="3000"/></clipPath>`;
+  // Where a point on a line (in its own units) is: the bar under it.
+  const barAt = (start: number, x: number) => bar(Math.floor((x - (MARGIN + head + TIME_WIDTH + UNIT_WIDTH / 2 - start * UNIT_WIDTH)) / UNIT_WIDTH + 0.5));
+  return { starts, pages, width, height, top, lineHeight, clip, staffLine, barAt, bar };
+}
+
+// Each page as an SVG document, for previews and for the printed HTML.
+// `part` is already moved to the key being heard; `songKey` is that key, for the bass part.
+export function sheetPages(part: HarmonyPart, stem: string, grid: HarmonyGrid, text: SheetText, songKey?: string): SheetPages {
+  const { pages, width, height, top, lineHeight, clip, staffLine } = sheetLayout(part, stem, grid, songKey);
   let lineIndex = 0;
   const sheet = pages.map((page, pageIndex) => {
     let y = pageIndex === 0 ? FIRST_TOP : PAGE_TOP;
@@ -192,6 +212,21 @@ export function sheetPages(part: HarmonyPart, stem: string, grid: HarmonyGrid, t
       + `<rect width="${width}" height="${height}" fill="#fff"/><defs>${clip}</defs>${svg}</svg>`;
   });
   return { width, height, pages: sheet };
+}
+
+// The score as lines of four bars, each its own SVG (for a page that lays them out itself), with marks over bars;
+// barAt tells the bar under a point of a line (x as a share of its width).
+export interface SheetLine { svg: string; firstBar: number }
+export function sheetLines(part: HarmonyPart, stem: string, grid: HarmonyGrid, songKey?: string, barMarks?: Map<number, BarMark>):
+  { width: number; height: number; lines: SheetLine[]; barAt: (line: number, share: number) => number } {
+  const { starts, width, top, lineHeight, clip, staffLine, barAt, bar } = sheetLayout(part, stem, grid, songKey, barMarks);
+  const height = lineHeight + 8;
+  const lines = starts.map((start, index) => ({
+    firstBar: Math.max(1, bar(start)),
+    svg: `<svg viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, Helvetica, Arial, sans-serif">`
+      + `<rect width="${width}" height="${height}" fill="#fff"/><defs>${clip}</defs><g transform="translate(0 ${4 - top})">${staffLine(start, index)}</g></svg>`,
+  }));
+  return { width, height, lines, barAt: (line, share) => barAt(starts[line], share * width) };
 }
 
 // The pages as one HTML document: A4 sheets when printed, and spaced out on grey when shown on screen.
