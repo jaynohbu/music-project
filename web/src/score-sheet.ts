@@ -165,14 +165,19 @@ function sheetLayout(part: HarmonyPart, stem: string, grid: HarmonyGrid, songKey
     }
     svg += chords.filter(chord => inside(chord.unit * UNIT_WIDTH, start))
       .map(chord => `<text x="${chord.unit * UNIT_WIDTH}" y="${chordY}" text-anchor="middle" font-size="14" font-weight="700" fill="${INK}">${escape(chord.name)}</text>`).join('');
+    // Each bar can be lit (class "on") while it plays, under everything else; each note and drum stroke is a group of
+    // its own (data-i: its index in the part's notes, data-s: in its second line, data-u: a stroke's sixteenth).
+    for (let unit = start; unit < start + LINE_UNITS; unit += UNITS_PER_BAR) {
+      svg += `<rect class="bar-now" data-bar="${bar(unit)}" x="${unit * UNIT_WIDTH - UNIT_WIDTH / 2}" y="${top}" width="${UNITS_PER_BAR * UNIT_WIDTH}" height="${high - top}" fill="#ffd54a" opacity="0"/>`;
+    }
     svg += rests.filter(rest => inside(rest.x, start)).map(restMark).join('');
     svg += drawn.beams.filter(beam => drums && inside(beam.x, start))
       .map(beam => `<rect x="${beam.x}" y="${beam.y}" width="${beam.width}" height="${BEAM_HEIGHT}" fill="${INK}"/>`).join('');
-    if (drums) svg += drawn.strokes.filter(stroke => inside(stroke.x, start)).map(strokeMark).join('');
+    if (drums) svg += drawn.strokes.filter(stroke => inside(stroke.x, start)).map(stroke => `<g class="note" data-u="${stroke.unit}">${strokeMark(stroke)}</g>`).join('');
     svg += noteBeams.filter(beam => inside(beam.x1, start)).map(beam =>
       `<path d="M${beam.x1} ${beam.y1} L${beam.x2} ${beam.y2} L${beam.x2} ${beam.y2 + BEAM_HEIGHT} L${beam.x1} ${beam.y1 + BEAM_HEIGHT} Z" fill="${beam.color}"/>`).join('');
-    svg += second.filter(pieces => inside(pieces[0].x, start)).map(pieces => pieces.map(piece => noteMark(piece, SECOND)).join('')).join('');
-    svg += notes.filter(pieces => inside(pieces[0].x, start)).map(pieces => pieces.map(piece => noteMark(piece, INK)).join('')).join('');
+    svg += second.map((pieces, index) => inside(pieces[0].x, start) ? `<g class="note" data-s="${index}">${pieces.map(piece => noteMark(piece, SECOND)).join('')}</g>` : '').join('');
+    svg += notes.map((pieces, index) => inside(pieces[0].x, start) ? `<g class="note" data-i="${index}">${pieces.map(piece => noteMark(piece, INK)).join('')}</g>` : '').join('');
     svg += '</g></g>';
     svg += end
       ? `<line x1="${right - 5}" x2="${right - 5}" y1="${STAFF_LINES[4]}" y2="${STAFF_LINES[0]}" stroke="${INK}" stroke-width="1"/><rect x="${right - 3}" y="${STAFF_LINES[4]}" width="3" height="${STAFF_LINES[0] - STAFF_LINES[4]}" fill="${INK}"/>`

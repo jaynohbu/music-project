@@ -562,9 +562,15 @@ footer { text-align: center; color: #64748b; padding: 20px var(--page-gutter); f
 .score-check-page .section-heading { align-items: flex-start; }
 .score-check-tabs, .score-check-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
 .score-check-tabs button, .score-check-buttons button, .score-check-heading button { margin: 0; }
+.score-check-controls { position: sticky; top: 0; z-index: 2; background: inherit; padding: 4px 0; }
+.score-check-line rect.bar-now.on { opacity: 0.4; }
+.score-check-line g.note { transform-box: fill-box; transform-origin: center; transition: transform 60ms linear; }
+.score-check-line g.note.on { transform: scale(1.1); }
+.score-check-line g.note.on [fill="#111"] { fill: #1e6fd9; }
+.score-check-line g.note.on [stroke="#111"] { stroke: #1e6fd9; }
 .score-check-player { min-height: 2rem; display: flex; align-items: center; gap: 10px; }
 .score-check-player button { margin: 0; padding: 4px 12px; }
-.score-check-bar-panel { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin: 8px 0; padding: 10px 14px;
+.score-check-bar-panel { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin: 8px 0; padding: 10px 14px;
   border: 1px solid #aebacb; border-radius: 8px; background: #f6f8fb; color: #1d2a3a; }
 .score-check-bar-panel .hint { color: #4d5d72; }
 .score-check-like { font-weight: 700; }

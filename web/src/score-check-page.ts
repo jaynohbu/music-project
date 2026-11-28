@@ -4,12 +4,12 @@
 // Each bar is compared on its own: how like the stem the PDF's measure is where it was laid on the song (the
 // similarity measured while laying it, score-align.ts layOnBeats), marked over the bar on both transcripts. Choosing a
 // bar plays the PDF's measure, the stem there, the made bar, or the made bar with the stem.
-import { ChangeDetectionStrategy, Component, OnDestroy, OnInit, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, OnDestroy, OnInit, computed, inject, signal, viewChild } from '@angular/core';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { DomSanitizer, type SafeHtml } from '@angular/platform-browser';
 import { StemsService, errorMessage, type HarmonyGrid, type HarmonyPart, type Job, type ScorePartName } from './services';
 import type { NoteEvent, StyleLibrary } from './accompaniment';
-import { offered } from './accompaniment';
+import { beatTime, offered } from './accompaniment';
 import { loadLibrary, matchLoudness, renderNotes } from './accompaniment-player';
 import { positionAt } from './harmony-strip';
 import { type BarMark, levelColor, sheetLines, tempo } from './score-sheet';
@@ -55,6 +55,7 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.fl
           <button type="button" class="secondary" (click)="layAgain()" [disabled]="laying()">{{ laying() ? 'Laying the score again… about 4 min' : 'Lay the score again' }}</button></p>
       }
 
+      <div class="score-check-controls">
       <div class="score-check-player" role="status">
         @if (playing()) { <span>Playing {{ playingLabel() }} · {{ position() }}</span> <button type="button" (click)="stop()">Stop</button> }
         @else if (preparing()) { <span>Preparing the sound…</span> }
@@ -67,10 +68,12 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.fl
           <span class="score-check-like" [style.color]="colorOf(bar.similarity)">Similarity {{ percentOf(bar.similarity) }}</span>
           @if (bar.corrected) { <span class="hint">drum bar corrected</span> }
           <div class="score-check-buttons">
-            @if (bar.measure !== undefined) { <button type="button" (click)="playMeasure(bar)" [disabled]="!pdf()">PDF measure</button> }
-            <button type="button" (click)="playBar('stem', bar)" [disabled]="!stem">Stem</button>
-            <button type="button" (click)="playBar('made', bar)">Made bar</button>
-            <button type="button" (click)="playBar('together', bar)" [disabled]="!stem">Made bar + stem</button>
+            @if (bar.measure !== undefined) {
+              <button type="button" (click)="playMeasure(bar)" [disabled]="!pdf()">{{ playingKey() === 'measure:' + bar.index ? 'Stop' : 'PDF measure' }}</button>
+            }
+            <button type="button" (click)="playBar('stem', bar)" [disabled]="!stem">{{ playingKey() === 'stem:' + bar.index ? 'Stop' : 'Stem' }}</button>
+            <button type="button" (click)="playBar('made', bar)">{{ playingKey() === 'made:' + bar.index ? 'Stop' : 'Made bar' }}</button>
+            <button type="button" (click)="playBar('together', bar)" [disabled]="!stem">{{ playingKey() === 'together:' + bar.index ? 'Stop' : 'Made bar + stem' }}</button>
           </div>
           @if (placements().length > 1) {
             <span class="hint">PDF measure {{ bar.number }} is laid {{ placements().length }} times:
@@ -81,14 +84,15 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.fl
           }
         </div>
       }
+      </div>
 
       <section class="score-check-transcript" aria-labelledby="score-check-pdf">
         <div class="score-check-heading">
           <h2 id="score-check-pdf">From the PDF</h2>
-          <button type="button" (click)="toggle('pdf')" [disabled]="!pdf()">{{ playing() === 'pdf' ? 'Stop' : 'Play' }}</button>
+          <button type="button" (click)="toggle('pdf')" [disabled]="!pdf()">{{ playingKey() === 'pdf' ? 'Stop' : 'Play' }}</button>
         </div>
         <p class="hint">{{ pdfNote() }}</p>
-        <div class="score-check-lines">
+        <div class="score-check-lines" #pdfLines>
           @for (line of pdf()?.lines ?? []; track $index) {
             <div class="score-check-line" [innerHTML]="line.svg" (click)="pickPdf($index, $event)"></div>
           }
@@ -98,11 +102,11 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.fl
       <section class="score-check-transcript" aria-labelledby="score-check-made">
         <div class="score-check-heading">
           <h2 id="score-check-made">Made for the song (as the mixer plays it)</h2>
-          <button type="button" (click)="toggle('made')" [disabled]="!made()">{{ playing() === 'made' ? 'Stop' : 'Play' }}</button>
-          <button type="button" class="secondary" (click)="toggle('together')" [disabled]="!made() || !stem">{{ playing() === 'together' ? 'Stop' : 'Play with the stem' }}</button>
+          <button type="button" (click)="toggle('made')" [disabled]="!made()">{{ playingKey() === 'made' ? 'Stop' : 'Play' }}</button>
+          <button type="button" class="secondary" (click)="toggle('together')" [disabled]="!made() || !stem">{{ playingKey() === 'together' ? 'Stop' : 'Play with the stem' }}</button>
         </div>
         <p class="hint">{{ madeNote() }}</p>
-        <div class="score-check-lines">
+        <div class="score-check-lines" #madeLines>
           @for (line of made()?.lines ?? []; track $index) {
             <div class="score-check-line" [innerHTML]="line.svg" (click)="pickMade($index, $event)"></div>
           }
@@ -110,6 +114,7 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.fl
       </section>
     </section>
   `,
+  host: { '(document:keydown.escape)': 'stop()' },
 })
 export class ScoreCheckPage implements OnInit, OnDestroy {
   private readonly route = inject(ActivatedRoute);
@@ -135,6 +140,16 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
   readonly unmeasured = signal(false);
   readonly laying = signal(false);
   readonly playing = signal<Playing | null>(null);
+  // What is playing: a whole transcript ('pdf', 'made', 'together') or a bar's ('made:<bar index>', 'measure:<bar index>'…).
+  readonly playingKey = signal('');
+  private readonly pdfLines = viewChild<ElementRef<HTMLElement>>('pdfLines');
+  private readonly madeLines = viewChild<ElementRef<HTMLElement>>('madeLines');
+  // When each transcript's notes sound and where its bars are, for lighting them as they play.
+  private timing: Partial<Record<'pdf' | 'made', { grid: HarmonyGrid; notes: { start: number; end: number }[]; hits: { unit: number; time: number }[] }>> = {};
+  private frame = 0;
+  private litBar?: Element;
+  private litNotes: Element[] = [];
+  private litKey = '';
   readonly preparing = signal(false);
   readonly position = signal('');
   readonly playingLabel = computed(() => ({ pdf: 'the PDF', made: 'the made transcript', together: 'the made transcript with the stem', stem: 'the stem' })[this.playing() ?? 'pdf']);
@@ -147,7 +162,6 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
   private context?: AudioContext;
   private sources: AudioBufferSourceNode[] = [];
   private buffers = new Map<string, AudioBuffer>();
-  private timer?: ReturnType<typeof setInterval>;
   private token = 0;
   private destroyed = false;
 
@@ -218,6 +232,7 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
     const madeMarks = new Map<number, BarMark>(songBars.map(bar => [bar.bar, bar.measure === undefined
       ? { text: 'not in PDF' } : { text: `m.${bar.number} ${percent(bar.similarity)}`, ...(bar.similarity !== undefined ? { level: bar.similarity } : {}) }]));
     const madeLines = sheetLines(laid, name, grid, key, madeMarks);
+    this.timing = { made: { grid, notes: laid.notes, hits: (laid.hits ?? []).map(hit => ({ unit: hit.unit, time: beatTime(grid.beats, hit.unit / 4) })) } };
     this.made.set({ lines: madeLines.lines.map(line => ({ ...line, svg: this.sanitizer.bypassSecurityTrustHtml(line.svg) })), barAt: madeLines.barAt });
     const counted = name === 'drums' ? 'hits' : 'notes';
     this.madeNote.set(`${summary.measures ?? '–'} PDF measures laid on ${songBars.length} bars of the song; ${summary.heard ?? '–'} of ${summary.notes ?? '–'} ${counted} heard in the stem`
@@ -232,6 +247,7 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
       const qpm = score.tempo ?? tempo(grid.beats) ?? 90;
       const pdf = writtenPart(score, name, qpm, written, chordName);
       this.written = { events: pdf.events, seconds: pdf.seconds, quarter: 60 / qpm, grid: pdf.grid };
+      this.timing.pdf = { grid: pdf.grid, notes: pdf.part.notes, hits: (pdf.part.hits ?? []).map(hit => ({ unit: hit.unit, time: hit.unit / 4 * (60 / qpm) })) };
       // The PDF: each measure marked with how like the stem it is where it was laid (each time, when laid more than once).
       const byNumber = new Map<string, SongBar[]>();
       for (const bar of songBars) if (bar.measure !== undefined) byNumber.set(bar.number, [...byNumber.get(bar.number) ?? [], bar]);
@@ -325,18 +341,24 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
   }
 
   toggle(kind: Playing): void {
-    if (this.playing() === kind) { this.stop(); return; }
-    void this.playRange(kind, 0);
+    if (this.playingKey() === kind) { this.stop(); return; }
+    void this.playRange(kind, 0, undefined, kind);
   }
 
   playMeasure(bar: SongBar): void {
+    const key = `measure:${bar.index}`;
+    if (this.playingKey() === key) { this.stop(); return; }
     const measure = this.score?.measures.find(item => item.number === bar.number);
-    if (measure && this.written) void this.playRange('pdf', measure.start * this.written.quarter, measure.length * this.written.quarter);
+    if (measure && this.written) void this.playRange('pdf', measure.start * this.written.quarter, measure.length * this.written.quarter, key);
   }
 
-  playBar(kind: Playing, bar: SongBar): void { void this.playRange(kind, bar.start, bar.end - bar.start); }
+  playBar(kind: Playing, bar: SongBar): void {
+    const key = `${kind}:${bar.index}`;
+    if (this.playingKey() === key) { this.stop(); return; }
+    void this.playRange(kind, bar.start, bar.end - bar.start, key);
+  }
 
-  private async playRange(kind: Playing, from: number, length?: number): Promise<void> {
+  private async playRange(kind: Playing, from: number, length?: number, key: string = kind): Promise<void> {
     this.stop();
     this.context ??= new AudioContext();
     const context = this.context, token = this.token;
@@ -356,9 +378,15 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
       });
       this.sources[0].onended = () => { if (this.playing() === kind) this.stop(); };
       this.playing.set(kind);
-      const tick = () => this.position.set(`${clock(from + Math.max(0, context.currentTime - at))} / ${clock(length ? from + length : end)}`);
+      this.playingKey.set(key);
+      const view = kind === 'pdf' ? 'pdf' : 'made', until = length ? from + length : end;
+      const tick = () => {
+        const time = from + Math.max(0, context.currentTime - at);
+        this.position.set(`${clock(time)} / ${clock(until)}`);
+        this.light(view, time);
+        this.frame = requestAnimationFrame(tick);
+      };
       tick();
-      this.timer = setInterval(tick, 250);
     } catch (error) {
       this.error.set(`Could not play: ${errorMessage(error)}`);
     } finally {
@@ -369,8 +397,39 @@ export class ScoreCheckPage implements OnInit, OnDestroy {
   stop(): void {
     for (const source of this.sources) { source.onended = null; try { source.stop(); } catch { /* not started */ } source.disconnect(); }
     this.sources = [];
-    if (this.timer) clearInterval(this.timer);
-    this.timer = undefined;
+    cancelAnimationFrame(this.frame);
+    this.unlight();
     this.playing.set(null);
+    this.playingKey.set('');
+  }
+
+  // The bar playing lit, and the notes sounding in it drawn bigger (styles.css), on the transcript heard; the
+  // bar's line kept in view.
+  private light(view: 'pdf' | 'made', time: number): void {
+    const timing = this.timing[view], container = (view === 'pdf' ? this.pdfLines() : this.madeLines())?.nativeElement;
+    if (!timing || !container) return;
+    const bar = Math.floor((positionAt(timing.grid.beats, time) * 4 - timing.grid.firstBar * 4) / 16) + 1;
+    const barElement = container.querySelector(`rect.bar-now[data-bar="${bar}"]`) ?? undefined;
+    if (barElement !== this.litBar) {
+      this.litBar?.classList.remove('on');
+      barElement?.classList.add('on');
+      this.litBar = barElement;
+      barElement?.closest('.score-check-line')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+    const selectors: string[] = [];
+    timing.notes.forEach((note, index) => { if (note.start <= time && time < Math.max(note.end, note.start + 0.12)) selectors.push(`g.note[data-i="${index}"]`); });
+    for (const unit of new Set(timing.hits.filter(hit => hit.time <= time && time < hit.time + 0.15).map(hit => hit.unit))) selectors.push(`g.note[data-u="${unit}"]`);
+    const key = selectors.join(',');
+    if (key === this.litKey) return;
+    for (const element of this.litNotes) element.classList.remove('on');
+    this.litNotes = key ? Array.from(container.querySelectorAll(key)) : [];
+    for (const element of this.litNotes) element.classList.add('on');
+    this.litKey = key;
+  }
+
+  private unlight(): void {
+    this.litBar?.classList.remove('on');
+    for (const element of this.litNotes) element.classList.remove('on');
+    this.litBar = undefined; this.litNotes = []; this.litKey = '';
   }
 }
